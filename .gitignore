@@ -1,0 +1,14 @@
+# Python
+server/venv/
+server/data/
+server/.env
+__pycache__/
+*.pyc
+
+# Node
+web/node_modules/
+web/dist/
+
+# 杂项
+.DS_Store
+*.log
