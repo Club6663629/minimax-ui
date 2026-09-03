@@ -1,5 +1,5 @@
-/** 管理后台：概览统计 / 用户管理 / 兑换码 / 任务监控（仅管理员）。 */
-import { Copy, RefreshCw, Ticket, Users } from "lucide-react";
+/** 管理后台：概览统计 / 用户管理 / 兑换码 / 任务监控 / Worker 池（仅管理员）。 */
+import { Copy, Cpu, RefreshCw, Ticket, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../state/auth";
@@ -10,9 +10,10 @@ import {
   type AdminUser,
   type RedeemCodeOut,
   type Task,
+  type WorkerPoolOut,
 } from "../types";
 
-type Tab = "overview" | "users" | "codes" | "tasks";
+type Tab = "overview" | "users" | "codes" | "tasks" | "workers";
 
 function fmtTime(s: string | null): string {
   if (!s) return "-";
@@ -26,6 +27,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [codes, setCodes] = useState<RedeemCodeOut[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [workerPool, setWorkerPool] = useState<WorkerPoolOut | null>(null);
 
   // 用户积分调整
   const [adjustTarget, setAdjustTarget] = useState<AdminUser | null>(null);
@@ -38,16 +40,18 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [s, u, c, t] = await Promise.all([
+      const [s, u, c, t, w] = await Promise.all([
         api.adminStats(),
         api.adminUsers(),
         api.adminCodes(),
         api.adminTasks(),
+        api.adminWorkers(),
       ]);
       setStats(s);
       setUsers(u);
       setCodes(c);
       setTasks(t);
+      setWorkerPool(w);
     } catch {
       /* ignore */
     }
@@ -56,6 +60,13 @@ export default function AdminPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Worker 池 tab 开启时自动轮询（心跳/忙闲实时变化）
+  useEffect(() => {
+    if (tab !== "workers") return;
+    const timer = setInterval(() => api.adminWorkers().then(setWorkerPool).catch(() => {}), 5000);
+    return () => clearInterval(timer);
+  }, [tab]);
 
   if (user?.role !== "admin") {
     return <p className="py-20 text-center text-sm text-zinc-600">需要管理员权限</p>;
@@ -104,6 +115,7 @@ export default function AdminPage() {
               ["users", "用户管理"],
               ["codes", "兑换码"],
               ["tasks", "任务监控"],
+              ["workers", "Worker 池"],
             ] as [Tab, string][]
           ).map(([t, label]) => (
             <button
@@ -344,6 +356,64 @@ export default function AdminPage() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ---- Worker 池监控 ---- */}
+      {tab === "workers" && workerPool && (
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            {[
+              ["排队/增强中", workerPool.queued],
+              ["生成阶段", workerPool.generating],
+              ["超分阶段", workerPool.upscaling],
+            ].map(([label, value]) => (
+              <div key={label as string} className="panel p-5">
+                <p className="text-xs text-zinc-500">{label}</p>
+                <p className="mt-1.5 text-2xl font-semibold text-white">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="panel overflow-x-auto p-5">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
+              <Cpu size={15} className="text-indigo-400" /> ComfyUI 节点
+              {workerPool.mock && <span className="text-xs font-normal text-amber-400">Mock 模式</span>}
+              <span className="ml-auto text-xs font-normal text-zinc-600">每 5 秒自动刷新</span>
+            </h3>
+            <table className="w-full min-w-[700px] text-sm">
+              <thead>
+                <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+                  <th className="pb-2 font-normal">节点</th>
+                  <th className="pb-2 font-normal">角色</th>
+                  <th className="pb-2 font-normal">标签</th>
+                  <th className="pb-2 font-normal">健康</th>
+                  <th className="pb-2 font-normal">状态</th>
+                  <th className="pb-2 font-normal">当前任务</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workerPool.workers.map((w) => (
+                  <tr key={w.url} className="border-b border-white/[0.04] last:border-0">
+                    <td className="py-2.5 font-mono text-xs text-zinc-300">{w.url}</td>
+                    <td className="py-2.5">
+                      <span className={w.role === "generate" ? "text-indigo-300" : "text-violet-300"}>
+                        {w.role === "generate" ? "生成" : "超分"}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-xs text-zinc-500">{w.tags.join(", ") || "-"}</td>
+                    <td className="py-2.5">
+                      <span className={w.healthy ? "text-emerald-400" : "text-rose-400"}>
+                        {w.healthy ? "在线" : `已摘除(${w.consecutive_fails})`}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-zinc-400">{w.busy ? "忙碌" : "空闲"}</td>
+                    <td className="py-2.5 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

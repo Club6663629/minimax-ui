@@ -12,3 +12,4 @@ web/dist/
 # 杂项
 .DS_Store
 *.log
+workflow_templates/*

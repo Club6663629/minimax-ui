@@ -35,7 +35,7 @@ class Upload(Base):
 
 class Task(Base):
     """视频生成任务。状态机：
-    queued → enhancing(可选) → generating_768p → upscaling_2k(可选) → done / failed
+    queued → enhancing(可选) → generating_768p → upscaling(1k/2k，可选) → done / failed
     """
 
     __tablename__ = "tasks"
@@ -61,6 +61,9 @@ class Task(Base):
     cost: Mapped[int] = mapped_column(Integer, default=0)
     video_path: Mapped[str] = mapped_column(String(512), default="")
     comfy_prompt_id: Mapped[str] = mapped_column(String(64), default="")
+    # 集群调度：失败重投计数与当前占用节点（追溯用）
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    worker_url: Mapped[str] = mapped_column(String(128), default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

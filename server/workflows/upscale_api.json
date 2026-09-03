@@ -1,0 +1,323 @@
+{
+  "9001": {
+    "class_type": "VAEEncodeTiled",
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 128,
+      "temp_size": 64,
+      "temp_overlap": 8,
+      "pixels": [
+        "9007",
+        0
+      ],
+      "vae": [
+        "9002",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEEncodeTiled"
+    }
+  },
+  "9002": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "seedvr2_ema_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "9003": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "seedvr2_3b_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNETLoader"
+    }
+  },
+  "9004": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 959948902156062,
+      "control_after_generate": "fixed",
+      "steps": 1,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "9003",
+        0
+      ],
+      "positive": [
+        "9009",
+        0
+      ],
+      "negative": [
+        "9009",
+        1
+      ],
+      "latent_image": [
+        "9016",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "9005": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 128,
+      "temp_size": 64,
+      "temp_overlap": 8,
+      "vae": [
+        "9002",
+        0
+      ],
+      "samples": [
+        "9017",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecodeTiled"
+    }
+  },
+  "9006": {
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "resize_type": "scale by multiplier",
+      "resize_type.multiplier": 2,
+      "method": "lanczos",
+      "input": [
+        "9010",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ResizeImageMaskNode"
+    }
+  },
+  "9007": {
+    "class_type": "SeedVR2Preprocess",
+    "inputs": {
+      "resized_images": [
+        "9006",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2Preprocess"
+    }
+  },
+  "9008": {
+    "class_type": "SeedVR2PostProcessing",
+    "inputs": {
+      "color_correction_method": "none",
+      "images": [
+        "9005",
+        0
+      ],
+      "original_resized_images": [
+        "9006",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2PostProcessing"
+    }
+  },
+  "9009": {
+    "class_type": "SeedVR2Conditioning",
+    "inputs": {
+      "model": [
+        "9003",
+        0
+      ],
+      "vae_conditioning": [
+        "9016",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2Conditioning"
+    }
+  },
+  "9010": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "9013",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "GetVideoComponents"
+    }
+  },
+  "9011": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "fps": [
+        "9010",
+        2
+      ],
+      "bit_depth": [
+        "9010",
+        3
+      ],
+      "images": [
+        "9008",
+        0
+      ],
+      "audio": [
+        "9010",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "CreateVideo"
+    }
+  },
+  "9012": {
+    "class_type": "Video Slice",
+    "inputs": {
+      "start_time": 0,
+      "duration": 0,
+      "enabled": false,
+      "video": [
+        "73",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Video Slice"
+    }
+  },
+  "9013": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": false,
+      "on_true": [
+        "9012",
+        0
+      ],
+      "on_false": [
+        "73",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "9014": {
+    "class_type": "SeedVR2TemporalChunk",
+    "inputs": {
+      "frame_batch_size": 0,
+      "mode": "auto",
+      "latent": [
+        "9001",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2TemporalChunk"
+    }
+  },
+  "9015": {
+    "class_type": "SeedVR2TemporalMerge",
+    "inputs": {
+      "latents": [
+        "9004",
+        0
+      ],
+      "temporal_overlap": [
+        "9014",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2TemporalMerge"
+    }
+  },
+  "9016": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "9018",
+        0
+      ],
+      "on_false": [
+        "9001",
+        0
+      ],
+      "on_true": [
+        "9014",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "9017": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "switch": [
+        "9018",
+        0
+      ],
+      "on_false": [
+        "9004",
+        0
+      ],
+      "on_true": [
+        "9015",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "9018": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "Boolean (Split Latent)"
+    }
+  },
+  "73": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "video": "grainy_perfume_shot_crf32.mp4"
+    },
+    "_meta": {
+      "title": "LoadVideo"
+    }
+  },
+  "76": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "video/Upscaled_seedVR2",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "9011",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SaveVideo"
+    }
+  }
+}

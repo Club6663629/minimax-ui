@@ -1,12 +1,14 @@
-"""MiniMax 云端 API 客户端：H3-Context-IR 提示词增强 / H3-Regenerate-2K。
+"""MiniMax 云端 API 客户端：H3-Context-IR 提示词增强 / H3-Regenerate-2K / 云端生成降级。
 
-两段均为异步任务：提交拿 task_id → 轮询结果（指数退避，≤3 次重试）。
+均为异步任务：提交拿 task_id → 轮询结果（指数退避，≤3 次重试）。
 注意：接口路径与字段以 MiniMax 开放平台当日文档为准，联调时如有出入
 只需修改本文件常量。未配置 MINIMAX_API_KEY 时不会调用本模块。
 """
 import asyncio
+import base64
 import logging
 from pathlib import Path
+from typing import Optional
 
 import httpx
 
@@ -31,7 +33,7 @@ def _check_base_resp(data: dict) -> None:
 
 
 async def _post_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> dict:
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
     for attempt in range(3):  # 指数退避重试 ≤3 次
         try:
             r = await client.post(url, headers=_headers(), timeout=60, **kwargs)
@@ -87,6 +89,67 @@ async def enhance_prompt(prompt: str, duration: int, ratio: str) -> str:
             if status_str in ("Fail", "Failed"):
                 raise CloudAPIError(f"增强任务失败: {result}")
     raise CloudAPIError("增强任务超时（10 分钟）")
+
+
+async def generate_video(
+    prompt: str,
+    duration: int,
+    aspect_ratio: str,
+    first_frame: Optional[Path] = None,
+    last_frame: Optional[Path] = None,
+) -> Path:
+    """云端全流程降级通道：官方 API 直接出成片（含提示词已增强后的最终提示词）。
+
+    仅在本地生成队列深度超阈值时由调度器触发。接口路径/字段以开放平台当日文档为准。
+    返回下载到 staging 目录的成片路径（调用方负责移动到 output）。
+    """
+    base = settings.minimax_api_base.rstrip("/")
+    payload: dict = {
+        "model": "MiniMax-H3",
+        "prompt": prompt,
+        "duration": duration,
+        "aspect_ratio": aspect_ratio,
+    }
+    if first_frame:
+        payload["first_frame_image"] = base64.b64encode(first_frame.read_bytes()).decode()
+    if last_frame:
+        payload["last_frame_image"] = base64.b64encode(last_frame.read_bytes()).decode()
+
+    async with httpx.AsyncClient() as client:
+        data = await _post_with_retry(client, f"{base}/v2/h3_video_generation", json=payload)
+        task_id = data.get("task_id")
+        if not task_id:
+            raise CloudAPIError(f"云端生成未返回 task_id: {data}")
+
+        deadline = asyncio.get_event_loop().time() + 1800  # 30 分钟
+        interval = 5.0
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(interval)
+            interval = min(interval * 1.5, 20.0)
+            r = await client.get(
+                f"{base}/v1/query/h3_video_generation",
+                headers=_headers(),
+                params={"task_id": task_id},
+                timeout=30,
+            )
+            r.raise_for_status()
+            result = r.json()
+            _check_base_resp(result)
+            status_str = result.get("status") or result.get("task_status", "")
+            if status_str in ("Success", "Success "):
+                file_url = result.get("file_url") or result.get("video_url", "")
+                if not file_url:
+                    raise CloudAPIError(f"云端生成结果缺少下载地址: {result}")
+                vr = await client.get(file_url, timeout=300)
+                vr.raise_for_status()
+                from ..config import STAGING_DIR
+                out = STAGING_DIR / f"cloud_{task_id}.mp4"
+                out.write_bytes(vr.content)
+                logger.info("云端降级成片已下载: %s", out)
+                return out
+            if status_str in ("Fail", "Failed"):
+                raise CloudAPIError(f"云端生成任务失败: {result}")
+    raise CloudAPIError("云端生成任务超时（30 分钟）")
 
 
 async def regenerate_2k(video_path: Path, aspect_ratio: str, duration: int) -> Path:

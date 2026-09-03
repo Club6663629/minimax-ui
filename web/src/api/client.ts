@@ -9,6 +9,7 @@ import type {
   TokenOut,
   UploadOut,
   User,
+  WorkerPoolOut,
 } from "../types";
 
 export class ApiError extends Error {
@@ -123,4 +124,5 @@ export const api = {
     }),
   adminCodes: () => request<RedeemCodeOut[]>("/api/admin/redeem-codes"),
   adminStats: () => request<AdminStats>("/api/admin/stats"),
+  adminWorkers: () => request<WorkerPoolOut>("/api/admin/workers"),
 };

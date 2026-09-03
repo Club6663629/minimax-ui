@@ -26,7 +26,7 @@ export type TaskStatus =
   | "queued"
   | "enhancing"
   | "generating_768p"
-  | "upscaling_2k"
+  | "upscaling"
   | "done"
   | "failed";
 
@@ -73,8 +73,10 @@ export interface Pricing {
   signup_bonus: number;
   cost_768p_5s: number;
   cost_768p_10s: number;
+  cost_1k_extra: number;
   cost_2k_extra: number;
   cloud_enabled: boolean;
+  upscale_enabled: boolean;
   packages: Package[];
 }
 
@@ -109,20 +111,45 @@ export interface AdminStats {
   credits_consumed: number;
 }
 
+/** Worker 池监控（集群调度） */
+export interface WorkerInfo {
+  url: string;
+  role: "generate" | "upscale";
+  tags: string[];
+  healthy: boolean;
+  busy: boolean;
+  task_id: number | null;
+  consecutive_fails: number;
+}
+
+export interface WorkerPoolOut {
+  mock: boolean;
+  workers: WorkerInfo[];
+  queued: number;
+  generating: number;
+  upscaling: number;
+}
+
 export const ACTIVE_STATUSES: TaskStatus[] = [
   "queued",
   "enhancing",
   "generating_768p",
-  "upscaling_2k",
+  "upscaling",
 ];
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   queued: "排队中",
   enhancing: "提示词增强中",
   generating_768p: "视频生成中",
-  upscaling_2k: "2K 升级中",
+  upscaling: "高清升级中",
   done: "已完成",
   failed: "失败",
+};
+
+export const RES_LABEL: Record<string, string> = {
+  "768p": "768P",
+  "1k": "1K",
+  "2k": "2K",
 };
 
 export const MODE_LABEL: Record<Task["mode"], string> = {

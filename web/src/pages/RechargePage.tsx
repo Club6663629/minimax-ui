@@ -56,6 +56,7 @@ export default function RechargePage() {
         <div className="text-right text-xs leading-relaxed text-zinc-600">
           <p>768p·5s 消耗 {pricing?.cost_768p_5s ?? "-"} 积分</p>
           <p>768p·10s 消耗 {pricing?.cost_768p_10s ?? "-"} 积分</p>
+          <p>1K 升级附加 {pricing?.cost_1k_extra ?? "-"} 积分</p>
           <p>2K 升级附加 {pricing?.cost_2k_extra ?? "-"} 积分</p>
         </div>
       </div>

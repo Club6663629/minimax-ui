@@ -46,7 +46,7 @@ class VideoCreateIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     duration: Literal[5, 10] = 5
-    resolution: Literal["768p", "2k"] = "768p"
+    resolution: Literal["768p", "1k", "2k"] = "768p"
     enhance: bool = True
     first_image_id: Optional[int] = None
     last_image_id: Optional[int] = None
@@ -102,8 +102,10 @@ class PricingOut(BaseModel):
     signup_bonus: int
     cost_768p_5s: int
     cost_768p_10s: int
+    cost_1k_extra: int
     cost_2k_extra: int
     cloud_enabled: bool
+    upscale_enabled: bool
     packages: list[PackageOut]
 
 
@@ -136,3 +138,22 @@ class AdminUserOut(BaseModel):
     credits: int
     task_count: int
     created_at: datetime
+
+
+# ---- Worker 池监控 ----
+class WorkerOut(BaseModel):
+    url: str
+    role: str                    # generate | upscale
+    tags: list[str]
+    healthy: bool
+    busy: bool
+    task_id: Optional[int] = None
+    consecutive_fails: int
+
+
+class WorkerPoolOut(BaseModel):
+    mock: bool
+    workers: list[WorkerOut]
+    queued: int                  # 待领取（含增强中）
+    generating: int              # 生成阶段（排队+执行）
+    upscaling: int               # 超分阶段（排队+执行）

@@ -21,8 +21,10 @@ def pricing():
         signup_bonus=settings.signup_bonus,
         cost_768p_5s=settings.cost_768p_5s,
         cost_768p_10s=settings.cost_768p_10s,
+        cost_1k_extra=settings.cost_1k_extra,
         cost_2k_extra=settings.cost_2k_extra,
         cloud_enabled=settings.cloud_enabled,
+        upscale_enabled=settings.upscale_enabled,
         packages=[PackageOut(**p) for p in PACKAGES],
     )
 
@@ -38,9 +40,10 @@ def create_video(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "首尾帧模式需要至少上传首帧或尾帧图片")
     if body.mode == "r2v" and not body.ref_image_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "全能参考模式需要上传参考图")
-    # 2K 依赖云端 API
-    if body.resolution == "2k" and not settings.cloud_enabled:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "2K 升级需要配置云端 API（MINIMAX_API_KEY）")
+    # 1K/2K 升级依赖本地超分池（关闭时 2K 需云端降级通道）
+    if body.resolution in ("1k", "2k"):
+        if not settings.upscale_enabled and not (body.resolution == "2k" and settings.cloud_enabled):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
 
     cost = compute_cost(body.duration, body.resolution)
     if user.credits < cost:
@@ -99,6 +102,8 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
     task.error = ""
     task.cost = 0
     task.video_path = ""
+    task.attempts = 0
+    task.worker_url = ""
     task.started_at = None
     task.finished_at = None
     db.commit()
@@ -109,7 +114,7 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_video(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     task = _get_owned_task(task_id, user, db)
-    if task.status in ("enhancing", "generating_768p", "upscaling_2k"):
+    if task.status in ("enhancing", "generating_768p", "upscaling"):
         raise HTTPException(status.HTTP_409_CONFLICT, "任务执行中，暂不可删除")
     db.delete(task)
     db.commit()

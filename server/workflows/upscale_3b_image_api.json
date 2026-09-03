@@ -1,0 +1,206 @@
+{
+  "9001": {
+    "class_type": "VAEEncodeTiled",
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 128,
+      "temp_size": 4096,
+      "temp_overlap": 8,
+      "pixels": [
+        "9008",
+        0
+      ],
+      "vae": [
+        "9003",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEEncodeTiled"
+    }
+  },
+  "9002": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "alpha": [
+        "1",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "JoinImageWithAlpha"
+    }
+  },
+  "9003": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "seedvr2_ema_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "9004": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "seedvr2_3b_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNETLoader"
+    }
+  },
+  "9005": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 959948902156062,
+      "control_after_generate": "fixed",
+      "steps": 1,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "9004",
+        0
+      ],
+      "positive": [
+        "9010",
+        0
+      ],
+      "negative": [
+        "9010",
+        1
+      ],
+      "latent_image": [
+        "9001",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "9006": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "tile_size": 512,
+      "overlap": 128,
+      "temp_size": 4096,
+      "temp_overlap": 8,
+      "samples": [
+        "9005",
+        0
+      ],
+      "vae": [
+        "9003",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecodeTiled"
+    }
+  },
+  "9007": {
+    "class_type": "ResizeImageMaskNode",
+    "inputs": {
+      "resize_type": "scale by multiplier",
+      "resize_type.multiplier": 4,
+      "method": "lanczos",
+      "input": [
+        "9002",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ResizeImageMaskNode"
+    }
+  },
+  "9008": {
+    "class_type": "SeedVR2Preprocess",
+    "inputs": {
+      "resized_images": [
+        "9007",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2Preprocess"
+    }
+  },
+  "9009": {
+    "class_type": "SeedVR2PostProcessing",
+    "inputs": {
+      "color_correction_method": "none",
+      "images": [
+        "9006",
+        0
+      ],
+      "original_resized_images": [
+        "9007",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2PostProcessing"
+    }
+  },
+  "9010": {
+    "class_type": "SeedVR2Conditioning",
+    "inputs": {
+      "model": [
+        "9004",
+        0
+      ],
+      "vae_conditioning": [
+        "9001",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2Conditioning"
+    }
+  },
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "watch_macro_shot.png"
+    },
+    "_meta": {
+      "title": "LoadImage"
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "seedvr2_after/image",
+      "images": [
+        "9009",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SaveImage"
+    }
+  },
+  "65": {
+    "class_type": "ImageCompare",
+    "inputs": {
+      "image_b": [
+        "9",
+        0
+      ],
+      "image_a": [
+        "1",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ImageCompare"
+    }
+  }
+}

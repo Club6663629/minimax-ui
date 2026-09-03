@@ -3,15 +3,16 @@ import secrets
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import get_admin
 from ..database import get_db
 from ..models import CreditLog, RedeemCode, Task, User
-from ..schemas import AdminAdjustIn, AdminUserOut, GenCodesIn, RedeemCodeOut
+from ..schemas import AdminAdjustIn, AdminUserOut, GenCodesIn, RedeemCodeOut, WorkerOut, WorkerPoolOut
 from ..services.billing import add_credits
+from ..services.pool import pool
 from .serialize import serialize_task
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -120,6 +121,21 @@ def list_all_tasks(
     return [serialize_task(t, user_email=emails.get(t.user_id)) for t in tasks]
 
 
+# ---- Worker 池监控 ----
+@router.get("/workers", response_model=WorkerPoolOut)
+def worker_pool(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
+    queued = db.query(Task).filter(Task.status.in_(("queued", "enhancing"))).count()
+    generating = db.query(Task).filter(Task.status == "generating_768p").count()
+    upscaling = db.query(Task).filter(Task.status == "upscaling").count()
+    return WorkerPoolOut(
+        mock=pool.mock,
+        workers=[WorkerOut(**w) for w in pool.snapshot()],
+        queued=queued,
+        generating=generating,
+        upscaling=upscaling,
+    )
+
+
 # ---- 用量统计 ----
 @router.get("/stats")
 def stats(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
@@ -143,7 +159,7 @@ def stats(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
         "queued": status_counts.get("queued", 0),
         "running": sum(
             status_counts.get(s, 0)
-            for s in ("enhancing", "generating_768p", "upscaling_2k")
+            for s in ("enhancing", "generating_768p", "upscaling")
         ),
         "done": status_counts.get("done", 0),
         "failed": status_counts.get("failed", 0),

@@ -11,6 +11,7 @@ from .database import Base, SessionLocal, engine
 from .models import User  # noqa: F401  确保建表时包含所有模型
 from .routers import admin, auth, credits, files, uploads, videos
 from .services import billing  # noqa: F401
+from .services.pool import pool
 from .services.worker import start_worker, stop_worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def _migrate() -> None:
-    """轻量迁移：旧库 tasks 表补 ref_image_ids 列（全能参考多图）。"""
+    """轻量迁移：旧库 tasks 表补列（全能参考多图 / 集群调度字段）。"""
     from sqlalchemy import inspect as sa_inspect
     from sqlalchemy import text
 
@@ -26,10 +27,19 @@ def _migrate() -> None:
     if not insp.has_table("tasks"):
         return
     cols = {c["name"] for c in insp.get_columns("tasks")}
-    if "ref_image_ids" not in cols:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        if "ref_image_ids" not in cols:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN ref_image_ids TEXT DEFAULT ''"))
-        logger.info("已为 tasks 表补充 ref_image_ids 列")
+            logger.info("已为 tasks 表补充 ref_image_ids 列")
+        if "attempts" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN attempts INTEGER DEFAULT 0"))
+            logger.info("已为 tasks 表补充 attempts 列")
+        if "worker_url" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN worker_url VARCHAR(128) DEFAULT ''"))
+            logger.info("已为 tasks 表补充 worker_url 列")
+    # 旧版 upscaling_2k 状态并入 upscaling
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE tasks SET status='upscaling' WHERE status='upscaling_2k'"))
 
 
 def _bootstrap() -> None:
@@ -58,9 +68,11 @@ def _bootstrap() -> None:
 async def lifespan(_app: FastAPI):
     _bootstrap()
     start_worker()
+    counts = pool.counts()
     logger.info(
-        "服务启动 (mock_comfy=%s, cloud=%s, comfyui=%s)",
-        settings.mock_comfy, settings.cloud_enabled, settings.comfyui_url,
+        "服务启动 (mock_comfy=%s, cloud=%s, 生成节点=%d, 超分节点=%d)",
+        settings.mock_comfy, settings.cloud_enabled,
+        counts["generate_total"], counts["upscale_total"],
     )
     yield
     await stop_worker()
@@ -86,8 +98,12 @@ app.include_router(admin.router)
 
 @app.get("/api/health")
 def health():
+    counts = pool.counts()
     return {
         "status": "ok",
         "mock_comfy": settings.mock_comfy,
         "cloud_enabled": settings.cloud_enabled,
+        "upscale_enabled": settings.upscale_enabled,
+        "generate_nodes": f"{counts['generate_healthy']}/{counts['generate_total']}",
+        "upscale_nodes": f"{counts['upscale_healthy']}/{counts['upscale_total']}",
     }

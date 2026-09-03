@@ -2,15 +2,17 @@
 
 工作流模板位于 server/workflows/{mode}_api.json，由官方模板
 （Comfy-Org/workflow_templates，见 _official/convert.py）转换而来，覆盖：
-- t2v   文生视频
-- flf2v 首/尾帧生视频（first_frame / last_frame 可只提供其一）
-- r2v   全能参考生视频（最多 9 张参考图，提示词用 <Picture N> 按序引用）
+- t2v    文生视频
+- flf2v  首/尾帧生视频（first_frame / last_frame 可只提供其一）
+- r2v    全能参考生视频（最多 9 张参考图，提示词用 <Picture N> 按序引用）
+- upscale       本地超分（SeedVR2 3B INT8 官方模板，KSampler 管线，1K/2K 分时）
+- upscale_7b    本地超分（SeedVR2 7B FP16 官方原生节点模板，resolution 直设）
 
 注入策略（对齐官方原生节点约定）：
 - ResolutionSelector → 画幅预设 + 0.98 百万像素（768p 原生画布，16:9 即 1344x768）
 - PrimitiveFloat → 时长秒数（帧数由工作流表达式按 24fps / 17 帧块自动吸附）
 - PrimitiveStringMultiline 或 "prompt" 字符串输入 → 注入提示词
-- seed / noise_seed → 随机化
+- seed / noise_seed → 随机化（仅生成类工作流；超分走 inject_upscale 定点注入）
 - LoadImage → 按模式动态重建（首/尾帧 或 多张参考图）
 """
 import asyncio
@@ -38,6 +40,23 @@ ASPECT_PRESETS = {
     "1:1": "1:1 (Square)",
 }
 MEGAPIXELS_768P = 0.98
+
+# ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
+UPSCALE_TIERS = {
+    "1k": {"steps": 20, "short_side": 1080},   # 1920×1080 等比，~1.4×
+    "2k": {"steps": 30, "short_side": 1440},   # 2560×1440 等比，~1.9×
+}
+# 768p 原生画布（0.98 百万像素）的各画幅尺寸，用于换算放大倍数
+SOURCE_SIZES = {"16:9": (1344, 768), "9:16": (768, 1344), "1:1": (976, 976)}
+# 7B 原生节点 SeedVR2VideoUpscaler.resolution 以 16:9 输出高度为基准；
+# 9:16/1:1 竖屏时以宽为短边，需取长边值才能得到「短边=1080/1440」的等比输出（官方模板说明）
+UPSCALE_7B_RESOLUTION = {
+    "16:9": {"1k": 1080, "2k": 1440},
+    "9:16": {"1k": 1920, "2k": 2560},
+    "1:1": {"1k": 1080, "2k": 1440},
+}
+UPSCALE_FRAME_BATCH = 21       # 帧批（4n+1）
+UPSCALE_TEMPORAL_OVERLAP = 3   # 时域重叠帧数
 
 
 def load_workflow(mode: str) -> dict:
@@ -125,22 +144,116 @@ def inject(
     return workflow
 
 
+def inject_upscale(
+    workflow: dict,
+    video_name: str,
+    tier: str,
+    aspect_ratio: str,
+    unet_name: Optional[str] = None,
+) -> dict:
+    """超分（SeedVR2）定点注入，按模板节点体系自适应（就地修改并返回）。
+
+    通用：
+    - LoadVideo → 待超分的 768p 中间产物
+    - ImageFromBatch → 模板演示用的截帧限制，生产需全片，直接移除并重接上下游
+    3B INT8 模板（KSampler 管线，含 ResizeImageMaskNode）：
+    - KSampler → 档位采样步数 + 随机 seed（模板默认 1 步为保守值）
+    - ResizeImageMaskNode → 按目标短边 / 源片短边换算放大倍数（等比）
+    - PrimitiveBoolean(split_latent) → 开启分时；帧批 21、时域重叠 3 帧（方案 §2）
+    - UNETLoader → 按节点配置注入权重（3B / 7B INT8 / GGUF），未配置则沿用模板默认 3B int8
+    7B FP16 模板（原生节点，含 SeedVR2VideoUpscaler）：
+    - SeedVR2VideoUpscaler → resolution 按档位/画幅直设 + 随机 seed（节点内部自带时域分块）
+    - ImageScale → 对齐源片尺寸（避免模板默认 720p 预缩放的意外裁切）
+    - SeedVR2LoadDiTModel → 按节点配置注入权重，未配置则沿用模板默认 7B FP16
+    """
+    if tier not in UPSCALE_TIERS:
+        raise ComfyUIError(f"未知超分档位: {tier}")
+    spec = UPSCALE_TIERS[tier]
+    src_w, src_h = SOURCE_SIZES.get(aspect_ratio, SOURCE_SIZES["16:9"])
+    multiplier = round(spec["short_side"] / min(src_w, src_h), 2)
+
+    _drop_image_from_batch(workflow)  # 两种模板都可能有截帧限制（7B 模板自带）
+
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type", "")
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        if class_type == "LoadVideo":
+            inputs["video"] = video_name
+        # ---- 3B INT8 管线 ----
+        elif class_type == "KSampler":
+            inputs["steps"] = spec["steps"]
+            inputs["seed"] = random.randint(0, 2**63 - 1)
+        elif class_type == "ResizeImageMaskNode":
+            inputs["resize_type.multiplier"] = multiplier
+        elif class_type == "PrimitiveBoolean":  # Split Latent 开关：启用分时
+            inputs["value"] = True
+        elif class_type == "SeedVR2TemporalChunk":
+            inputs["frame_batch_size"] = UPSCALE_FRAME_BATCH
+            inputs["temporal_overlap"] = UPSCALE_TEMPORAL_OVERLAP
+        elif class_type == "UNETLoader" and unet_name:
+            inputs["unet_name"] = unet_name
+        # ---- 7B FP16 原生管线 ----
+        elif class_type == "SeedVR2VideoUpscaler":
+            inputs["resolution"] = UPSCALE_7B_RESOLUTION.get(
+                aspect_ratio, UPSCALE_7B_RESOLUTION["16:9"]
+            )[tier]
+            inputs["seed"] = random.randint(0, 2**63 - 1)
+        elif class_type == "ImageScale":  # 保持源片尺寸，短边对齐由 resolution 控制
+            inputs["width"] = src_w
+            inputs["height"] = src_h
+        elif class_type == "SeedVR2LoadDiTModel" and unet_name:
+            inputs["dit_name"] = unet_name
+
+    return workflow
+
+
+def _drop_image_from_batch(workflow: dict) -> None:
+    """移除 ImageFromBatch（模板演示限 96 帧），把其下游改接到它的图像源。"""
+    ifb = next(
+        ((nid, n) for nid, n in workflow.items()
+         if isinstance(n, dict) and n.get("class_type") == "ImageFromBatch"),
+        None,
+    )
+    if ifb is None:
+        return
+    nid, node = ifb
+    src = node["inputs"].get("image")
+    if isinstance(src, list) and len(src) == 2:  # 重接下游后删除（保留源节点）
+        for other in workflow.values():
+            if not isinstance(other, dict):
+                continue
+            for key, value in (other.get("inputs") or {}).items():
+                if isinstance(value, list) and value == [nid, 0]:
+                    other["inputs"][key] = src
+    del workflow[nid]
+
+
 class ComfyUIClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base = (base_url or settings.comfyui_url).rstrip("/")
 
-    async def upload_image(self, path: Path) -> str:
-        """上传图片到 ComfyUI 的 input 目录，返回其文件名。"""
-        async with httpx.AsyncClient(timeout=120) as client:
+    async def upload_file(self, path: Path) -> str:
+        """上传输入文件（图片/视频）到 ComfyUI 的 input 目录，返回其文件名。"""
+        mime = "video/mp4" if path.suffix.lower() in (".mp4", ".mov", ".webm", ".mkv") else "image/png"
+        async with httpx.AsyncClient(timeout=300) as client:
             with open(path, "rb") as f:
                 r = await client.post(
                     f"{self.base}/upload/image",
-                    files={"image": (path.name, f, "image/png")},
+                    files={"image": (path.name, f, mime)},
                     data={"overwrite": "true"},
                 )
         if r.status_code != 200:
-            raise ComfyUIError(f"上传图片到 ComfyUI 失败: {r.text[:200]}")
+            raise ComfyUIError(f"上传文件到 ComfyUI 失败: {r.text[:200]}")
         return r.json()["name"]
+
+    async def upload_image(self, path: Path) -> str:
+        """上传图片到 ComfyUI 的 input 目录，返回其文件名。"""
+        return await self.upload_file(path)
 
     async def submit(self, workflow: dict) -> str:
         async with httpx.AsyncClient(timeout=60) as client:

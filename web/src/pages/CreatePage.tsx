@@ -28,6 +28,7 @@ import { useAuth } from "../state/auth";
 import {
   ACTIVE_STATUSES,
   MODE_LABEL,
+  RES_LABEL,
   STATUS_LABEL,
   type Pricing,
   type Task,
@@ -37,6 +38,8 @@ import {
 
 const ASPECTS = ["16:9", "9:16", "1:1"] as const;
 const DURATIONS = [5, 10] as const;
+const RESOLUTIONS = ["768p", "1k", "2k"] as const;
+type Resolution = (typeof RESOLUTIONS)[number];
 const MAX_REFS = 9; // 全能参考官方上限 9 张参考图
 
 type RefMode = "r2v" | "flf2v";
@@ -218,14 +221,16 @@ function SettingsMenu({
   onDuration,
   aspect,
   onAspect,
+  upscaleEnabled,
   cloudEnabled,
 }: {
-  resolution: "768p" | "2k";
-  onResolution: (r: "768p" | "2k") => void;
+  resolution: Resolution;
+  onResolution: (r: Resolution) => void;
   duration: (typeof DURATIONS)[number];
   onDuration: (d: (typeof DURATIONS)[number]) => void;
   aspect: (typeof ASPECTS)[number];
   onAspect: (a: (typeof ASPECTS)[number]) => void;
+  upscaleEnabled: boolean;
   cloudEnabled: boolean;
 }) {
   const { open, setOpen, ref } = usePopover();
@@ -233,27 +238,29 @@ function SettingsMenu({
     `rounded-md px-2.5 py-1 text-xs transition ${
       active ? "bg-indigo-500/20 text-indigo-300" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
     } ${disabled ? "cursor-not-allowed opacity-40" : ""}`;
+  // 1K/2K 走本地超分池；超分池关闭时 2K 仍可通过云端降级通道（需配置云端 API）
+  const disabledOf = (r: Resolution) => r !== "768p" && !upscaleEnabled && !(r === "2k" && cloudEnabled);
   return (
     <div className="relative" ref={ref}>
       <button type="button" onClick={() => setOpen(!open)} className={chipCls}>
         <SlidersHorizontal size={13} />
-        {resolution === "2k" ? "2K" : "768P"} · {duration}s · {aspect}
+        {RES_LABEL[resolution]} · {duration}s · {aspect}
       </button>
       {open && (
         <div className="absolute left-0 top-full z-20 mt-2 w-56 space-y-2.5 rounded-xl border border-white/10 bg-ink-800 p-3 shadow-2xl">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-500">分辨率</span>
             <div className="flex gap-1">
-              {(["768p", "2k"] as const).map((r) => (
+              {RESOLUTIONS.map((r) => (
                 <button
                   key={r}
                   type="button"
-                  disabled={r === "2k" && !cloudEnabled}
-                  title={r === "2k" && !cloudEnabled ? "2K 需配置云端 API" : ""}
+                  disabled={disabledOf(r)}
+                  title={disabledOf(r) ? "本地超分池未启用" : ""}
                   onClick={() => onResolution(r)}
-                  className={optCls(resolution === r, r === "2k" && !cloudEnabled)}
+                  className={optCls(resolution === r, disabledOf(r))}
                 >
-                  {r === "768p" ? "768P" : "2K"}
+                  {RES_LABEL[r]}
                 </button>
               ))}
             </div>
@@ -323,7 +330,7 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
         <span className="chip">{MODE_LABEL[task.mode]}</span>
         <span className="chip">{task.aspect_ratio}</span>
         <span className="chip">{task.duration}s</span>
-        <span className="chip">{task.resolution === "2k" ? "2K" : "768P"}</span>
+        <span className="chip">{RES_LABEL[task.resolution] ?? task.resolution}</span>
         <span className="ml-auto text-xs text-zinc-600">
           {new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}
         </span>
@@ -377,7 +384,7 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
             <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-indigo-500 to-violet-500" />
           </div>
-          单卡串行生成，请耐心等待
+          多卡并行处理中，请耐心等待
         </div>
       )}
     </div>
@@ -399,7 +406,7 @@ export default function CreatePage() {
   const [enhance, setEnhance] = useState(true);
   const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
   const [duration, setDuration] = useState<(typeof DURATIONS)[number]>(5);
-  const [resolution, setResolution] = useState<"768p" | "2k">("768p");
+  const [resolution, setResolution] = useState<Resolution>("768p");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -427,11 +434,13 @@ export default function CreatePage() {
   const cost = useMemo(() => {
     if (!pricing) return 0;
     let c = duration >= 10 ? pricing.cost_768p_10s : pricing.cost_768p_5s;
+    if (resolution === "1k") c += pricing.cost_1k_extra;
     if (resolution === "2k") c += pricing.cost_2k_extra;
     return c;
   }, [pricing, duration, resolution]);
 
   const cloudEnabled = pricing?.cloud_enabled ?? false;
+  const upscaleEnabled = pricing?.upscale_enabled ?? true;
 
   // 是否上传参考图 + 模式选项 → 实际生成模式
   const effMode: Task["mode"] =
@@ -535,6 +544,7 @@ export default function CreatePage() {
             onDuration={setDuration}
             aspect={aspect}
             onAspect={setAspect}
+            upscaleEnabled={upscaleEnabled}
             cloudEnabled={cloudEnabled}
           />
           <button

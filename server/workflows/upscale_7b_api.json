@@ -1,0 +1,157 @@
+{
+  "9001": {
+    "class_type": "SeedVR2LoadDiTModel",
+    "inputs": {
+      "dit_name": "seedvr2_ema_7b_fp16.safetensors",
+      "load_device": "cuda:0",
+      "block_swap": 0,
+      "enable_compile": false,
+      "sage_block": "none",
+      "offload": false,
+      "attn": "sdpa",
+      "model": "seedvr2_ema_7b_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "SeedVR2LoadDiTModel"
+    }
+  },
+  "9002": {
+    "class_type": "SeedVR2VideoUpscaler",
+    "inputs": {
+      "seed": 825616700,
+      "control_after_generate": "randomize",
+      "resolution": 1080,
+      "sampling_steps": 0,
+      "overlap_size": 5,
+      "adv_encode": false,
+      "color_correction": "lab",
+      "pad_left": 0,
+      "pad_right": 0,
+      "pad_top": 0,
+      "pad_bottom": 0,
+      "offload_device": "cpu",
+      "randomize_seed": false,
+      "dit": [
+        "9001",
+        0
+      ],
+      "vae": [
+        "9003",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SeedVR2VideoUpscaler"
+    }
+  },
+  "9003": {
+    "class_type": "SeedVR2LoadVAEModel",
+    "inputs": {
+      "vae_name": "ema_vae_fp16.safetensors",
+      "load_device": "cuda:0",
+      "enable_tiling": false,
+      "tile_height": 1024,
+      "tile_overlap": 128,
+      "temporal_tiling": false,
+      "temporal_tile_size": 1024,
+      "temporal_tile_overlap": 128,
+      "tile_parallelism": "false",
+      "color_fix": "none",
+      "offload": false
+    },
+    "_meta": {
+      "title": "SeedVR2LoadVAEModel"
+    }
+  },
+  "20": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "upscale_method": "lanczos",
+      "width": 1280,
+      "height": 720,
+      "crop": "center",
+      "image": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ImageScale"
+    }
+  },
+  "19": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "18",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "GetVideoComponents"
+    }
+  },
+  "18": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "video": "input_3d.mp4"
+    },
+    "_meta": {
+      "title": "LoadVideo"
+    }
+  },
+  "17": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "video/SeedVR2",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "16",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SaveVideo"
+    }
+  },
+  "16": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "fps": [
+        "19",
+        2
+      ],
+      "bit_depth": 8,
+      "audio": [
+        "19",
+        1
+      ],
+      "images": [
+        "9002",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "CreateVideo"
+    }
+  },
+  "22": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "batch_index": 0,
+      "length": 96,
+      "image": [
+        "19",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ImageFromBatch"
+    }
+  }
+}

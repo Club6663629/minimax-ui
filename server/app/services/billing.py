@@ -8,9 +8,11 @@ from ..models import CreditLog, User
 
 
 def compute_cost(duration: int, resolution: str) -> int:
-    """单次生成消耗积分。2K 升级需云端 API，未配置时前端已不可选。"""
+    """单次生成消耗积分。1K/2K 升级走本地超分池（2K 另有云端降级通道）。"""
     cost = settings.cost_768p_10s if duration >= 10 else settings.cost_768p_5s
-    if resolution == "2k":
+    if resolution == "1k":
+        cost += settings.cost_1k_extra
+    elif resolution == "2k":
         cost += settings.cost_2k_extra
     return cost
 

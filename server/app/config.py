@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     mock_comfy: bool = False
     video_fps: int = 25
 
+    # ---- ComfyUI 集群（多卡并发，见《H3集群部署方案》）----
+    # 条目间分号分隔，每项 "url|角色|标签"（标签内逗号分隔）；角色 generate|upscale；
+    # 标签：heavy(长片段优先)/1k/2k/overflow/unet:<权重文件名>
+    # 留空则退回 comfyui_url 单实例串行模式（行为与旧版一致）
+    comfyui_workers: str = ""
+    upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
+    degrade_queue_depth: int = 8          # 生成队列深度超阈值且有云端 Key → 云端全流程降级
+    cloud_upscale_fallback: bool = True   # 本地超分重试耗尽后，2K 回落云端重生成
+
     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
     minimax_api_key: str = ""
     minimax_api_base: str = "https://api.minimax.io"
@@ -34,6 +43,7 @@ class Settings(BaseSettings):
     signup_bonus: int = 50        # 注册赠送
     cost_768p_5s: int = 10        # 768p · 5 秒
     cost_768p_10s: int = 20       # 768p · 10 秒
+    cost_1k_extra: int = 8        # 1K 升级附加（本地超分）
     cost_2k_extra: int = 15       # 2K 升级附加
 
 
