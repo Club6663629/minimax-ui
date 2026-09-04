@@ -54,7 +54,7 @@ def redeem(
 
     code.status = "used"
     code.used_by = user.id
-    code.used_at = datetime.utcnow()
+    code.used_at = datetime.now()
     add_credits(db, user, code.value, "redeem", note=f"兑换码充值 {code.code}")
     db.commit()
     return {"credits": user.credits, "added": code.value}

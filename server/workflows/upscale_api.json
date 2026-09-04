@@ -4,8 +4,6 @@
     "inputs": {
       "tile_size": 512,
       "overlap": 128,
-      "temp_size": 64,
-      "temp_overlap": 8,
       "pixels": [
         "9007",
         0
@@ -13,7 +11,9 @@
       "vae": [
         "9002",
         0
-      ]
+      ],
+      "temporal_size": 64,
+      "temporal_overlap": 8
     },
     "_meta": {
       "title": "VAEEncodeTiled"
@@ -31,7 +31,7 @@
   "9003": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "seedvr2_3b_int8_convrot.safetensors",
+      "unet_name": "seedvr2_3b_fp16.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {
@@ -74,8 +74,6 @@
     "inputs": {
       "tile_size": 512,
       "overlap": 128,
-      "temp_size": 64,
-      "temp_overlap": 8,
       "vae": [
         "9002",
         0
@@ -83,7 +81,9 @@
       "samples": [
         "9017",
         0
-      ]
+      ],
+      "temporal_size": 64,
+      "temporal_overlap": 8
     },
     "_meta": {
       "title": "VAEDecodeTiled"
@@ -94,11 +94,11 @@
     "inputs": {
       "resize_type": "scale by multiplier",
       "resize_type.multiplier": 2,
-      "method": "lanczos",
       "input": [
         "9010",
         0
-      ]
+      ],
+      "scale_method": "lanczos"
     },
     "_meta": {
       "title": "ResizeImageMaskNode"
@@ -194,7 +194,8 @@
       "video": [
         "73",
         0
-      ]
+      ],
+      "strict_duration": false
     },
     "_meta": {
       "title": "Video Slice"
@@ -220,12 +221,14 @@
   "9014": {
     "class_type": "SeedVR2TemporalChunk",
     "inputs": {
-      "frame_batch_size": 0,
-      "mode": "auto",
       "latent": [
         "9001",
         0
-      ]
+      ],
+      "temporal_overlap": 3,
+      "chunking_mode": {
+        "chunking_mode": "auto"
+      }
     },
     "_meta": {
       "title": "SeedVR2TemporalChunk"
@@ -299,7 +302,7 @@
   "73": {
     "class_type": "LoadVideo",
     "inputs": {
-      "video": "grainy_perfume_shot_crf32.mp4"
+      "file": "grainy_perfume_shot_crf32.mp4"
     },
     "_meta": {
       "title": "LoadVideo"

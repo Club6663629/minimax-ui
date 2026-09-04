@@ -21,6 +21,16 @@
 - 部件名按节点类约定表映射；子图实例按 proxyWidgets 顺序对齐部件值；
   实例无 proxyWidgets 时，退回「未被连线占用的子图输入槽 ↔ 部件值尾段按序对齐」
 
+生产 ComfyUI 已升级 0.34，SeedVR2 视频模板转换后需做参数名适配（见 _postprocess_034）：
+- LoadVideo：video → file
+- VAEEncodeTiled/DecodeTiled：temp_size/temp_overlap → temporal_size/temporal_overlap
+- ResizeImageMaskNode：method → scale_method
+- SeedVR2TemporalChunk：frame_batch_size/mode → temporal_overlap + chunking_mode（嵌套 dict）
+- Video Slice：补 strict_duration:false
+- upscale_api 的 UNETLoader 默认权重 → 3B FP16（default）
+- upscale_7b_api 的 DiT 默认权重 → 3B FP16，VAE → seedvr2_ema_vae_fp16
+图像版（*_image_api.json）为评估对照，保持官方模板原样输出。
+
 用法：python3 convert.py
 """
 import json
@@ -330,6 +340,59 @@ def validate(api: dict) -> None:
                 assert value[0] in api, f"节点 {nid} 的 {key} 引用了不存在的节点 {value[0]}"
 
 
+def _postprocess_034(api: dict, dst: str) -> None:
+    """生产 ComfyUI 0.34 参数名适配（仅 SeedVR2 视频模板，就地修改）。
+
+    官方模板快照由旧版节点导出；生产升级 0.34 后参数体系变化，转换产物需对齐
+    运行时模板（见 inject_upscale 的注入约定）。图像版为评估对照，保持原样输出。
+    """
+    if dst not in ("upscale_api.json", "upscale_7b_api.json"):
+        return
+    for node in api.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type == "LoadVideo":
+            if "video" in inputs:
+                inputs["file"] = inputs.pop("video")
+        elif class_type in ("VAEEncodeTiled", "VAEDecodeTiled"):
+            if "temp_size" in inputs:
+                inputs["temporal_size"] = inputs.pop("temp_size")
+            if "temp_overlap" in inputs:
+                inputs["temporal_overlap"] = inputs.pop("temp_overlap")
+        elif class_type == "ResizeImageMaskNode":
+            if "method" in inputs:
+                inputs["scale_method"] = inputs.pop("method")
+        elif class_type == "SeedVR2TemporalChunk":
+            inputs.pop("frame_batch_size", None)
+            inputs.pop("mode", None)
+            inputs["temporal_overlap"] = 3  # 对齐 UPSCALE_TEMPORAL_OVERLAP
+            inputs["chunking_mode"] = {"chunking_mode": "auto"}
+        elif class_type == "Video Slice":
+            inputs["strict_duration"] = False
+    if dst == "upscale_api.json":
+        # 3B INT8 官方模板的默认权重 → 生产 3B FP16（与集群权重一致）
+        for node in api.values():
+            if isinstance(node, dict) and node.get("class_type") == "UNETLoader":
+                node["inputs"]["unet_name"] = "seedvr2_3b_fp16.safetensors"
+                node["inputs"]["weight_dtype"] = "default"
+    elif dst == "upscale_7b_api.json":
+        # 官方默认 7B FP16 DiT / 独立 VAE → 生产 3B FP16 + 统一 VAE
+        for node in api.values():
+            if not isinstance(node, dict):
+                continue
+            class_type = node.get("class_type")
+            if class_type == "SeedVR2LoadDiTModel":
+                node["inputs"]["dit_name"] = "seedvr2_3b_fp16.safetensors"
+                if isinstance(node["inputs"].get("model"), str):
+                    node["inputs"]["model"] = "seedvr2_3b_fp16.safetensors"
+            elif class_type == "SeedVR2LoadVAEModel":
+                node["inputs"]["vae_name"] = "seedvr2_ema_vae_fp16.safetensors"
+
+
 def main() -> None:
     for src, dst in TARGETS.items():
         wf = json.loads((HERE / src).read_text(encoding="utf-8"))
@@ -344,6 +407,7 @@ def main() -> None:
     for src, dst in LEGACY_TARGETS.items():
         wf = json.loads((HERE / src).read_text(encoding="utf-8"))
         api = LegacyConverter(wf).run()
+        _postprocess_034(api, dst)
         validate(api)
         (OUT / dst).write_text(
             json.dumps(api, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

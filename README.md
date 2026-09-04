@@ -130,8 +130,9 @@ curl -s http://<机器>:<端口>/system_stats   # 验证可达
   - `heavy`：长片段（>10s）任务优先派发
   - `1k` / `2k`：可承接的超分档位（2K 优先派发）
   - `overflow`：仅主力超分节点全忙时承接 1K
-  - `unet:<权重文件名>`：派发时注入的权重（7B FP16 / 3B INT8 / GGUF 等）
-  - `engine:seedvr2`：用 7B FP16 原生节点模板；缺省（`seedvr2_int8`）用 3B INT8 模板
+  - `unet:<权重文件名>`：超分节点注入的权重（3B FP16 等）
+  - `unet:<mode族>:<文件名>`：生成节点注入的权重（t2v/flf2v → `fl2va`，r2v → `ref2va`）
+  - `engine:seedvr2`：用原生节点模板；缺省（`seedvr2_int8`）用 KSampler 管线模板（模板默认 3B FP16 权重）
 
 9 卡机房示例（生成 4 + 超分主力 3 + 1K 溢出 2）：
 
@@ -141,23 +142,24 @@ http://192.168.10.45:8188|generate|heavy;\
 http://192.168.10.51:8188|generate|;\
 http://192.168.10.246:8188|generate|;\
 http://192.168.10.246:8189|generate|;\
-http://192.168.10.45:8189|upscale|1k,2k,engine:seedvr2,unet:seedvr2_ema_7b_fp16.safetensors;\
-http://192.168.10.45:8190|upscale|1k,2k,engine:seedvr2,unet:seedvr2_ema_7b_fp16.safetensors;\
-http://192.168.5.205:8188|upscale|1k,2k,engine:seedvr2,unet:seedvr2_ema_7b_fp16.safetensors;\
-http://192.168.10.45:8191|upscale|1k,overflow;\
-http://192.168.10.246:8190|upscale|1k,overflow,unet:seedvr2_3b_int8_convrot.safetensors"
+http://192.168.10.45:8189|upscale|1k,2k,engine:seedvr2,unet:seedvr2_3b_fp16.safetensors;\
+http://192.168.10.45:8190|upscale|1k,2k,engine:seedvr2,unet:seedvr2_3b_fp16.safetensors;\
+http://192.168.5.205:8188|upscale|1k,2k,engine:seedvr2,unet:seedvr2_3b_fp16.safetensors;\
+http://192.168.10.45:8191|upscale|1k,overflow,unet:seedvr2_3b_fp16.safetensors;\
+http://192.168.10.246:8190|upscale|1k,overflow,unet:seedvr2_3b_fp16.safetensors"
 ```
 
 **3. 调度与自愈行为**
 
-- 心跳：每 10s 探活全部节点 `/system_stats`，连续失败 30s 摘除，恢复后自动回池
-- 路由：生成按最少任务派发；超分 2K 优先、主力池优先，`overflow` 节点兜底 1K
+- 心跳：每 10s 探活全部节点 `/system_stats` 与 `/queue`（ComfyUI 真实队列有 running/pending 即视为忙），连续失败 30s 摘除，恢复后自动回池
+- 路由：空闲生成节点 round-robin 轮询派发（长片段优先 heavy 节点）；超分 2K 优先、主力池优先，`overflow` 节点兜底 1K
+- 孤儿恢复：后端重启后自动扫描中间态任务（含派发后未提交的窗口期任务），按节点 `/history` 恢复产物或回退重投
 - 失败自愈：阶段失败且 `attempts < 2` 自动回退重投；2K 重试耗尽且配置了云端 Key → 回落云端重生成
 - 云端降级：生成队列深度超过 `DEGRADE_QUEUE_DEPTH` 且配置了云端 Key → 最老排队任务转云端全流程
 - 监控：管理后台「Worker 池」页实时显示各节点健康/忙闲/当前任务与队列深度
 
-**4. 权重分发**：各机本地留存所需权重（生成节点 = H3 INT8/fp8；超分节点 = SeedVR2
-`seedvr2_ema_7b_fp16.safetensors` + `ema_vae_fp16.safetensors`，溢出节点 = 3B `seedvr2_3b_int8_convrot.safetensors`），
+**4. 权重分发**：各机本地留存所需权重（生成节点 = H3 INT8/fp8；超分节点统一 = SeedVR2
+`seedvr2_3b_fp16.safetensors` + `seedvr2_ema_vae_fp16.safetensors`），
 从母本机 `rsync` 分发后软链接进各实例 `ComfyUI/models/` 对应子目录。
 
 ## 三、配置项（环境变量 / server/.env）
@@ -185,8 +187,8 @@ http://192.168.10.246:8190|upscale|1k,overflow,unet:seedvr2_3b_int8_convrot.safe
    （Comfy-Org/workflow_templates）经 `_official/convert.py` 转换（`python3 convert.py` 可复跑）：
    - `{t2v,flf2v,r2v}_api.json`：MiniMax H3 生成（注入对齐官方原生节点：`ResolutionSelector`
      画幅预设 + 0.98 百万像素、`PrimitiveFloat` 时长、`prompt` 注入、`seed` 随机、`LoadImage` 按模式重建）
-   - `upscale_api.json`：SeedVR2 3B INT8 视频超分（KSampler 管线；注入放大倍数、分时帧批 21/重叠 3 帧、步数按档位）
-   - `upscale_7b_api.json`：SeedVR2 7B FP16 视频超分（原生 `SeedVR2VideoUpscaler` 节点；
+   - `upscale_api.json`：SeedVR2 视频超分（KSampler 管线，默认 3B FP16 权重；注入放大倍数、分时帧批 21/重叠 3 帧、步数按档位）
+   - `upscale_7b_api.json`：SeedVR2 视频超分（原生 `SeedVR2VideoUpscaler` 节点，默认 3B FP16 权重；
      注入 `resolution`——16:9 按输出高度、竖屏取长边——并对齐 `ImageScale`，注入时自动移除模板自带的 96 帧截断限制）
    - `upscale_{7b,3b}_image_api.json`：SeedVR2 图像版（评估对照，未接入生产调度）
 2. **云端 API 路径**：`server/app/services/cloud.py` 中提示词增强、全流程生成与 2K 重生成的

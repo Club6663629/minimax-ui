@@ -5,8 +5,8 @@
 - t2v    文生视频
 - flf2v  首/尾帧生视频（first_frame / last_frame 可只提供其一）
 - r2v    全能参考生视频（最多 9 张参考图，提示词用 <Picture N> 按序引用）
-- upscale       本地超分（SeedVR2 3B INT8 官方模板，KSampler 管线，1K/2K 分时）
-- upscale_7b    本地超分（SeedVR2 7B FP16 官方原生节点模板，resolution 直设）
+- upscale       本地超分（SeedVR2 KSampler 管线模板，默认 3B FP16 权重，1K/2K 分时）
+- upscale_7b    本地超分（SeedVR2 原生节点模板，默认 3B FP16 权重，resolution 直设）
 
 注入策略（对齐官方原生节点约定）：
 - ResolutionSelector → 画幅预设 + 0.98 百万像素（768p 原生画布，16:9 即 1344x768）
@@ -85,6 +85,7 @@ def inject(
     aspect_ratio: str,
     duration: int,
     image_names: Optional[List[str]] = None,
+    unet_name: Optional[str] = None,
 ) -> dict:
     """把提示词 / 画幅 / 时长 / 输入图注入官方工作流模板（就地修改并返回）。"""
     image_names = list(image_names or [])
@@ -100,6 +101,11 @@ def inject(
         if class_type == "ResolutionSelector":
             inputs["aspect_ratio"] = ASPECT_PRESETS.get(aspect_ratio, ASPECT_PRESETS["16:9"])
             inputs["megapixels"] = MEGAPIXELS_768P
+        elif class_type == "UNETLoader" and unet_name:
+            inputs["unet_name"] = unet_name
+            # fp8 权重必须配 fp8_e4m3fn，否则 default 按 fp16 加载报错
+            if "fp8" in unet_name:
+                inputs["weight_dtype"] = "fp8_e4m3fn"
         elif class_type == "PrimitiveFloat":  # 工作流中的时长（秒）参数
             inputs["value"] = float(duration)
         elif class_type == "PrimitiveStringMultiline":  # r2v 的提示词源节点
@@ -156,15 +162,15 @@ def inject_upscale(
     通用：
     - LoadVideo → 待超分的 768p 中间产物
     - ImageFromBatch → 模板演示用的截帧限制，生产需全片，直接移除并重接上下游
-    3B INT8 模板（KSampler 管线，含 ResizeImageMaskNode）：
+    3B INT8 官方模板衍生的 KSampler 管线（含 ResizeImageMaskNode，模板默认权重 3B FP16）：
     - KSampler → 档位采样步数 + 随机 seed（模板默认 1 步为保守值）
     - ResizeImageMaskNode → 按目标短边 / 源片短边换算放大倍数（等比）
     - PrimitiveBoolean(split_latent) → 开启分时；帧批 21、时域重叠 3 帧（方案 §2）
-    - UNETLoader → 按节点配置注入权重（3B / 7B INT8 / GGUF），未配置则沿用模板默认 3B int8
-    7B FP16 模板（原生节点，含 SeedVR2VideoUpscaler）：
+    - UNETLoader → 按节点配置注入权重（3B / 7B INT8 / GGUF），未配置则沿用模板默认 3B FP16
+    原生节点模板（含 SeedVR2VideoUpscaler，模板默认权重 3B FP16）：
     - SeedVR2VideoUpscaler → resolution 按档位/画幅直设 + 随机 seed（节点内部自带时域分块）
     - ImageScale → 对齐源片尺寸（避免模板默认 720p 预缩放的意外裁切）
-    - SeedVR2LoadDiTModel → 按节点配置注入权重，未配置则沿用模板默认 7B FP16
+    - SeedVR2LoadDiTModel → 按节点配置注入权重，未配置则沿用模板默认 3B FP16
     """
     if tier not in UPSCALE_TIERS:
         raise ComfyUIError(f"未知超分档位: {tier}")
@@ -183,21 +189,37 @@ def inject_upscale(
             continue
 
         if class_type == "LoadVideo":
-            inputs["video"] = video_name
+            inputs.pop("video", None)  # 旧版参数名，新版已改为 file，防残留
+            inputs["file"] = video_name
         # ---- 3B INT8 管线 ----
         elif class_type == "KSampler":
             inputs["steps"] = spec["steps"]
             inputs["seed"] = random.randint(0, 2**63 - 1)
         elif class_type == "ResizeImageMaskNode":
+            # 新版（ComfyUI 0.34）节点为动态 combo 结构：resize_type 取 combo 值，
+            # multiplier 以点分隔键名 resize_type.multiplier 提交（嵌套参数序列化），
+            # scale_method 为顶层参数；旧版 method 字段需清理，否则提交时
+            # 缺必填 scale_method 报 required_input_missing
+            inputs.pop("resize_type.multiplier", None)
+            inputs.pop("method", None)
+            inputs["resize_type"] = "scale by multiplier"
             inputs["resize_type.multiplier"] = multiplier
+            inputs["scale_method"] = "lanczos"
         elif class_type == "PrimitiveBoolean":  # Split Latent 开关：启用分时
             inputs["value"] = True
         elif class_type == "SeedVR2TemporalChunk":
-            inputs["frame_batch_size"] = UPSCALE_FRAME_BATCH
+            # 新版 ComfyUI 0.34：chunking_mode 为 DynamicCombo（嵌套 dict），
+            # temporal_overlap 为顶层 int 输入；旧版 frame_batch_size/mode 已废弃
+            inputs.pop("frame_batch_size", None)
+            inputs.pop("mode", None)
             inputs["temporal_overlap"] = UPSCALE_TEMPORAL_OVERLAP
+            inputs["chunking_mode"] = {"chunking_mode": "auto"}
         elif class_type == "UNETLoader" and unet_name:
             inputs["unet_name"] = unet_name
-        # ---- 7B FP16 原生管线 ----
+            # fp8 权重必须配 fp8_e4m3fn，否则 default 按 fp16 加载报错
+            if "fp8" in unet_name:
+                inputs["weight_dtype"] = "fp8_e4m3fn"
+        # ---- 原生节点管线 ----
         elif class_type == "SeedVR2VideoUpscaler":
             inputs["resolution"] = UPSCALE_7B_RESOLUTION.get(
                 aspect_ratio, UPSCALE_7B_RESOLUTION["16:9"]
@@ -290,11 +312,22 @@ class ComfyUIClient:
                     raise ComfyUIError(f"ComfyUI 执行出错: {messages}")
                 if not status_info.get("completed"):
                     continue
+                # ComfyUI 0.34+ 的 SaveVideo 节点把视频产物输出到 "images" key
+                # （animated 标记为 true，文件名是 .mp4/.webm 等视频后缀）；
+                # 旧版/其它节点仍可能用 "videos"/"gifs"。依次探测，优先视频专用 key。
                 for outputs in entry.get("outputs", {}).values():
                     for key in ("videos", "gifs"):
                         files = outputs.get(key)
                         if files:
                             return files[0]
+                    # SaveVideo 新版：产物落在 images 列表，按视频后缀过滤，排除纯图片输出
+                    images = outputs.get("images")
+                    if isinstance(images, list):
+                        for f in images:
+                            if isinstance(f, dict) and f.get("filename", "").lower().endswith(
+                                (".mp4", ".webm", ".mov", ".mkv", ".avi")
+                            ):
+                                return f
                 raise ComfyUIError("任务完成但未找到视频产物，请检查工作流输出节点")
         raise ComfyUIError(f"ComfyUI 任务超时（{settings.comfyui_timeout_minutes} 分钟）")
 

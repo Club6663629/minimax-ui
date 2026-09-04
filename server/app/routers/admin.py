@@ -148,7 +148,7 @@ def stats(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
         .filter(CreditLog.type == "consume")
         .scalar()
     )
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_tasks = (
         db.query(func.count(Task.id)).filter(Task.created_at >= today_start).scalar() or 0
     )

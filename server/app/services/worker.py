@@ -50,6 +50,7 @@ def start_worker() -> None:
     _bg_tasks.append(loop.create_task(_loop_guard(_enhance_loop, "增强")))
     _bg_tasks.append(loop.create_task(_loop_guard(_generate_loop, "生成")))
     _bg_tasks.append(loop.create_task(_loop_guard(_upscale_loop, "超分")))
+    _bg_tasks.append(loop.create_task(_recover_orphans()))
     logger.info("调度器已启动 (mock=%s)", settings.mock_comfy)
 
 
@@ -206,7 +207,7 @@ def _claim_generate() -> Optional[int]:
         if user.credits < cost:
             task.status = "failed"
             task.error = "积分不足"
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now()
             db.commit()
             return None
         add_credits(
@@ -215,7 +216,7 @@ def _claim_generate() -> Optional[int]:
         )
         task.status = "generating_768p"
         task.cost = cost
-        task.started_at = datetime.utcnow()
+        task.started_at = datetime.now()
         task.worker_url = "pending"  # 占位与计费同事务提交，防领取后派发前被重复领取
         db.commit()
         return task_id
@@ -269,7 +270,7 @@ async def _run_generate(task_id: int, node: WorkerNode) -> None:
                 shutil.move(str(staging_768p), final_path)
                 task.video_path = str(final_path)
                 task.status = "done"
-                task.finished_at = datetime.utcnow()
+                task.finished_at = datetime.now()
                 db.commit()
                 logger.info("任务 #%s 完成: %s", task_id, final_path)
     except asyncio.CancelledError:
@@ -277,6 +278,148 @@ async def _run_generate(task_id: int, node: WorkerNode) -> None:
     except Exception as exc:
         logger.exception("任务 #%s 生成失败", task_id)
         await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
+    finally:
+        pool.release(node)
+
+
+# ---------------------------------------------------------------- 孤儿任务恢复
+async def _recover_orphans() -> None:
+    """启动时恢复后端重启前派发、但新进程未认领的中间态任务。
+
+    后端重启会清空内存态（worker_url 非空的任务被各 claim 永久跳过），
+    但这些任务在 ComfyUI 节点上可能仍在跑或已跑完。启动时扫描
+    generating_768p / upscaling 且 worker_url != "" 的任务，按 comfy_prompt_id
+    去对应节点查 /history，已完成则下载落盘推进状态机，仍在跑则重新挂起轮询，
+    节点已无该任务则回退重投。
+
+    扫描不要求 comfy_prompt_id 非空：派发后（worker_url 已写）、提交工作流前
+    崩溃的任务 prompt_id 为空，同样会被卡住，需一并捞起；恢复函数内部对空
+    prompt_id 直接回退重投。
+    """
+    await asyncio.sleep(3)  # 等 pool 心跳先探活一轮
+    with SessionLocal() as db:
+        orphans = (
+            db.query(Task)
+            .filter(
+                Task.status.in_(("generating_768p", "upscaling")),
+                Task.worker_url != "",
+            )
+            .all()
+        )
+    if not orphans:
+        return
+    logger.info("启动恢复：发现 %d 个中间态任务待恢复", len(orphans))
+    for task in orphans:
+        node = pool.get_node_by_url(task.worker_url)
+        if node is None:
+            # 节点已不在池中：回退重投，让调度器重新派发
+            logger.warning("孤儿任务 #%s 节点 %s 已不在池中，回退重投", task.id, task.worker_url)
+            await asyncio.to_thread(_requeue_or_fail, task.id, task.status)
+            continue
+        if task.status == "upscaling":
+            asyncio.get_event_loop().create_task(_resume_upscale(task.id, node))
+        else:
+            asyncio.get_event_loop().create_task(_resume_generate(task.id, node))
+
+
+async def _resume_generate(task_id: int, node: WorkerNode) -> None:
+    """恢复一个已派发到节点的生成任务：轮询其 comfy_prompt_id 结果并推进状态机。
+
+    与 _run_generate 的区别：不重新提交工作流，只轮询已有 prompt_id 的结果。
+    适用于后端重启后，节点上任务仍在跑或已跑完但未落盘的场景。
+    prompt_id 为空（派发后、提交前崩溃）时直接回退重投。
+    """
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "generating_768p":
+                return
+            prompt_id = task.comfy_prompt_id
+        if not prompt_id:
+            await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p")
+            return
+        client = comfyui.ComfyUIClient(node.url)
+        file_info = await client.wait_result(prompt_id)
+        content = await client.fetch_file(
+            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
+        )
+        staging_768p = STAGING_DIR / f"{task_id}_768p.mp4"
+        staging_768p.write_bytes(content)
+        logger.info("孤儿任务 #%s 768p 产物已恢复落盘 (节点 %s)", task_id, node.url)
+
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task.status != "generating_768p":
+                return
+            need_upscale = settings.upscale_enabled and task.resolution in ("1k", "2k")
+            if need_upscale:
+                task.status = "upscaling"
+                task.worker_url = ""
+                db.commit()
+                logger.info("孤儿任务 #%s 768p 恢复完成，进入超分队列(%s)", task_id, task.resolution)
+            else:
+                final_path = OUTPUT_DIR / f"{task_id}.mp4"
+                shutil.move(str(staging_768p), final_path)
+                task.video_path = str(final_path)
+                task.status = "done"
+                task.finished_at = datetime.now()
+                db.commit()
+                logger.info("孤儿任务 #%s 恢复完成: %s", task_id, final_path)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("孤儿任务 #%s 恢复失败", task_id)
+        await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
+    finally:
+        pool.release(node)
+
+
+async def _resume_upscale(task_id: int, node: WorkerNode) -> None:
+    """恢复一个已派发到节点的超分任务：轮询其 comfy_prompt_id 结果并落盘成片。
+
+    与 _run_upscale 的区别：不重新提交工作流，只轮询已有 prompt_id 的结果。
+    适用于后端重启后，节点上超分任务仍在跑或已跑完但未落盘的场景。
+    prompt_id 为空（派发后、提交前崩溃）时直接回退重投。
+    """
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "upscaling":
+                return
+            prompt_id = task.comfy_prompt_id
+        if not prompt_id:
+            await asyncio.to_thread(_requeue_or_fail, task_id, "upscaling")
+            return
+        client = comfyui.ComfyUIClient(node.url)
+        file_info = await client.wait_result(prompt_id)
+        content = await client.fetch_file(
+            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
+        )
+        out_path = STAGING_DIR / f"{task_id}_upscaled.mp4"
+        out_path.write_bytes(content)
+        src = STAGING_DIR / f"{task_id}_768p.mp4"
+        await asyncio.to_thread(_ensure_audio, src, out_path)
+        logger.info("孤儿任务 #%s 超分产物已恢复落盘 (节点 %s)", task_id, node.url)
+
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task.status != "upscaling":
+                return
+            suffix = "2k" if task.resolution == "2k" else "1k"
+            final_path = OUTPUT_DIR / f"{task_id}_{suffix}.mp4"
+        shutil.move(str(out_path), final_path)
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            task.video_path = str(final_path)
+            task.status = "done"
+            task.finished_at = datetime.now()
+            db.commit()
+        logger.info("孤儿任务 #%s 超分恢复完成: %s", task_id, final_path)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("孤儿任务 #%s 超分恢复失败", task_id)
+        await asyncio.to_thread(_requeue_or_fail, task_id, "upscaling", str(exc)[:500])
     finally:
         pool.release(node)
 
@@ -312,7 +455,7 @@ def _claim_upscale() -> Optional[int]:
                 return -task_id  # 负数表示云端超分
             task.status = "failed"
             task.error = "超分池不可用（未配置超分节点）"
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now()
             if task.cost > 0:
                 add_credits(db, db.get(User, task.user_id), task.cost, "refund",
                             note="超分不可用退还", task_id=task.id)
@@ -352,7 +495,7 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
             task = db.get(Task, task_id)
             task.video_path = str(final_path)
             task.status = "done"
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now()
             db.commit()
         logger.info("任务 #%s 超分完成: %s", task_id, final_path)
     except asyncio.CancelledError:
@@ -391,7 +534,7 @@ async def _run_cloud_upscale(task_id: int) -> None:
             task.video_path = str(final_path)
             task.status = "done"
             task.worker_url = "cloud"
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now()
             db.commit()
         logger.info("任务 #%s 云端 2K 完成: %s", task_id, final_path)
     except Exception as exc:
@@ -435,7 +578,7 @@ async def _run_cloud_full(task_id: int) -> None:
             task.video_path = str(final_path)
             task.status = "done"
             task.worker_url = "cloud"
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now()
             db.commit()
         logger.info("任务 #%s 云端降级完成: %s", task_id, final_path)
     except Exception as exc:
@@ -458,7 +601,7 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             return True
         task.status = "failed"
         task.error = error or "执行失败"
-        task.finished_at = datetime.utcnow()
+        task.finished_at = datetime.now()
         if task.cost > 0:  # 失败退还积分
             user = db.get(User, task.user_id)
             add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
@@ -473,7 +616,7 @@ def _mark_failed(task_id: int, error: str) -> None:
             return
         task.status = "failed"
         task.error = error
-        task.finished_at = datetime.utcnow()
+        task.finished_at = datetime.now()
         if task.cost > 0:  # 失败退还积分
             user = db.get(User, task.user_id)
             add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
@@ -511,7 +654,8 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
     image_names = [await client.upload_image(p) for p in image_paths]
 
     workflow = comfyui.load_workflow(mode)
-    comfyui.inject(workflow, mode, final_prompt, ratio, duration, image_names)
+    comfyui.inject(workflow, mode, final_prompt, ratio, duration, image_names,
+                   unet_name=node.unet_for(mode))
 
     prompt_id = await client.submit(workflow)
     with SessionLocal() as db:
@@ -545,7 +689,7 @@ async def _upscale(task_id: int, node: WorkerNode) -> Path:
         task = db.get(Task, task_id)
         tier, ratio = task.resolution, task.aspect_ratio
 
-    # 按节点引擎选模板：engine:seedvr2 → 7B FP16 原生节点；默认 3B INT8 KSampler 管线
+    # 按节点引擎选模板：engine:seedvr2 → 原生节点；默认 KSampler 管线（模板默认 3B FP16 权重）
     template = "upscale_7b" if node.engine == "seedvr2" else "upscale"
     workflow = comfyui.load_workflow(template)
     comfyui.inject_upscale(workflow, video_name, tier, ratio, unet_name=node.unet)

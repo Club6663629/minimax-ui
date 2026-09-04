@@ -2,14 +2,14 @@
   "9001": {
     "class_type": "SeedVR2LoadDiTModel",
     "inputs": {
-      "dit_name": "seedvr2_ema_7b_fp16.safetensors",
+      "dit_name": "seedvr2_3b_fp16.safetensors",
       "load_device": "cuda:0",
       "block_swap": 0,
       "enable_compile": false,
       "sage_block": "none",
       "offload": false,
       "attn": "sdpa",
-      "model": "seedvr2_ema_7b_fp16.safetensors"
+      "model": "seedvr2_3b_fp16.safetensors"
     },
     "_meta": {
       "title": "SeedVR2LoadDiTModel"
@@ -51,7 +51,7 @@
   "9003": {
     "class_type": "SeedVR2LoadVAEModel",
     "inputs": {
-      "vae_name": "ema_vae_fp16.safetensors",
+      "vae_name": "seedvr2_ema_vae_fp16.safetensors",
       "load_device": "cuda:0",
       "enable_tiling": false,
       "tile_height": 1024,
@@ -98,7 +98,7 @@
   "18": {
     "class_type": "LoadVideo",
     "inputs": {
-      "video": "input_3d.mp4"
+      "file": "input_3d.mp4"
     },
     "_meta": {
       "title": "LoadVideo"

@@ -17,7 +17,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128))
     role: Mapped[str] = mapped_column(String(10), default="user")  # user | admin
     credits: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class Upload(Base):
@@ -30,7 +30,7 @@ class Upload(Base):
     slot: Mapped[str] = mapped_column(String(16))  # first | last | reference
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class Task(Base):
@@ -65,7 +65,7 @@ class Task(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     worker_url: Mapped[str] = mapped_column(String(128), default="")
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
@@ -82,7 +82,7 @@ class CreditLog(Base):
     type: Mapped[str] = mapped_column(String(16))
     note: Mapped[str] = mapped_column(String(255), default="")
     task_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tasks.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
 class RedeemCode(Base):
@@ -96,4 +96,4 @@ class RedeemCode(Base):
     status: Mapped[str] = mapped_column(String(10), default="unused")  # unused | used
     used_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
