@@ -2,8 +2,8 @@
   "9001": {
     "class_type": "VAEEncodeTiled",
     "inputs": {
-      "tile_size": 512,
-      "overlap": 128,
+      "tile_size": 896,
+      "overlap": 64,
       "pixels": [
         "9007",
         0
@@ -12,8 +12,8 @@
         "9002",
         0
       ],
-      "temporal_size": 64,
-      "temporal_overlap": 8
+      "temporal_size": 8,
+      "temporal_overlap": 4
     },
     "_meta": {
       "title": "VAEEncodeTiled"
@@ -31,7 +31,7 @@
   "9003": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "seedvr2_3b_fp16.safetensors",
+      "unet_name": "seedvr2_3b_int8_convrot.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {
@@ -72,8 +72,8 @@
   "9005": {
     "class_type": "VAEDecodeTiled",
     "inputs": {
-      "tile_size": 512,
-      "overlap": 128,
+      "tile_size": 896,
+      "overlap": 64,
       "vae": [
         "9002",
         0
@@ -82,8 +82,8 @@
         "9017",
         0
       ],
-      "temporal_size": 64,
-      "temporal_overlap": 8
+      "temporal_size": 8,
+      "temporal_overlap": 4
     },
     "_meta": {
       "title": "VAEDecodeTiled"
@@ -226,9 +226,7 @@
         0
       ],
       "temporal_overlap": 3,
-      "chunking_mode": {
-        "chunking_mode": "auto"
-      }
+      "chunking_mode": "auto"
     },
     "_meta": {
       "title": "SeedVR2TemporalChunk"
@@ -293,7 +291,7 @@
   "9018": {
     "class_type": "PrimitiveBoolean",
     "inputs": {
-      "value": false
+      "value": true
     },
     "_meta": {
       "title": "Boolean (Split Latent)"

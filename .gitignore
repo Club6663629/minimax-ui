@@ -13,3 +13,4 @@ web/dist/
 .DS_Store
 *.log
 workflow_templates/*
+minimax-ui-local-changes.patch

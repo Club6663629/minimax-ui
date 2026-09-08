@@ -43,8 +43,8 @@ MEGAPIXELS_768P = 0.98
 
 # ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
 UPSCALE_TIERS = {
-    "1k": {"steps": 20, "short_side": 1080},   # 1920×1080 等比，~1.4×
-    "2k": {"steps": 30, "short_side": 1440},   # 2560×1440 等比，~1.9×
+    "1k": {"steps": 1, "short_side": 1080},   # 1920×1080 等比，~1.4×
+    "2k": {"steps": 1, "short_side": 1440},   # 2560×1440 等比，~1.9×
 }
 # 768p 原生画布（0.98 百万像素）的各画幅尺寸，用于换算放大倍数
 SOURCE_SIZES = {"16:9": (1344, 768), "9:16": (768, 1344), "1:1": (976, 976)}
@@ -106,6 +106,10 @@ def inject(
             # fp8 权重必须配 fp8_e4m3fn，否则 default 按 fp16 加载报错
             if "fp8" in unet_name:
                 inputs["weight_dtype"] = "fp8_e4m3fn"
+        elif class_type == "PrimitiveBoolean" and unet_name and "fp8" in unet_name:
+            # fp8 模型 + bf16 Lightning LoRA 不兼容（q_scale float8_e4m3fn 无法过 rms_rope 算子）
+            # 51 等 fp8 节点禁用 LoRA，保持 20 步；int8 节点（A100）继续用 LoRA 加速
+            inputs["value"] = False
         elif class_type == "PrimitiveFloat":  # 工作流中的时长（秒）参数
             inputs["value"] = float(duration)
         elif class_type == "PrimitiveStringMultiline":  # r2v 的提示词源节点
@@ -210,10 +214,10 @@ def inject_upscale(
         elif class_type == "SeedVR2TemporalChunk":
             # 新版 ComfyUI 0.34：chunking_mode 为 DynamicCombo（嵌套 dict），
             # temporal_overlap 为顶层 int 输入；旧版 frame_batch_size/mode 已废弃
+            # 2026-09-07：改为保留模板值（temporal_overlap/chunking_mode 由模板决定，
+            # 支持 manual + frames_per_chunk），不再强制覆盖
             inputs.pop("frame_batch_size", None)
             inputs.pop("mode", None)
-            inputs["temporal_overlap"] = UPSCALE_TEMPORAL_OVERLAP
-            inputs["chunking_mode"] = {"chunking_mode": "auto"}
         elif class_type == "UNETLoader" and unet_name:
             inputs["unet_name"] = unet_name
             # fp8 权重必须配 fp8_e4m3fn，否则 default 按 fp16 加载报错
@@ -324,6 +328,10 @@ class ComfyUIClient:
                     images = outputs.get("images")
                     if isinstance(images, list):
                         for f in images:
+                            # 跳过 LoadVideo 加载的输入视频（type=input），
+                            # 否则会误把 768p 源片当成超分产物返回
+                            if isinstance(f, dict) and f.get("type") == "input":
+                                continue
                             if isinstance(f, dict) and f.get("filename", "").lower().endswith(
                                 (".mp4", ".webm", ".mov", ".mkv", ".avi")
                             ):

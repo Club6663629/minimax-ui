@@ -225,7 +225,7 @@ def _claim_generate() -> Optional[int]:
 async def _dispatch_generate(task_id: int) -> None:
     with SessionLocal() as db:
         task = db.get(Task, task_id)
-        heavy = task.duration > 10
+        heavy = task.duration >= 10
     node = pool.acquire_generate(heavy, task_id)
     if node is None:
         await asyncio.to_thread(_uncharge, task_id)  # 无空闲槽位：退还积分回队
@@ -690,7 +690,8 @@ async def _upscale(task_id: int, node: WorkerNode) -> Path:
         tier, ratio = task.resolution, task.aspect_ratio
 
     # 按节点引擎选模板：engine:seedvr2 → 原生节点；默认 KSampler 管线（模板默认 3B FP16 权重）
-    template = "upscale_7b" if node.engine == "seedvr2" else "upscale"
+    _engine_tpl = {"seedvr2": "upscale_7b", "seedvr2_3090": "upscale_3090"}
+    template = _engine_tpl.get(node.engine, "upscale")
     workflow = comfyui.load_workflow(template)
     comfyui.inject_upscale(workflow, video_name, tier, ratio, unet_name=node.unet)
 

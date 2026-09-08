@@ -366,7 +366,7 @@
   "146": {
     "class_type": "PrimitiveBoolean",
     "inputs": {
-      "value": false
+      "value": true
     },
     "_meta": {
       "title": "Boolean (Enable Lightning LoRA)"
