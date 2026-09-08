@@ -91,6 +91,11 @@ export const api = {
   listVideos: () => request<Task[]>("/api/videos"),
   retryVideo: (id: number) =>
     request<Task>(`/api/videos/${id}/retry`, { method: "POST" }),
+  upgradeVideo: (id: number, resolution: "1k" | "2k") =>
+    request<Task>(`/api/videos/${id}/upgrade`, {
+      method: "POST",
+      body: JSON.stringify({ resolution }),
+    }),
   deleteVideo: (id: number) => request<void>(`/api/videos/${id}`, { method: "DELETE" }),
 
   // 上传

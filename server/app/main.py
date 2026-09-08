@@ -40,6 +40,14 @@ def _migrate() -> None:
     # 旧版 upscaling_2k 状态并入 upscaling
     with engine.begin() as conn:
         conn.execute(text("UPDATE tasks SET status='upscaling' WHERE status='upscaling_2k'"))
+    # v2: 高清升级（post-hoc upscale）
+    with engine.begin() as conn:
+        if "parent_task_id" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER"))
+            logger.info("已为 tasks 表补充 parent_task_id 列")
+        if "upscale_target" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN upscale_target VARCHAR(8)"))
+            logger.info("已为 tasks 表补充 upscale_target 列")
 
 
 def _bootstrap() -> None:

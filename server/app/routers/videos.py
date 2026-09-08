@@ -1,15 +1,15 @@
-"""视频任务路由：提交 / 列表 / 详情 / 重试 / 删除 / 价格。"""
+"""视频任务路由：提交 / 列表 / 详情 / 重试 / 升级 / 删除 / 价格。"""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
-from ..config import settings
+from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import get_db
 from ..models import Task, User
-from ..schemas import PackageOut, PricingOut, TaskOut, VideoCreateIn
-from ..services.billing import PACKAGES, compute_cost
+from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
+from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
 from .serialize import serialize_task
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
@@ -20,7 +20,9 @@ def pricing():
     return PricingOut(
         signup_bonus=settings.signup_bonus,
         cost_768p_5s=settings.cost_768p_5s,
+        cost_768p_8s=settings.cost_768p_8s,
         cost_768p_10s=settings.cost_768p_10s,
+        cost_768p_15s=settings.cost_768p_15s,
         cost_1k_extra=settings.cost_1k_extra,
         cost_2k_extra=settings.cost_2k_extra,
         cloud_enabled=settings.cloud_enabled,
@@ -109,6 +111,66 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
     db.commit()
     db.refresh(task)
     return serialize_task(task)
+
+
+@router.post("/{task_id}/upgrade", response_model=TaskOut)
+def upgrade_video(
+    task_id: int,
+    body: UpgradeIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """对已完成 768p 视频发起高清升级（1K/2K）。"""
+    task = _get_owned_task(task_id, user, db)
+    if task.status != "done":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅已完成任务可升级")
+    if task.resolution != "768p":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅 768p 视频支持高清升级")
+    if not settings.upscale_enabled and not (body.resolution == "2k" and settings.cloud_enabled):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
+    # 检查是否已有同档位的升级任务（避免重复提交）
+    existing = (
+        db.query(Task)
+        .filter(
+            Task.parent_task_id == task_id,
+            Task.upscale_target == body.resolution,
+            Task.status.in_(("queued", "upscaling", "done")),
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"该视频已有 {body.resolution} 升级任务（#{existing.id}）")
+    # 检查 768p 源文件存在
+    src_exists = any(
+        (STAGING_DIR / f"{task_id}_768p.mp4").exists(),
+        (OUTPUT_DIR / f"{task_id}.mp4").exists(),
+    )
+    if not src_exists:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "768p 源文件不存在，无法升级")
+    # 计费
+    cost = compute_upgrade_cost(body.resolution)
+    if user.credits < cost:
+        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, f"积分不足，升级需 {cost} 积分，请先充值")
+    # 创建升级任务
+    upgrade_task = Task(
+        user_id=user.id,
+        mode=task.mode,
+        prompt=task.prompt,
+        enhanced_prompt=task.enhanced_prompt or "",
+        aspect_ratio=task.aspect_ratio,
+        duration=task.duration,
+        resolution=body.resolution,
+        enhance=False,
+        parent_task_id=task_id,
+        upscale_target=body.resolution,
+        status="upscaling",
+        cost=cost,
+    )
+    user.credits -= cost
+    db.add(upgrade_task)
+    db.commit()
+    db.refresh(upgrade_task)
+    return serialize_task(upgrade_task)
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

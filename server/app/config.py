@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     # ---- 计费（积分），均可通过环境变量覆盖 ----
     signup_bonus: int = 50        # 注册赠送
     cost_768p_5s: int = 10        # 768p · 5 秒
+    cost_768p_8s: int = 15        # 768p · 8 秒
     cost_768p_10s: int = 20       # 768p · 10 秒
+    cost_768p_15s: int = 30       # 768p · 15 秒
     cost_1k_extra: int = 8        # 1K 升级附加（本地超分）
     cost_2k_extra: int = 15       # 2K 升级附加
 

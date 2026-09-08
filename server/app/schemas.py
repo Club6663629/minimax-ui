@@ -45,7 +45,7 @@ class VideoCreateIn(BaseModel):
     mode: Literal["t2v", "flf2v", "r2v"]
     prompt: str = Field(min_length=1, max_length=2000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
-    duration: Literal[5, 10] = 5
+    duration: Literal[5, 8, 10, 15] = 5
     resolution: Literal["768p", "1k", "2k"] = "768p"
     enhance: bool = True
     first_image_id: Optional[int] = None
@@ -66,9 +66,12 @@ class TaskOut(BaseModel):
     error: str
     cost: int
     video_url: Optional[str]
+    upscale_urls: dict[str, str] = {}  # {"1k": url, "2k": url} 按分辨率下载
     first_image_url: Optional[str]
     last_image_url: Optional[str]
     ref_image_urls: list[str]
+    parent_task_id: Optional[int] = None
+    upscale_target: Optional[str] = None
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
@@ -90,6 +93,10 @@ class RedeemIn(BaseModel):
     code: str
 
 
+class UpgradeIn(BaseModel):
+    resolution: Literal["1k", "2k"]
+
+
 class PackageOut(BaseModel):
     name: str
     credits: int
@@ -101,7 +108,9 @@ class PackageOut(BaseModel):
 class PricingOut(BaseModel):
     signup_bonus: int
     cost_768p_5s: int
+    cost_768p_8s: int
     cost_768p_10s: int
+    cost_768p_15s: int
     cost_1k_extra: int
     cost_2k_extra: int
     cloud_enabled: bool

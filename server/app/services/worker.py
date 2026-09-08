@@ -225,7 +225,7 @@ def _claim_generate() -> Optional[int]:
 async def _dispatch_generate(task_id: int) -> None:
     with SessionLocal() as db:
         task = db.get(Task, task_id)
-        heavy = task.duration >= 10
+        heavy = task.duration >= 8
     node = pool.acquire_generate(heavy, task_id)
     if node is None:
         await asyncio.to_thread(_uncharge, task_id)  # 无空闲槽位：退还积分回队
@@ -267,6 +267,10 @@ async def _run_generate(task_id: int, node: WorkerNode) -> None:
                 logger.info("任务 #%s 768p 完成，进入超分队列(%s)", task_id, task.resolution)
             else:
                 final_path = OUTPUT_DIR / f"{task_id}.mp4"
+                if task.resolution == "768p":
+                    # 保留 768p 源片用于后续高清升级（post-hoc upscale）
+                    staging_copy = STAGING_DIR / f"{task_id}_768p.mp4"
+                    shutil.copy2(str(staging_768p), str(staging_copy))
                 shutil.move(str(staging_768p), final_path)
                 task.video_path = str(final_path)
                 task.status = "done"
@@ -359,6 +363,9 @@ async def _resume_generate(task_id: int, node: WorkerNode) -> None:
                 logger.info("孤儿任务 #%s 768p 恢复完成，进入超分队列(%s)", task_id, task.resolution)
             else:
                 final_path = OUTPUT_DIR / f"{task_id}.mp4"
+                if task.resolution == "768p":
+                    staging_copy = STAGING_DIR / f"{task_id}_768p.mp4"
+                    shutil.copy2(str(staging_768p), str(staging_copy))
                 shutil.move(str(staging_768p), final_path)
                 task.video_path = str(final_path)
                 task.status = "done"
@@ -682,6 +689,15 @@ async def _upscale(task_id: int, node: WorkerNode) -> Path:
         return out_path
 
     src = STAGING_DIR / f"{task_id}_768p.mp4"
+    if not src.exists():
+        # 升级任务：回溯原始 768p 源片（来自父任务的 output 或 staging）
+        with SessionLocal() as db:
+            parent_id = db.get(Task, task_id).parent_task_id
+        if parent_id:
+            for candidate in (OUTPUT_DIR / f"{parent_id}.mp4", STAGING_DIR / f"{parent_id}_768p.mp4"):
+                if candidate.exists():
+                    src = candidate
+                    break
     client = comfyui.ComfyUIClient(node.url)
     video_name = await client.upload_file(src)
 

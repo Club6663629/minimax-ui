@@ -9,12 +9,27 @@ from ..models import CreditLog, User
 
 def compute_cost(duration: int, resolution: str) -> int:
     """单次生成消耗积分。1K/2K 升级走本地超分池（2K 另有云端降级通道）。"""
-    cost = settings.cost_768p_10s if duration >= 10 else settings.cost_768p_5s
+    _BASE = {
+        5: settings.cost_768p_5s,
+        8: settings.cost_768p_8s,
+        10: settings.cost_768p_10s,
+        15: settings.cost_768p_15s,
+    }
+    cost = _BASE.get(duration, settings.cost_768p_10s)
     if resolution == "1k":
         cost += settings.cost_1k_extra
     elif resolution == "2k":
         cost += settings.cost_2k_extra
     return cost
+
+
+def compute_upgrade_cost(resolution: str) -> int:
+    """高清升级附加费用（仅超分成本，无基础生成费）。"""
+    if resolution == "1k":
+        return settings.cost_1k_extra
+    if resolution == "2k":
+        return settings.cost_2k_extra
+    return 0
 
 
 def add_credits(

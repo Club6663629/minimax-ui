@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..auth import decode_token
+from ..config import OUTPUT_DIR
 from ..database import get_db
 from ..models import Task, Upload, User
 
@@ -32,6 +33,7 @@ def _user_from_query_token(token: Optional[str], db: Session) -> User:
 @router.get("/video/{task_id}")
 def download_video(
     task_id: int,
+    resolution: Optional[str] = Query(default=None),
     token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
@@ -41,11 +43,16 @@ def download_video(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "视频不存在")
     if task.status != "done" or not task.video_path:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "视频尚未生成完成")
-    path = Path(task.video_path)
+    # 按分辨率定位文件
+    if resolution in ("1k", "2k"):
+        path = OUTPUT_DIR / f"{task_id}_{resolution}.mp4"
+    else:
+        path = Path(task.video_path)
     if not path.exists():
         raise HTTPException(status.HTTP_410_GONE, "视频文件已失效")
+    suffix = f"_{resolution}" if resolution in ("1k", "2k") else ""
     return FileResponse(
-        path, media_type="video/mp4", filename=f"h3_video_{task.id}.mp4",
+        path, media_type="video/mp4", filename=f"h3_video_{task.id}{suffix}.mp4",
     )
 
 

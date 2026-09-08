@@ -43,8 +43,16 @@ MEGAPIXELS_768P = 0.98
 
 # ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
 UPSCALE_TIERS = {
-    "1k": {"steps": 1, "short_side": 1080},   # 1920×1080 等比，~1.4×
-    "2k": {"steps": 1, "short_side": 1440},   # 2560×1440 等比，~1.9×
+    "1k": {
+        "steps": 1,
+        "short_side": 1080,   # 1920×1080 等比，~1.4×
+        "target_size": {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)},
+    },
+    "2k": {
+        "steps": 1,
+        "short_side": 1440,   # 2560×1440 等比，~1.9×
+        "target_size": {"16:9": (2560, 1440), "9:16": (1440, 2560), "1:1": (1440, 1440)},
+    },
 }
 # 768p 原生画布（0.98 百万像素）的各画幅尺寸，用于换算放大倍数
 SOURCE_SIZES = {"16:9": (1344, 768), "9:16": (768, 1344), "1:1": (976, 976)}
@@ -181,6 +189,9 @@ def inject_upscale(
     spec = UPSCALE_TIERS[tier]
     src_w, src_h = SOURCE_SIZES.get(aspect_ratio, SOURCE_SIZES["16:9"])
     multiplier = round(spec["short_side"] / min(src_w, src_h), 2)
+    target_w, target_h = spec["target_size"].get(
+        aspect_ratio, spec["target_size"]["16:9"]
+    )
 
     _drop_image_from_batch(workflow)  # 两种模板都可能有截帧限制（7B 模板自带）
 
@@ -235,7 +246,49 @@ def inject_upscale(
         elif class_type == "SeedVR2LoadDiTModel" and unet_name:
             inputs["dit_name"] = unet_name
 
+    # 3B INT8 KSampler 管线：multiplier 放大后追加 ImageScale 精确对齐目标尺寸
+    # （768p 源片 1344x768 非严格 16:9，multiplier 产出 1890x1080 ≠ 1920x1080）
+    _insert_exact_scale(workflow, target_w, target_h)
+
     return workflow
+
+
+def _insert_exact_scale(workflow: dict, target_w: int, target_h: int) -> None:
+    """在 CreateVideo 的 images 输入前插入 ImageScale 节点，确保输出严格匹配目标尺寸。
+
+    查找 CreateVideo 节点，截断其 images 输入源，插入 ImageScale（lanczos + stretch）
+    作为新的中间节点。仅当源节点不是 ImageScale 自身时插入（防重复注入）。
+    """
+    create_video = next(
+        (n for n in workflow.values()
+         if isinstance(n, dict) and n.get("class_type") == "CreateVideo"),
+        None,
+    )
+    if create_video is None:
+        return
+    images_input = create_video["inputs"].get("images")
+    if not (isinstance(images_input, list) and len(images_input) == 2):
+        return
+    src_nid, src_output = str(images_input[0]), images_input[1]
+    # 已注入过则跳过
+    src_node = workflow.get(src_nid)
+    if src_node and isinstance(src_node, dict) and src_node.get("class_type") == "ImageScale":
+        return
+    # 分配新节点 ID
+    nums = [int(k) for k in workflow if str(k).isdigit()]
+    new_nid = str((max(nums) if nums else 9000) + 1)
+    workflow[new_nid] = {
+        "class_type": "ImageScale",
+        "inputs": {
+            "upscale_method": "lanczos",
+            "width": target_w,
+            "height": target_h,
+            "crop": "disabled",
+            "image": [src_nid, src_output],
+        },
+        "_meta": {"title": "ExactScale"},
+    }
+    create_video["inputs"]["images"] = [new_nid, 0]
 
 
 def _drop_image_from_batch(workflow: dict) -> None:

@@ -5,6 +5,7 @@
  */
 import {
   AlertCircle,
+  ArrowUpCircle,
   Box,
   Check,
   ChevronDown,
@@ -37,7 +38,7 @@ import {
 } from "../types";
 
 const ASPECTS = ["16:9", "9:16", "1:1"] as const;
-const DURATIONS = [5, 10] as const;
+const DURATIONS = [5, 8, 10, 15] as const;
 const RESOLUTIONS = ["768p", "1k", "2k"] as const;
 type Resolution = (typeof RESOLUTIONS)[number];
 const MAX_REFS = 9; // 全能参考官方上限 9 张参考图
@@ -292,8 +293,9 @@ function SettingsMenu({
 }
 
 /** 任务卡片 */
-function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
+function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onChanged: () => void; pricing: Pricing | null; onRefreshUser?: () => void }) {
   const [retrying, setRetrying] = useState(false);
+  const [upgrading, setUpgrading] = useState<"1k" | "2k" | null>(null);
 
   async function retry() {
     setRetrying(true);
@@ -304,6 +306,19 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
       alert(err instanceof Error ? err.message : "重试失败");
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function upgrade(res: "1k" | "2k") {
+    setUpgrading(res);
+    try {
+      await api.upgradeVideo(task.id, res);
+      await onChanged();
+      onRefreshUser?.();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "升级失败");
+    } finally {
+      setUpgrading(null);
     }
   }
 
@@ -323,6 +338,9 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
     ...task.ref_image_urls.map((url, i) => ({ url, label: `参考 ${i + 1}` })),
   ];
 
+  const isUpgradeTask = task.parent_task_id != null;
+  const upgradeLabel = isUpgradeTask && task.upscale_target ? `升级 → ${RES_LABEL[task.upscale_target] ?? task.upscale_target}` : null;
+
   return (
     <div className="panel p-4">
       <div className="mb-2 flex items-center gap-2">
@@ -331,6 +349,7 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
         <span className="chip">{task.aspect_ratio}</span>
         <span className="chip">{task.duration}s</span>
         <span className="chip">{RES_LABEL[task.resolution] ?? task.resolution}</span>
+        {upgradeLabel && <span className="chip !border-violet-400/30 !text-violet-300">{upgradeLabel}</span>}
         <span className="ml-auto text-xs text-zinc-600">
           {new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}
         </span>
@@ -361,11 +380,54 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
             <a href={fileUrl(task.video_url)} download={`h3_video_${task.id}.mp4`} className="btn-primary !py-1.5 text-xs">
               <Download size={13} /> 下载视频
             </a>
+            {/* 多分辨率下载选项 */}
+            {Object.keys(task.upscale_urls).length > 0 && (
+              <div className="flex items-center gap-1">
+                {Object.entries(task.upscale_urls).map(([res, url]) => (
+                  <a
+                    key={res}
+                    href={fileUrl(url)}
+                    download={`h3_video_${task.id}_${res}.mp4`}
+                    className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] text-zinc-400 transition hover:border-white/25 hover:text-zinc-200"
+                  >
+                    <Download size={10} /> {RES_LABEL[res]}
+                  </a>
+                ))}
+              </div>
+            )}
             <span className="text-xs text-zinc-500">消耗 {task.cost} 积分</span>
             <button onClick={remove} className="ml-auto rounded-lg p-1.5 text-zinc-500 hover:bg-white/5 hover:text-rose-400" title="删除">
               <Trash2 size={14} />
             </button>
           </div>
+          {/* 768p 已完成：显示高清升级按钮 */}
+          {task.resolution === "768p" && !isUpgradeTask && (
+            <div className="flex items-center gap-2 border-t border-white/[0.06] pt-2">
+              <ArrowUpCircle size={13} className="text-violet-400" />
+              <span className="text-xs text-zinc-500">高清升级：</span>
+              {(["1k", "2k"] as const).map((res) => {
+                const extraCost = res === "1k" ? (pricing?.cost_1k_extra ?? 8) : (pricing?.cost_2k_extra ?? 15);
+                const hasUpgraded = Object.keys(task.upscale_urls).includes(res);
+                return (
+                  <button
+                    key={res}
+                    onClick={() => upgrade(res)}
+                    disabled={upgrading !== null || hasUpgraded}
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs transition ${
+                      hasUpgraded
+                        ? "cursor-not-allowed border border-white/5 bg-white/[0.02] text-zinc-600"
+                        : "border border-violet-400/20 bg-violet-500/[0.07] text-violet-300 hover:border-violet-400/40 hover:bg-violet-500/[0.12]"
+                    } disabled:cursor-not-allowed`}
+                  >
+                    {upgrading === res ? <Loader2 size={11} className="animate-spin" /> : null}
+                    {RES_LABEL[res]}
+                    <span className="text-[10px] opacity-60">{extraCost}积分</span>
+                    {hasUpgraded && <Check size={10} className="text-emerald-400" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -384,7 +446,11 @@ function TaskCard({ task, onChanged }: { task: Task; onChanged: () => void }) {
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
             <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-indigo-500 to-violet-500" />
           </div>
-          多卡并行处理中，请耐心等待
+          {isUpgradeTask
+            ? task.status === "upscaling"
+              ? "高清升级排队中，请耐心等待…"
+              : "处理中，请耐心等待"
+            : "多卡并行处理中，请耐心等待"}
         </div>
       )}
     </div>
@@ -433,7 +499,13 @@ export default function CreatePage() {
 
   const cost = useMemo(() => {
     if (!pricing) return 0;
-    let c = duration >= 10 ? pricing.cost_768p_10s : pricing.cost_768p_5s;
+    const _BASE: Record<number, number> = {
+      5: pricing.cost_768p_5s,
+      8: pricing.cost_768p_8s,
+      10: pricing.cost_768p_10s,
+      15: pricing.cost_768p_15s,
+    };
+    let c = _BASE[duration] ?? pricing.cost_768p_10s;
     if (resolution === "1k") c += pricing.cost_1k_extra;
     if (resolution === "2k") c += pricing.cost_2k_extra;
     return c;
@@ -600,7 +672,7 @@ export default function CreatePage() {
         ) : (
           <div className="grid gap-4 xl:grid-cols-2">
             {tasks.map((t) => (
-              <TaskCard key={t.id} task={t} onChanged={loadTasks} />
+              <TaskCard key={t.id} task={t} onChanged={loadTasks} pricing={pricing} onRefreshUser={refreshUser} />
             ))}
           </div>
         )}

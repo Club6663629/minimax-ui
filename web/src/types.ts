@@ -43,9 +43,12 @@ export interface Task {
   error: string;
   cost: number;
   video_url: string | null;
+  upscale_urls: Record<string, string>;
   first_image_url: string | null;
   last_image_url: string | null;
   ref_image_urls: string[];
+  parent_task_id: number | null;
+  upscale_target: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -72,7 +75,9 @@ export interface Package {
 export interface Pricing {
   signup_bonus: number;
   cost_768p_5s: number;
+  cost_768p_8s: number;
   cost_768p_10s: number;
+  cost_768p_15s: number;
   cost_1k_extra: number;
   cost_2k_extra: number;
   cloud_enabled: boolean;

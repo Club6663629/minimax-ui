@@ -62,6 +62,10 @@ class Task(Base):
     video_path: Mapped[str] = mapped_column(String(512), default="")
     comfy_prompt_id: Mapped[str] = mapped_column(String(64), default="")
     # 集群调度：失败重投计数与当前占用节点（追溯用）
+    # 高清升级：关联原始 768p 任务（post-hoc 超分）
+    parent_task_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tasks.id"))
+    upscale_target: Mapped[Optional[str]] = mapped_column(String(8))  # 1k | 2k | None
+
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     worker_url: Mapped[str] = mapped_column(String(128), default="")
 
