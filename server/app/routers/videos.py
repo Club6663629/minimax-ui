@@ -1,5 +1,6 @@
 """视频任务路由：提交 / 列表 / 详情 / 重试 / 升级 / 删除 / 价格。"""
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -7,12 +8,30 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import get_db
-from ..models import Task, User
+from ..models import Task, Upload, User
 from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
 from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
 from .serialize import serialize_task
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
+
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
+_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+
+
+def _ref_counts(db: Session, ref_ids: list[int]) -> tuple[int, int, int]:
+    """按参考上传文件后缀统计 图片/视频/音频 数量（未知文件按图片计）。"""
+    video = audio = 0
+    for rid in ref_ids:
+        up = db.get(Upload, rid)
+        if up is None:
+            continue
+        suffix = Path(up.path).suffix.lower()
+        if suffix in _VIDEO_SUFFIXES:
+            video += 1
+        elif suffix in _AUDIO_SUFFIXES:
+            audio += 1
+    return len(ref_ids) - video - audio, video, audio
 
 
 @router.get("/pricing", response_model=PricingOut)
@@ -42,9 +61,18 @@ def create_video(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "首尾帧模式需要至少上传首帧或尾帧图片")
     if body.mode == "r2v" and not body.ref_image_ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "全能参考模式需要上传参考图")
-    # 1K/2K 升级依赖本地超分池（关闭时 2K 需云端降级通道）
+    # 参考区总数 ≤9，其中视频 ≤3、音频 ≤3（图片占余量）
+    if body.mode == "r2v":
+        if len(body.ref_image_ids) > 9:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "参考资料总数最多 9 个")
+        _, v_cnt, a_cnt = _ref_counts(db, body.ref_image_ids)
+        if v_cnt > 3:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "参考视频最多 3 个")
+        if a_cnt > 3:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "参考音频最多 3 个")
+    # 1K/2K 依赖本地超分池（云端仅保留 Context-IR 增强，不再云端回落）
     if body.resolution in ("1k", "2k"):
-        if not settings.upscale_enabled and not (body.resolution == "2k" and settings.cloud_enabled):
+        if not settings.upscale_enabled:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
 
     cost = compute_cost(body.duration, body.resolution)
@@ -68,7 +96,7 @@ def create_video(
     db.add(task)
     db.commit()
     db.refresh(task)
-    return serialize_task(task)
+    return serialize_task(task, db=db)
 
 
 @router.get("", response_model=list[TaskOut])
@@ -84,13 +112,13 @@ def list_videos(
         .limit(limit)
         .all()
     )
-    return [serialize_task(t) for t in tasks]
+    return [serialize_task(t, db=db) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskOut)
 def get_video(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     task = _get_owned_task(task_id, user, db)
-    return serialize_task(task)
+    return serialize_task(task, db=db)
 
 
 @router.post("/{task_id}/retry", response_model=TaskOut)
@@ -111,7 +139,7 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
     task.finished_at = None
     db.commit()
     db.refresh(task)
-    return serialize_task(task)
+    return serialize_task(task, db=db)
 
 
 @router.post("/{task_id}/upgrade", response_model=TaskOut)
@@ -127,7 +155,7 @@ def upgrade_video(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅已完成任务可升级")
     if task.resolution != "768p":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅 768p 视频支持高清升级")
-    if not settings.upscale_enabled and not (body.resolution == "2k" and settings.cloud_enabled):
+    if not settings.upscale_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
     # 检查是否已有同档位的升级任务（避免重复提交）
     existing = (
@@ -171,7 +199,7 @@ def upgrade_video(
     db.add(upgrade_task)
     db.commit()
     db.refresh(upgrade_task)
-    return serialize_task(upgrade_task)
+    return serialize_task(upgrade_task, db=db)
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -118,7 +118,7 @@ def list_all_tasks(
         u.id: u.email
         for u in db.query(User).filter(User.id.in_([t.user_id for t in tasks])).all()
     } if tasks else {}
-    return [serialize_task(t, user_email=emails.get(t.user_id)) for t in tasks]
+    return [serialize_task(t, user_email=emails.get(t.user_id), db=db) for t in tasks]
 
 
 # ---- Worker 池监控 ----

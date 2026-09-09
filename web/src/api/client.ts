@@ -98,13 +98,15 @@ export const api = {
     }),
   deleteVideo: (id: number) => request<void>(`/api/videos/${id}`, { method: "DELETE" }),
 
-  // 上传
-  uploadImage: (file: File, slot: string) => {
+  // 上传（参考区支持图片/视频/音频混传，统一走 uploadMedia）
+  uploadMedia: (file: File, slot: string) => {
     const form = new FormData();
     form.append("file", file);
     form.append("slot", slot);
     return request<UploadOut>("/api/uploads", { method: "POST", body: form });
   },
+  // 兼容：仅上传图片（首尾帧等）
+  uploadImage: (file: File, slot: string) => api.uploadMedia(file, slot),
 
   // 积分
   creditLogs: () => request<CreditLog[]>("/api/credits/logs"),

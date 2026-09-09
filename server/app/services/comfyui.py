@@ -4,7 +4,7 @@
 （Comfy-Org/workflow_templates，见 _official/convert.py）转换而来，覆盖：
 - t2v    文生视频
 - flf2v  首/尾帧生视频（first_frame / last_frame 可只提供其一）
-- r2v    全能参考生视频（最多 9 张参考图，提示词用 <Picture N> 按序引用）
+- r2v    全能参考生视频（最多 9 张参考，含图片/视频/音频混传，提示词用 <Picture/Video/Audio N> 按类型按序引用）
 - upscale       本地超分（SeedVR2 KSampler 管线模板，默认 3B FP16 权重，1K/2K 分时）
 - upscale_7b    本地超分（SeedVR2 原生节点模板，默认 3B FP16 权重，resolution 直设）
 
@@ -74,14 +74,55 @@ def load_workflow(mode: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _next_node_id(workflow: dict) -> str:
+    """取工作流下一个可用节点 ID 字符串。"""
+    nums = [int(k) for k in workflow if str(k).isdigit()]
+    return str((max(nums) if nums else 9000) + 1)
+
+
 def _add_load_image(workflow: dict, image_name: str) -> list:
     """动态追加一个 LoadImage 节点，返回连线引用 [节点ID, 0]。"""
-    nums = [int(k) for k in workflow if str(k).isdigit()]
-    nid = str((max(nums) if nums else 9000) + 1)
+    nid = _next_node_id(workflow)
     workflow[nid] = {
         "class_type": "LoadImage",
         "inputs": {"image": image_name},
         "_meta": {"title": "LoadImage"},
+    }
+    return [nid, 0]
+
+
+def _add_video_ref(workflow: dict, video_name: str) -> tuple[list, list]:
+    """动态追加 LoadVideo + GetVideoComponents 链条，返回 (images_ref, audio_ref)。
+
+    LoadVideo 输出 slot0=VIDEO；GetVideoComponents 约定 slot0=images / slot1=audio /
+    slot2=fps。视频参考的 IMAGE 走 GetVideoComponents slot0，其自带音轨走 slot1，故
+    接视频参考时同步把 slot1 接到 ref_video_audios（同索引配对）。
+    """
+    load = _next_node_id(workflow)
+    workflow[load] = {
+        "class_type": "LoadVideo",
+        "inputs": {"file": video_name},
+        "_meta": {"title": "LoadVideo"},
+    }
+    gvc = _next_node_id(workflow)
+    workflow[gvc] = {
+        "class_type": "GetVideoComponents",
+        "inputs": {"video": [load, 0]},
+        "_meta": {"title": "GetVideoComponents"},
+    }
+    return [gvc, 0], [gvc, 1]
+
+
+def _add_load_audio(workflow: dict, audio_name: str) -> list:
+    """动态追加一个 LoadAudio 节点，返回 AUDIO 输出引用 [节点ID, 0]。
+
+    注：LoadAudio 参数名（audio vs file）与输出 slot 需按部署的 ComfyUI 版本核对。
+    """
+    nid = _next_node_id(workflow)
+    workflow[nid] = {
+        "class_type": "LoadAudio",
+        "inputs": {"audio": audio_name},
+        "_meta": {"title": "LoadAudio"},
     }
     return [nid, 0]
 
@@ -93,10 +134,18 @@ def inject(
     aspect_ratio: str,
     duration: int,
     image_names: Optional[List[str]] = None,
+    video_names: Optional[List[str]] = None,
+    audio_names: Optional[List[str]] = None,
     unet_name: Optional[str] = None,
 ) -> dict:
-    """把提示词 / 画幅 / 时长 / 输入图注入官方工作流模板（就地修改并返回）。"""
+    """把提示词 / 画幅 / 时长 / 输入图/视频/音频注入官方工作流模板（就地修改并返回）。
+
+    r2v 模式下 image_names / video_names / audio_names 分别对应参考图(≤9)、
+    参考视频(≤3，每条自动接其自带音轨)与独立参考音频(≤3)。
+    """
     image_names = list(image_names or [])
+    video_names = list(video_names or [])
+    audio_names = list(audio_names or [])
 
     for node in workflow.values():
         if not isinstance(node, dict):
@@ -151,13 +200,26 @@ def inject(
             None,
         )
         if h3 is not None:
-            # 清掉模板默认参考图，按用户上传数量重建 ref_images.ref_image_N
-            for nid in [k for k, n in workflow.items() if n.get("class_type") == "LoadImage"]:
+            # 清掉模板默认参考节点（LoadImage / LoadVideo / GetVideoComponents / LoadAudio），
+            # 按用户上传数量重建 ref_images / ref_videos / ref_video_audios / ref_audios
+            for nid in [
+                k for k, n in workflow.items()
+                if n.get("class_type") in ("LoadImage", "LoadVideo", "GetVideoComponents", "LoadAudio")
+            ]:
                 del workflow[nid]
-            for key in [k for k in h3["inputs"] if k.startswith("ref_images.")]:
+            for key in [k for k in h3["inputs"] if k.startswith(("ref_images.", "ref_videos.", "ref_video_audios.", "ref_audios."))]:
                 del h3["inputs"][key]
+            # 参考图
             for i, name in enumerate(image_names):
                 h3["inputs"][f"ref_images.ref_image_{i}"] = _add_load_image(workflow, name)
+            # 参考视频：每条自动把其自带音轨接到 ref_video_audios（与 ref_videos 同索引配对）
+            for i, name in enumerate(video_names):
+                img_ref, aud_ref = _add_video_ref(workflow, name)
+                h3["inputs"][f"ref_videos.ref_video_{i}"] = img_ref
+                h3["inputs"][f"ref_video_audios.ref_video_audio_{i}"] = aud_ref
+            # 独立参考音频
+            for i, name in enumerate(audio_names):
+                h3["inputs"][f"ref_audios.ref_audio_{i}"] = _add_load_audio(workflow, name)
 
     return workflow
 
@@ -317,8 +379,14 @@ class ComfyUIClient:
         self.base = (base_url or settings.comfyui_url).rstrip("/")
 
     async def upload_file(self, path: Path) -> str:
-        """上传输入文件（图片/视频）到 ComfyUI 的 input 目录，返回其文件名。"""
-        mime = "video/mp4" if path.suffix.lower() in (".mp4", ".mov", ".webm", ".mkv") else "image/png"
+        """上传输入文件（图片/视频/音频）到 ComfyUI 的 input 目录，返回其文件名。"""
+        suffix = path.suffix.lower()
+        if suffix in (".mp4", ".mov", ".webm", ".mkv"):
+            mime = "video/mp4"
+        elif suffix in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"):
+            mime = "audio/mpeg"
+        else:
+            mime = "image/png"
         async with httpx.AsyncClient(timeout=300) as client:
             with open(path, "rb") as f:
                 r = await client.post(

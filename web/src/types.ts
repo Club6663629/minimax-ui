@@ -48,6 +48,8 @@ export interface Task {
   first_image_url: string | null;
   last_image_url: string | null;
   ref_image_urls: string[];
+  ref_video_urls: string[];
+  ref_audio_urls: string[];
   parent_task_id: number | null;
   upscale_target: string | null;
   worker_url: string;

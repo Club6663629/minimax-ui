@@ -14,6 +14,7 @@ import {
   Film,
   Images,
   Loader2,
+  Music,
   Plus,
   RotateCcw,
   SlidersHorizontal,
@@ -47,9 +48,27 @@ const SCENES = [
 type Scene = (typeof SCENES)[number]["value"];
 const RESOLUTIONS = ["768p", "1k", "2k"] as const;
 type Resolution = (typeof RESOLUTIONS)[number];
-const MAX_REFS = 9; // 全能参考官方上限 9 张参考图
+const MAX_REFS = 9; // 全能参考官方上限 9 个（图片/视频/音频混存）
+const MAX_VIDEO_REFS = 3; // 官方上限 3 个参考视频
+const MAX_AUDIO_REFS = 3; // 官方上限 3 个独立参考音频
 
 type RefMode = "r2v" | "flf2v";
+type RefKind = "image" | "video" | "audio";
+
+const IMG_EXT_RE = /\.(jpe?g|png|webp)$/i;
+const VID_EXT_RE = /\.(mp4|mov|webm|mkv)$/i;
+const AUD_EXT_RE = /\.(mp3|wav|m4a|aac|ogg|flac)$/i;
+
+/** 按文件名扩展名判定参考媒体类型（后端按扩展名分流到节点槽位）。 */
+function refKindOf(filename: string): RefKind {
+  if (VID_EXT_RE.test(filename)) return "video";
+  if (AUD_EXT_RE.test(filename)) return "audio";
+  return "image";
+}
+
+function fileKindOf(file: File): RefKind {
+  return refKindOf(file.name);
+}
 
 /** 点击外部自动关闭的弹层 */
 function usePopover() {
@@ -85,19 +104,20 @@ function StatusBadge({ status }: { status: TaskStatus }) {
   );
 }
 
-/** 全能参考：追加参考图瓦片 */
-function RefAddTile({ count, busy, onPick }: { count: number; busy: boolean; onPick: (f: File[]) => void }) {
+/** 全能参考：追加参考瓦片（接受图片/视频/音频） */
+function RefAddTile({ count, counts, busy, onPick }: { count: number; counts: { image: number; video: number; audio: number }; busy: boolean; onPick: (f: File[]) => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   return (
     <button
       type="button"
       onClick={() => inputRef.current?.click()}
+      title={`上限：图片 ${counts.image}/9 · 视频 ${counts.video}/${MAX_VIDEO_REFS} · 音频 ${counts.audio}/${MAX_AUDIO_REFS}`}
       className="flex h-24 w-[76px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-white/15 bg-white/[0.03] text-zinc-500 transition hover:border-indigo-400/50 hover:text-zinc-300"
     >
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,video/x-matroska,audio/*"
         multiple
         className="hidden"
         onClick={(e) => e.stopPropagation()}
@@ -116,12 +136,24 @@ function RefAddTile({ count, busy, onPick }: { count: number; busy: boolean; onP
   );
 }
 
-/** 全能参考：已上传参考图缩略图（角标即提示词中的 <Picture N> 序号） */
-function RefThumb({ index, value, onRemove }: { index: number; value: UploadOut; onRemove: () => void }) {
+/** 全能参考：已上传参考缩略图（角标即提示词中的 <Picture/Video/Audio N> 按类型序号） */
+function RefThumb({ kind, seq, value, onRemove }: { kind: RefKind; seq: number; value: UploadOut; onRemove: () => void }) {
+  const badge = kind === "video" ? `视频 ${seq}` : kind === "audio" ? `音频 ${seq}` : `图 ${seq}`;
   return (
     <div className="group relative h-24 w-[76px] shrink-0 overflow-hidden rounded-xl border border-white/10">
-      <img src={fileUrl(value.url)} alt={`参考 ${index + 1}`} className="h-full w-full object-cover" />
-      <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-zinc-200">{index + 1}</span>
+      {kind === "image" && (
+        <img src={fileUrl(value.url)} alt={`参考 ${seq}`} className="h-full w-full object-cover" />
+      )}
+      {kind === "video" && (
+        <video src={fileUrl(value.url)} muted preload="metadata" className="h-full w-full object-cover" />
+      )}
+      {kind === "audio" && (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-white/[0.03] px-1">
+          <Music size={16} className="text-zinc-400" />
+          <span className="max-w-[64px] truncate text-[10px] text-zinc-400">{value.filename}</span>
+        </div>
+      )}
+      <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-zinc-200">{badge}</span>
       <button
         type="button"
         onClick={onRemove}
@@ -229,7 +261,6 @@ function SettingsMenu({
   aspect,
   onAspect,
   upscaleEnabled,
-  cloudEnabled,
 }: {
   resolution: Resolution;
   onResolution: (r: Resolution) => void;
@@ -238,15 +269,14 @@ function SettingsMenu({
   aspect: (typeof ASPECTS)[number];
   onAspect: (a: (typeof ASPECTS)[number]) => void;
   upscaleEnabled: boolean;
-  cloudEnabled: boolean;
 }) {
   const { open, setOpen, ref } = usePopover();
   const optCls = (active: boolean, disabled = false) =>
     `rounded-md px-2.5 py-1 text-xs transition ${
       active ? "bg-indigo-500/20 text-indigo-300" : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
     } ${disabled ? "cursor-not-allowed opacity-40" : ""}`;
-  // 1K/2K 走本地超分池；超分池关闭时 2K 仍可通过云端降级通道（需配置云端 API）
-  const disabledOf = (r: Resolution) => r !== "768p" && !upscaleEnabled && !(r === "2k" && cloudEnabled);
+  // 1K/2K 走本地超分池；超分池关闭时不可提交（云端仅保留提示词增强）
+  const disabledOf = (r: Resolution) => r !== "768p" && !upscaleEnabled;
   return (
     <div className="relative" ref={ref}>
       <button type="button" onClick={() => setOpen(!open)} className={chipCls}>
@@ -338,10 +368,12 @@ function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onC
     }
   }
 
-  const inputImages = [
-    ...(task.first_image_url ? [{ url: task.first_image_url, label: "首帧" }] : []),
-    ...(task.last_image_url ? [{ url: task.last_image_url, label: "尾帧" }] : []),
-    ...task.ref_image_urls.map((url, i) => ({ url, label: `参考 ${i + 1}` })),
+  const inputMedia: { kind: RefKind; url: string; label: string }[] = [
+    ...(task.first_image_url ? [{ kind: "image" as const, url: task.first_image_url, label: "首帧" }] : []),
+    ...(task.last_image_url ? [{ kind: "image" as const, url: task.last_image_url, label: "尾帧" }] : []),
+    ...task.ref_image_urls.map((url, i) => ({ kind: "image" as const, url, label: `参考图 ${i + 1}` })),
+    ...task.ref_video_urls.map((url, i) => ({ kind: "video" as const, url, label: `参考视频 ${i + 1}` })),
+    ...task.ref_audio_urls.map((url, i) => ({ kind: "audio" as const, url, label: `参考音频 ${i + 1}` })),
   ];
 
   const isUpgradeTask = task.parent_task_id != null;
@@ -361,17 +393,37 @@ function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onC
         </span>
       </div>
 
-      {inputImages.length > 0 && (
+      {inputMedia.length > 0 && (
         <div className="mb-3 flex gap-2 overflow-x-auto">
-          {inputImages.map((img) => (
-            <img
-              key={img.url}
-              src={fileUrl(img.url)}
-              alt={img.label}
-              title={img.label}
-              className="h-14 w-20 shrink-0 rounded-lg border border-white/10 object-cover"
-            />
-          ))}
+          {inputMedia.map((m) =>
+            m.kind === "image" ? (
+              <img
+                key={m.url}
+                src={fileUrl(m.url)}
+                alt={m.label}
+                title={m.label}
+                className="h-14 w-20 shrink-0 rounded-lg border border-white/10 object-cover"
+              />
+            ) : m.kind === "video" ? (
+              <video
+                key={m.url}
+                src={fileUrl(m.url)}
+                muted
+                preload="metadata"
+                title={m.label}
+                className="h-14 w-20 shrink-0 rounded-lg border border-white/10 object-cover"
+              />
+            ) : (
+              <audio
+                key={m.url}
+                src={fileUrl(m.url)}
+                controls
+                preload="metadata"
+                title={m.label}
+                className="h-14 w-44 shrink-0"
+              />
+            ),
+          )}
         </div>
       )}
 
@@ -527,14 +579,41 @@ export default function CreatePage() {
   const effMode: Task["mode"] =
     refMode === "flf2v" ? (firstImage || lastImage ? "flf2v" : "t2v") : refImages.length > 0 ? "r2v" : "t2v";
 
+  const refCounts = useMemo(() => {
+    const c = { image: 0, video: 0, audio: 0 };
+    for (const u of refImages) c[refKindOf(u.filename)] += 1;
+    return c;
+  }, [refImages]);
+
   async function addRefs(files: File[]) {
-    const room = MAX_REFS - refImages.length;
-    if (room <= 0) return;
-    if (files.length > room) alert(`最多上传 ${MAX_REFS} 张参考图`);
+    // 当前各类参考数量（基于已有参考）
+    const counts = { ...refCounts };
+    let room = MAX_REFS - refImages.length;
+    if (room <= 0) {
+      alert(`参考总数最多 ${MAX_REFS} 个`);
+      return;
+    }
+    const accepted: File[] = [];
+    for (const f of files) {
+      if (room <= 0) break;
+      const kind = fileKindOf(f);
+      if (kind === "video" && counts.video >= MAX_VIDEO_REFS) {
+        alert(`参考视频最多 ${MAX_VIDEO_REFS} 个`);
+        continue;
+      }
+      if (kind === "audio" && counts.audio >= MAX_AUDIO_REFS) {
+        alert(`参考音频最多 ${MAX_AUDIO_REFS} 个`);
+        continue;
+      }
+      accepted.push(f);
+      counts[kind] += 1;
+      room -= 1;
+    }
+    if (!accepted.length) return;
     setUploading(true);
     try {
-      for (const f of files.slice(0, room)) {
-        const up = await api.uploadImage(f, "reference");
+      for (const f of accepted) {
+        const up = await api.uploadMedia(f, "reference");
         setRefImages((prev) => [...prev, up]);
       }
     } catch (err) {
@@ -585,15 +664,23 @@ export default function CreatePage() {
           <div className="flex shrink-0 gap-2">
             {refMode === "r2v" ? (
               <>
-                {refImages.map((img, i) => (
-                  <RefThumb
-                    key={img.id}
-                    index={i}
-                    value={img}
-                    onRemove={() => setRefImages((prev) => prev.filter((_, j) => j !== i))}
-                  />
-                ))}
-                {refImages.length < MAX_REFS && <RefAddTile count={refImages.length} busy={uploading} onPick={addRefs} />}
+                {(() => {
+                  const seqBy: Record<RefKind, number> = { image: 0, video: 0, audio: 0 };
+                  return refImages.map((img, i) => {
+                    const kind = refKindOf(img.filename);
+                    const seq = ++seqBy[kind];
+                    return (
+                      <RefThumb
+                        key={img.id}
+                        kind={kind}
+                        seq={seq}
+                        value={img}
+                        onRemove={() => setRefImages((prev) => prev.filter((_, j) => j !== i))}
+                      />
+                    );
+                  });
+                })()}
+                {refImages.length < MAX_REFS && <RefAddTile count={refImages.length} counts={refCounts} busy={uploading} onPick={addRefs} />}
               </>
             ) : (
               <>
@@ -604,13 +691,21 @@ export default function CreatePage() {
           </div>
 
           {/* 右侧：提示词 */}
-          <textarea
-            className="min-h-[110px] flex-1 resize-none bg-transparent text-sm leading-relaxed text-zinc-100 placeholder-zinc-500 outline-none sm:min-h-[120px]"
-            placeholder="描述您想要生成的视频内容，例如，“一个孩子在公园里放风筝，金色阳光，镜头上移。”"
-            maxLength={2000}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-          />
+          <div className="flex-1">
+            <textarea
+              className="min-h-[110px] w-full resize-none bg-transparent text-sm leading-relaxed text-zinc-100 placeholder-zinc-500 outline-none sm:min-h-[120px]"
+              placeholder="描述您想要生成的视频内容，例如，“一个孩子在公园里放风筝，金色阳光，镜头上移。”"
+              maxLength={2000}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+            {refMode === "r2v" && refImages.length > 0 && (
+              <p className="mt-1 text-[11px] leading-relaxed text-zinc-600">
+                提示词可引用：<code>&lt;Picture N&gt;</code> 第 N 张参考图、<code>&lt;Video N&gt;</code> 第 N 个参考视频、
+                <code>&lt;Audio N&gt;</code> 第 N 个参考音频（各自按类型顺序编号）
+              </p>
+            )}
+          </div>
         </div>
 
         {/* 底部工具栏 */}
@@ -627,7 +722,6 @@ export default function CreatePage() {
             aspect={aspect}
             onAspect={setAspect}
             upscaleEnabled={upscaleEnabled}
-            cloudEnabled={cloudEnabled}
           />
           <select
             value={scene}

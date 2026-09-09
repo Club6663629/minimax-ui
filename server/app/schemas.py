@@ -51,7 +51,8 @@ class VideoCreateIn(BaseModel):
     scene: Literal["general", "drama", "ecommerce"] = "general"
     first_image_id: Optional[int] = None
     last_image_id: Optional[int] = None
-    ref_image_ids: list[int] = Field(default_factory=list, max_length=9)  # 全能参考，官方上限 9 张
+    # 全能参考资料 id：图片/视频/音频混存，总数上限 9（其中视频 ≤3、音频 ≤3）
+    ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
 
 
 class TaskOut(BaseModel):
@@ -72,6 +73,8 @@ class TaskOut(BaseModel):
     first_image_url: Optional[str]
     last_image_url: Optional[str]
     ref_image_urls: list[str]
+    ref_video_urls: list[str] = []
+    ref_audio_urls: list[str] = []
     parent_task_id: Optional[int] = None
     upscale_target: Optional[str] = None
     worker_url: str = ""

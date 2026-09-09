@@ -32,8 +32,6 @@ class Settings(BaseSettings):
     # 留空则退回 comfyui_url 单实例串行模式（行为与旧版一致）
     comfyui_workers: str = ""
     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
-    degrade_queue_depth: int = 8          # 生成队列深度超阈值且有云端 Key → 云端全流程降级
-    cloud_upscale_fallback: bool = True   # 本地超分重试耗尽后，2K 回落云端重生成
 
     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
     minimax_api_key: str = ""
@@ -51,7 +49,7 @@ class Settings(BaseSettings):
 
     @property
     def cloud_enabled(self) -> bool:
-        """配置了 MINIMAX_API_KEY 才启用云端增强 / 2K 重生成。"""
+        """配置了 MINIMAX_API_KEY 才启用云端提示词增强（Context-IR）。"""
         return bool(self.minimax_api_key)
 
 

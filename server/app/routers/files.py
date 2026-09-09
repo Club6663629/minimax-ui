@@ -71,7 +71,14 @@ def download_upload(
         raise HTTPException(status.HTTP_410_GONE, "图片文件已失效")
     suffix = path.suffix.lower()
     media_type = {
+        # 图片
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".png": "image/png", ".webp": "image/webp",
+        # 视频（供 <video> 预览）
+        ".mp4": "video/mp4", ".mov": "video/quicktime",
+        ".webm": "video/webm", ".mkv": "video/x-matroska",
+        # 音频（供 <audio> 预览）
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+        ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
     }.get(suffix, "application/octet-stream")
     return FileResponse(path, media_type=media_type)

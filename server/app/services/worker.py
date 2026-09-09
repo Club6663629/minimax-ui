@@ -4,13 +4,12 @@
 计费：派发本地生成时扣积分，失败全额退还（见部署方案 8.2）。
 
 三个常驻循环（单进程内，领取均用条件 UPDATE 原子领取，天然无并发竞争）：
-- _enhance_loop   领取 queued → 云端提示词增强（不占 GPU 槽位）
-- _generate_loop  派发生成槽位（时长>10s 优先 heavy 节点）；队列深度超阈值且
-                  配置了云端 Key 时，最老的排队任务转云端全流程降级
+- _enhance_loop   领取 queued → 云端提示词增强（Context-IR，不占 GPU 槽位）
+- _generate_loop  派发生成槽位（时长>10s 优先 heavy 节点）
 - _upscale_loop   派发超分槽位（2K 优先；主力池优先，1K 溢出节点兜底）
 
-失败自愈：执行中节点失联/报错且 attempts < 2 → 状态回退重投；超限失败退积分；
-2K 超分重试耗尽且配置了云端 Key → 回落云端重生成（降级通道）。
+失败自愈：执行中节点失联/报错且 attempts < 2 → 状态回退重投；超限失败退积分。
+生成与超分仅走本地 worker；云端仅保留提示词增强，无任何云端生成/超分降级通道。
 Mock 模式（MOCK_COMFY=1）：不依赖 ComfyUI，用 ffmpeg 生成测试视频，模拟多节点并发。
 """
 import asyncio
@@ -145,39 +144,9 @@ async def _run_enhance(task_id: int) -> None:
         await asyncio.to_thread(_requeue_or_fail, task_id, "enhancing")
 
 
-# ---------------------------------------------------------------- 云端降级
-async def _maybe_degrade() -> None:
-    """生成队列深度（排队+生成阶段）> 阈值且有云端 Key → 最老排队任务转云端全流程。"""
-    if not settings.cloud_enabled:
-        return
-    with SessionLocal() as db:
-        depth = (
-            db.query(Task)
-            .filter(Task.status.in_(("queued", "enhancing", "generating_768p")))
-            .count()
-        )
-    if depth <= settings.degrade_queue_depth:
-        return
-    # 优先把 2K 任务送上云端（价值档）
-    with SessionLocal() as db:
-        task = (
-            db.query(Task)
-            .filter(Task.status == "queued")
-            .order_by(Task.resolution.desc(), Task.id)
-            .first()
-        )
-        if task is None:
-            return
-        task_id = task.id
-    if _claim(task_id, "queued", "generating_768p"):
-        logger.warning("生成队列深度 %s 超阈值，任务 #%s 转云端全流程", depth, task_id)
-        asyncio.get_event_loop().create_task(_run_cloud_full(task_id))
-
-
 # ---------------------------------------------------------------- ② 生成队列
 async def _generate_loop() -> None:
     while True:
-        await _maybe_degrade()
         # 无空闲生成槽位时不领取，避免反复扣费/退费的流水噪声
         if not any(n.role == "generate" and n.healthy and not n.busy for n in pool.nodes):
             await asyncio.sleep(2)
@@ -446,7 +415,7 @@ async def _upscale_loop() -> None:
 
 def _claim_upscale() -> Optional[int]:
     """领取超分任务：2K 优先派发（价值档）；1K 短，用于填补主力空窗。
-    本地超分池关闭时：2K 有云端则转云端重生成（负数 ID 标记），否则完成/失败。"""
+    本地超分池关闭时：一律失败（“超分池不可用”）并退积分（无云端回落）。"""
     with SessionLocal() as db:
         task = (
             db.query(Task)
@@ -456,13 +425,9 @@ def _claim_upscale() -> Optional[int]:
         )
         if task is None:
             return None
-        task_id, tier = task.id, task.resolution
+        task_id = task.id
         no_local_pool = not settings.upscale_enabled or not pool.has_upscale()
         if no_local_pool and not pool.mock:
-            if tier == "2k" and settings.cloud_enabled:
-                task.worker_url = "cloud"  # 占位，由云端分支处理（防重复领取）
-                db.commit()
-                return -task_id  # 负数表示云端超分
             task.status = "failed"
             task.error = "超分池不可用（未配置超分节点）"
             task.finished_at = datetime.now()
@@ -475,9 +440,6 @@ def _claim_upscale() -> Optional[int]:
 
 
 async def _dispatch_upscale(task_id: int) -> None:
-    if task_id < 0:  # 本地超分关闭 → 云端 2K 重生成
-        asyncio.get_event_loop().create_task(_run_cloud_upscale(-task_id))
-        return
     with SessionLocal() as db:
         tier = db.get(Task, task_id).resolution
     node = pool.acquire_upscale(tier, task_id)
@@ -512,89 +474,9 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
         raise
     except Exception as exc:
         logger.exception("任务 #%s 超分失败", task_id)
-        if await asyncio.to_thread(_requeue_or_fail, task_id, "upscaling", str(exc)[:500]):
-            pass  # 已重投超分队列
-        else:
-            # 重试耗尽：2K 且有云端 → 回落云端重生成（降级通道）
-            with SessionLocal() as db:
-                task = db.get(Task, task_id)
-                fallback = (
-                    task is not None and task.status == "failed"
-                    and task.resolution == "2k" and settings.cloud_enabled
-                )
-            if fallback:
-                logger.warning("任务 #%s 本地超分重试耗尽，回落云端 2K", task_id)
-                asyncio.get_event_loop().create_task(_run_cloud_upscale(task_id))
+        await asyncio.to_thread(_requeue_or_fail, task_id, "upscaling", str(exc)[:500])
     finally:
         pool.release(node)
-
-
-async def _run_cloud_upscale(task_id: int) -> None:
-    """云端 2K 重生成（本地超分关闭或重试耗尽时的降级通道）。"""
-    try:
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            staging_768p = STAGING_DIR / f"{task_id}_768p.mp4"
-            ratio, duration = task.aspect_ratio, task.duration
-        path_2k = await cloud.regenerate_2k(staging_768p, ratio, duration)
-        final_path = OUTPUT_DIR / f"{task_id}_2k.mp4"
-        shutil.move(str(path_2k), final_path)
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            task.video_path = str(final_path)
-            task.status = "done"
-            task.worker_url = "cloud"
-            task.finished_at = datetime.now()
-            db.commit()
-        logger.info("任务 #%s 云端 2K 完成: %s", task_id, final_path)
-    except Exception as exc:
-        logger.exception("任务 #%s 云端 2K 失败", task_id)
-        await asyncio.to_thread(_mark_failed, task_id, f"云端2K失败: {str(exc)[:300]}")
-
-
-async def _run_cloud_full(task_id: int) -> None:
-    """云端全流程降级：增强(可选) + 官方 API 直接出成片。"""
-    try:
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            need_enhance = task.enhance
-            prompt, duration, ratio = task.prompt, task.duration, task.aspect_ratio
-            scene = task.scene
-        if need_enhance:
-            try:
-                prompt = await cloud.enhance_prompt(apply_scene(prompt, scene), duration, ratio)
-                with SessionLocal() as db:
-                    db.get(Task, task_id).enhanced_prompt = prompt
-            except Exception as exc:
-                logger.warning("任务 #%s 云端增强失败，用原始提示词: %s", task_id, exc)
-        first_path = last_path = None
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            for slot, attr in ((task.first_image_id, "first"), (task.last_image_id, "last")):
-                if slot:
-                    up = db.get(Upload, slot)
-                    if up:
-                        if attr == "first":
-                            first_path = Path(up.path)
-                        else:
-                            last_path = Path(up.path)
-        cloud_video = await cloud.generate_video(prompt, duration, ratio, first_path, last_path)
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            suffix = f"_{task.resolution}" if task.resolution != "768p" else ""
-            final_path = OUTPUT_DIR / f"{task_id}{suffix}.mp4"
-        shutil.move(str(cloud_video), final_path)
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            task.video_path = str(final_path)
-            task.status = "done"
-            task.worker_url = "cloud"
-            task.finished_at = datetime.now()
-            db.commit()
-        logger.info("任务 #%s 云端降级完成: %s", task_id, final_path)
-    except Exception as exc:
-        logger.exception("任务 #%s 云端降级失败", task_id)
-        await asyncio.to_thread(_mark_failed, task_id, str(exc)[:500])
 
 
 # ---------------------------------------------------------------- 失败处理
@@ -620,20 +502,6 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
     return False
 
 
-def _mark_failed(task_id: int, error: str) -> None:
-    with SessionLocal() as db:
-        task = db.get(Task, task_id)
-        if task is None or task.status in ("done", "failed"):
-            return
-        task.status = "failed"
-        task.error = error
-        task.finished_at = datetime.now()
-        if task.cost > 0:  # 失败退还积分
-            user = db.get(User, task.user_id)
-            add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
-        db.commit()
-
-
 # ---------------------------------------------------------------- ② 768p 生成
 async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
     """在指定节点生成 768p 视频，返回 staging 目录中的中间产物路径。"""
@@ -648,25 +516,46 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         task = db.get(Task, task_id)
         final_prompt = task.enhanced_prompt or task.prompt
         mode, ratio, duration = task.mode, task.aspect_ratio, task.duration
-        image_paths: list = []
         try:
             ref_ids = json.loads(task.ref_image_ids or "[]")
         except (TypeError, ValueError):
             ref_ids = []
-        for img_id in (task.first_image_id, task.last_image_id, *ref_ids):
+        image_paths: list = []
+        video_paths: list = []
+        audio_paths: list = []
+        # 首尾帧固定为参考图（首尾帧槽位仅允许图片）
+        for img_id in (task.first_image_id, task.last_image_id):
             if img_id:
                 up = db.get(Upload, img_id)
                 if up:
                     image_paths.append(Path(up.path))
+        # 参考区按扩展名分流（图片/视频/音频混存，保序）
+        for rid in ref_ids:
+            up = db.get(Upload, rid)
+            if not up:
+                continue
+            p = Path(up.path)
+            suffix = p.suffix.lower()
+            if suffix in (".mp4", ".mov", ".webm", ".mkv"):
+                video_paths.append(p)
+            elif suffix in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"):
+                audio_paths.append(p)
+            else:
+                image_paths.append(p)
 
     client = comfyui.ComfyUIClient(node.url)
 
-    # 输入图先传到该节点的 input 目录
+    # 输入文件先传到该节点的 input 目录（图片走 upload_image，视频/音频走 upload_file）
     image_names = [await client.upload_image(p) for p in image_paths]
+    video_names = [await client.upload_file(p) for p in video_paths]
+    audio_names = [await client.upload_file(p) for p in audio_paths]
 
     workflow = comfyui.load_workflow(mode)
-    comfyui.inject(workflow, mode, final_prompt, ratio, duration, image_names,
-                   unet_name=node.unet_for(mode))
+    comfyui.inject(
+        workflow, mode, final_prompt, ratio, duration, image_names,
+        video_names=video_names, audio_names=audio_names,
+        unet_name=node.unet_for(mode),
+    )
 
     prompt_id = await client.submit(workflow)
     with SessionLocal() as db:

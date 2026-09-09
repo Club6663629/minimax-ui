@@ -1,17 +1,52 @@
 """任务序列化：ORM → TaskOut（附带带鉴权的文件地址）。"""
 import json
+from pathlib import Path
 from typing import Optional
 
+from sqlalchemy.orm import Session
+
 from ..config import OUTPUT_DIR
-from ..models import Task
+from ..models import Task, Upload
 from ..schemas import TaskOut
 
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
+_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 
-def serialize_task(task: Task, user_email: Optional[str] = None) -> TaskOut:
+
+def _ref_kind(upload_id: int, db: Optional[Session]) -> str:
+    """按参考上传文件的后缀判定类型（image/video/audio）；无 db 或找不到时兜底为 image。"""
+    if db is None:
+        return "image"
+    up = db.get(Upload, upload_id)
+    if up is None:
+        return "image"
+    suffix = Path(up.path).suffix.lower()
+    if suffix in _VIDEO_SUFFIXES:
+        return "video"
+    if suffix in _AUDIO_SUFFIXES:
+        return "audio"
+    return "image"
+
+
+def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Session] = None) -> TaskOut:
     try:
         ref_ids = json.loads(task.ref_image_ids or "[]")
     except (TypeError, ValueError):
         ref_ids = []
+
+    # 参考区按扩展名分类：ref_image_urls 仅图片（保持兼容），新增视频/音频列表
+    ref_image_urls: list[str] = []
+    ref_video_urls: list[str] = []
+    ref_audio_urls: list[str] = []
+    for rid in ref_ids:
+        url = f"/files/upload/{rid}"
+        kind = _ref_kind(rid, db)
+        if kind == "video":
+            ref_video_urls.append(url)
+        elif kind == "audio":
+            ref_audio_urls.append(url)
+        else:
+            ref_image_urls.append(url)
 
     # 视频地址：优先最高可用分辨率
     video_url: Optional[str] = None
@@ -49,7 +84,9 @@ def serialize_task(task: Task, user_email: Optional[str] = None) -> TaskOut:
         upscale_urls=upscale_urls,
         first_image_url=f"/files/upload/{task.first_image_id}" if task.first_image_id else None,
         last_image_url=f"/files/upload/{task.last_image_id}" if task.last_image_id else None,
-        ref_image_urls=[f"/files/upload/{i}" for i in ref_ids],
+        ref_image_urls=ref_image_urls,
+        ref_video_urls=ref_video_urls,
+        ref_audio_urls=ref_audio_urls,
         parent_task_id=task.parent_task_id,
         upscale_target=task.upscale_target,
         worker_url=task.worker_url or "",
