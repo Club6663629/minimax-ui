@@ -48,7 +48,7 @@ class VideoCreateIn(BaseModel):
     duration: Literal[5, 8, 10, 15] = 5
     resolution: Literal["768p", "1k", "2k"] = "768p"
     enhance: bool = True
-    scene: Literal["general", "drama", "ecommerce"] = "general"
+    scene: Literal["general", "drama", "ecommerce", "music"] = "general"
     first_image_id: Optional[int] = None
     last_image_id: Optional[int] = None
     # 全能参考资料 id：图片/视频/音频混存，总数上限 9（其中视频 ≤3、音频 ≤3）

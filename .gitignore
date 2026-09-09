@@ -15,3 +15,6 @@ web/dist/
 workflow_templates/*
 *.patch
 
+# Agent 本地技能（从 MiniMax-H3 外部仓库安装，可重新拉取，不入库）
+.claude/
+

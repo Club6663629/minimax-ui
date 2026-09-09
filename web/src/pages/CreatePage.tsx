@@ -44,6 +44,7 @@ const SCENES = [
   { value: "general", label: "通用" },
   { value: "drama", label: "AI 短剧" },
   { value: "ecommerce", label: "电商" },
+  { value: "music", label: "音乐创作" },
 ] as const;
 type Scene = (typeof SCENES)[number]["value"];
 const RESOLUTIONS = ["768p", "1k", "2k"] as const;
