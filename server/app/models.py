@@ -50,6 +50,7 @@ class Task(Base):
     duration: Mapped[int] = mapped_column(Integer, default=5)
     resolution: Mapped[str] = mapped_column(String(8), default="768p")  # 768p | 2k
     enhance: Mapped[bool] = mapped_column(Boolean, default=True)
+    scene: Mapped[str] = mapped_column(String(16), default="general")  # general|drama|ecommerce
 
     first_image_id: Mapped[Optional[int]] = mapped_column(ForeignKey("uploads.id"))
     last_image_id: Mapped[Optional[int]] = mapped_column(ForeignKey("uploads.id"))

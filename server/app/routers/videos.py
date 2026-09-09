@@ -59,6 +59,7 @@ def create_video(
         duration=body.duration,
         resolution=body.resolution,
         enhance=body.enhance,
+        scene=body.scene,
         first_image_id=body.first_image_id if body.mode == "flf2v" else None,
         last_image_id=body.last_image_id if body.mode == "flf2v" else None,
         ref_image_ids=json.dumps(body.ref_image_ids) if body.mode == "r2v" else "",
@@ -141,10 +142,10 @@ def upgrade_video(
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, f"该视频已有 {body.resolution} 升级任务（#{existing.id}）")
     # 检查 768p 源文件存在
-    src_exists = any(
+    src_exists = any([
         (STAGING_DIR / f"{task_id}_768p.mp4").exists(),
         (OUTPUT_DIR / f"{task_id}.mp4").exists(),
-    )
+    ])
     if not src_exists:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "768p 源文件不存在，无法升级")
     # 计费

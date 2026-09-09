@@ -48,6 +48,7 @@ class VideoCreateIn(BaseModel):
     duration: Literal[5, 8, 10, 15] = 5
     resolution: Literal["768p", "1k", "2k"] = "768p"
     enhance: bool = True
+    scene: Literal["general", "drama", "ecommerce"] = "general"
     first_image_id: Optional[int] = None
     last_image_id: Optional[int] = None
     ref_image_ids: list[int] = Field(default_factory=list, max_length=9)  # 全能参考，官方上限 9 张
@@ -62,6 +63,7 @@ class TaskOut(BaseModel):
     duration: int
     resolution: str
     enhance: bool
+    scene: str
     status: str
     error: str
     cost: int
@@ -72,6 +74,7 @@ class TaskOut(BaseModel):
     ref_image_urls: list[str]
     parent_task_id: Optional[int] = None
     upscale_target: Optional[str] = None
+    worker_url: str = ""
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]

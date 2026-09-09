@@ -55,8 +55,8 @@ async def enhance_prompt(prompt: str, duration: int, ratio: str) -> str:
             client,
             f"{base}/v2/h3_context_ir",
             json={
-                "model": "H3-Context-IR",
-                "content": prompt,
+                "model": "MiniMax-H3",
+                "content": [{"type": "text", "text": prompt}],
                 "duration": duration,
                 "ratio": ratio,
             },
@@ -71,22 +71,21 @@ async def enhance_prompt(prompt: str, duration: int, ratio: str) -> str:
             await asyncio.sleep(interval)
             interval = min(interval * 1.5, 15.0)
             r = await client.get(
-                f"{base}/v1/query/h3_context_ir",
+                f"{base}/v2/query/video_generation/{task_id}",
                 headers=_headers(),
-                params={"task_id": task_id},
                 timeout=30,
             )
             r.raise_for_status()
             result = r.json()
-            _check_base_resp(result)
-            status_str = result.get("status") or result.get("task_status", "")
-            if status_str in ("Success", "Success "):
-                content = result.get("content") or {}
+            task = result.get("task") or result
+            status_str = (task.get("status") or "").strip().lower()
+            if status_str in ("succeeded", "success", "done", "completed"):
+                content = task.get("content") or {}
                 enhanced = content.get("prompt") or content.get("text") or ""
                 if not enhanced:
                     raise CloudAPIError(f"增强结果为空: {result}")
                 return enhanced
-            if status_str in ("Fail", "Failed"):
+            if status_str in ("fail", "failed", "error"):
                 raise CloudAPIError(f"增强任务失败: {result}")
     raise CloudAPIError("增强任务超时（10 分钟）")
 

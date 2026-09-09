@@ -39,6 +39,7 @@ export interface Task {
   duration: number;
   resolution: string;
   enhance: boolean;
+  scene: string;
   status: TaskStatus;
   error: string;
   cost: number;
@@ -49,6 +50,7 @@ export interface Task {
   ref_image_urls: string[];
   parent_task_id: number | null;
   upscale_target: string | null;
+  worker_url: string;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

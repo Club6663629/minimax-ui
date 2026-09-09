@@ -22,13 +22,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import update
+from sqlalchemy import and_, or_, update
 from sqlalchemy.orm import Session
 
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
 from . import cloud, comfyui
+from ..scenes import apply_scene
 from .billing import add_credits, compute_cost
 from .pool import WorkerNode, pool
 
@@ -123,10 +124,13 @@ async def _run_enhance(task_id: int) -> None:
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             prompt, duration, ratio = task.prompt, task.duration, task.aspect_ratio
+            scene = task.scene
         try:
-            enhanced = await cloud.enhance_prompt(prompt, duration, ratio)
+            compiled = apply_scene(prompt, scene)
+            enhanced = await cloud.enhance_prompt(compiled, duration, ratio)
             with SessionLocal() as db:
                 db.get(Task, task_id).enhanced_prompt = enhanced
+                db.commit()
             logger.info("任务 #%s 提示词增强完成", task_id)
         except Exception as exc:
             logger.warning("任务 #%s 增强失败，使用原始提示词: %s", task_id, exc)
@@ -190,7 +194,13 @@ def _claim_generate() -> Optional[int]:
     with SessionLocal() as db:
         task = (
             db.query(Task)
-            .filter(Task.status.in_(("queued", "generating_768p")), Task.worker_url == "")
+            .filter(
+                Task.worker_url == "",
+                or_(
+                    Task.status == "generating_768p",
+                    and_(Task.status == "queued", Task.enhance.is_(False)),
+                ),
+            )
             .order_by(Task.id)
             .first()
         )
@@ -225,7 +235,7 @@ def _claim_generate() -> Optional[int]:
 async def _dispatch_generate(task_id: int) -> None:
     with SessionLocal() as db:
         task = db.get(Task, task_id)
-        heavy = task.duration >= 8
+        heavy = task.duration >= 10
     node = pool.acquire_generate(heavy, task_id)
     if node is None:
         await asyncio.to_thread(_uncharge, task_id)  # 无空闲槽位：退还积分回队
@@ -267,10 +277,6 @@ async def _run_generate(task_id: int, node: WorkerNode) -> None:
                 logger.info("任务 #%s 768p 完成，进入超分队列(%s)", task_id, task.resolution)
             else:
                 final_path = OUTPUT_DIR / f"{task_id}.mp4"
-                if task.resolution == "768p":
-                    # 保留 768p 源片用于后续高清升级（post-hoc upscale）
-                    staging_copy = STAGING_DIR / f"{task_id}_768p.mp4"
-                    shutil.copy2(str(staging_768p), str(staging_copy))
                 shutil.move(str(staging_768p), final_path)
                 task.video_path = str(final_path)
                 task.status = "done"
@@ -363,9 +369,6 @@ async def _resume_generate(task_id: int, node: WorkerNode) -> None:
                 logger.info("孤儿任务 #%s 768p 恢复完成，进入超分队列(%s)", task_id, task.resolution)
             else:
                 final_path = OUTPUT_DIR / f"{task_id}.mp4"
-                if task.resolution == "768p":
-                    staging_copy = STAGING_DIR / f"{task_id}_768p.mp4"
-                    shutil.copy2(str(staging_768p), str(staging_copy))
                 shutil.move(str(staging_768p), final_path)
                 task.video_path = str(final_path)
                 task.status = "done"
@@ -556,9 +559,10 @@ async def _run_cloud_full(task_id: int) -> None:
             task = db.get(Task, task_id)
             need_enhance = task.enhance
             prompt, duration, ratio = task.prompt, task.duration, task.aspect_ratio
+            scene = task.scene
         if need_enhance:
             try:
-                prompt = await cloud.enhance_prompt(prompt, duration, ratio)
+                prompt = await cloud.enhance_prompt(apply_scene(prompt, scene), duration, ratio)
                 with SessionLocal() as db:
                     db.get(Task, task_id).enhanced_prompt = prompt
             except Exception as exc:

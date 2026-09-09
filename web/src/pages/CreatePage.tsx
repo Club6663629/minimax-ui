@@ -38,7 +38,13 @@ import {
 } from "../types";
 
 const ASPECTS = ["16:9", "9:16", "1:1"] as const;
-const DURATIONS = [5, 8, 10, 15] as const;
+const DURATIONS = [5, 8, 10] as const;
+const SCENES = [
+  { value: "general", label: "通用" },
+  { value: "drama", label: "AI 短剧" },
+  { value: "ecommerce", label: "电商" },
+] as const;
+type Scene = (typeof SCENES)[number]["value"];
 const RESOLUTIONS = ["768p", "1k", "2k"] as const;
 type Resolution = (typeof RESOLUTIONS)[number];
 const MAX_REFS = 9; // 全能参考官方上限 9 张参考图
@@ -448,7 +454,9 @@ function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onC
           </div>
           {isUpgradeTask
             ? task.status === "upscaling"
-              ? "高清升级排队中，请耐心等待…"
+              ? task.worker_url
+                ? "高清升级中，请耐心等待…"
+                : "高清升级排队中"
               : "处理中，请耐心等待"
             : "多卡并行处理中，请耐心等待"}
         </div>
@@ -470,6 +478,7 @@ export default function CreatePage() {
   const [uploading, setUploading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [enhance, setEnhance] = useState(true);
+  const [scene, setScene] = useState<Scene>("general");
   const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
   const [duration, setDuration] = useState<(typeof DURATIONS)[number]>(5);
   const [resolution, setResolution] = useState<Resolution>("768p");
@@ -551,6 +560,7 @@ export default function CreatePage() {
         mode: effMode,
         prompt: prompt.trim(),
         enhance,
+        scene,
         aspect_ratio: aspect,
         duration,
         resolution,
@@ -619,6 +629,18 @@ export default function CreatePage() {
             upscaleEnabled={upscaleEnabled}
             cloudEnabled={cloudEnabled}
           />
+          <select
+            value={scene}
+            onChange={(e) => setScene(e.target.value as Scene)}
+            title="场景预设"
+            className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300 outline-none transition hover:border-white/25 focus:border-indigo-400/50"
+          >
+            {SCENES.map((sc) => (
+              <option key={sc.value} value={sc.value} className="bg-ink-800 text-zinc-200">
+                {sc.label}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={() => setEnhance(!enhance)}

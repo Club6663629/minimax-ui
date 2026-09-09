@@ -37,7 +37,7 @@ class Settings(BaseSettings):
 
     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
     minimax_api_key: str = ""
-    minimax_api_base: str = "https://api.minimax.io"
+    minimax_api_base: str = "https://api.minimax.cn"
 
     # ---- 计费（积分），均可通过环境变量覆盖 ----
     signup_bonus: int = 50        # 注册赠送

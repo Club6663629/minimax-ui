@@ -48,6 +48,9 @@ def _migrate() -> None:
         if "upscale_target" not in cols:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN upscale_target VARCHAR(8)"))
             logger.info("已为 tasks 表补充 upscale_target 列")
+        if "scene" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN scene VARCHAR(16) DEFAULT 'general'"))
+            logger.info("已为 tasks 表补充 scene 列")
 
 
 def _bootstrap() -> None:
