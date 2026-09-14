@@ -1,0 +1,76 @@
+from av.bitstream import BitStreamFilterContext
+from av.container import InputContainer
+from av.subtitles.stream import SubtitleStream
+from av.video.reformatter import ColorPrimaries, ColorRange, ColorTrc
+from fractions import Fraction
+from typing import Optional
+from .._input import AudioInput, VideoInput
+import av
+import io
+import itertools
+import json
+import numpy as np
+import math
+import os
+import torch
+from .._util import VideoContainer, VideoCodec, VideoComponents, normalize_crop_rect
+import comfy.utils
+import logging
+
+
+VIDEO_ENCODERS = {
+    VideoCodec.H264: "h264_nvenc",  # SAI 2026-09-13: was "h264"(=libx264); NVENC hard-encode
+    VideoCodec.AV1: "libsvtav1",
+}
+VIDEO_CONTAINER_FORMATS = {
+    VideoContainer.MP4: "mp4",
+    VideoContainer.MKV: "matroska",
+    VideoContainer.WEBM: "webm",
+}
+WEBM_STREAM_CODECS = {
+    "video": {"av1", "vp8", "vp9"},
+    "audio": {"opus", "vorbis"},
+    "subtitle": {"webvtt"},
+}
+BT2020_NCL = 9
+BT709_NCL = 1
+HDR_COLOR_TRANSFERS = {
+    "HDR": ColorTrc.ARIB_STD_B67,
+    "HDR PQ": ColorTrc.SMPTE2084,
+}
+    if stream is None:
+        return None
+    return VIDEO_TRANSFER_COLOR_SPACES.get(stream.color_trc)
+
+
+def video_encoder_options(
+    codec: VideoCodec, crf: float | None, preset: str | None = None
+) -> dict[str, str]:
+    options = {}
+    # SAI 2026-09-13: options for NVENC encoder (keeps ~libx264 crf23 quality).
+    if VIDEO_ENCODERS.get(codec) == "h264_nvenc":
+        options["preset"] = preset or "p4"
+        options["tune"] = "hq"
+        options["rc"] = "vbr"
+        options["cq"] = str(int(crf)) if crf is not None else "23"
+        return options
+    if preset is not None and codec == VideoCodec.H264:
+        options["preset"] = preset
+    if crf is not None:
+        if codec == VideoCodec.AV1 and crf == 0:
+            options["svtav1-params"] = "lossless=1"
+        else:
+            options["crf"] = str(crf)
+    return options
+
+
+def webm_streams_compatible(streams) -> bool:
+    for stream in streams:
+        allowed_codecs = WEBM_STREAM_CODECS.get(stream.type)
+        if allowed_codecs is not None and stream.codec_context is not None and stream.codec.canonical_name not in allowed_codecs:
+            return False
+    return True
+
+
+def _rotation_quadrant(frame: av.VideoFrame) -> int:
+    return int(round(frame.rotation // 90)) % 4 if frame.rotation else 0

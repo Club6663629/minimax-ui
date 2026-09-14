@@ -1,0 +1,14 @@
+##### /data/start_comfyui_8188.sh #####
+#!/bin/bash
+# 246 生成节点 ComfyUI 启动脚本（CUDA_VISIBLE_DEVICES=0 实际=4090，sage attention）
+kill $(pgrep -f 'main.py --listen 0.0.0.0 --port 8188') 2>/dev/null
+sleep 2
+cd /data/ComfyUI && CUDA_VISIBLE_DEVICES=0 nohup ./venv/bin/python main.py --listen 0.0.0.0 --port 8188 --use-sage-attention --vram-headroom 2 > /tmp/comfyui_8188.log 2>&1 &
+echo started pid=$!
+##### /data/start_comfyui_8189.sh #####
+#!/bin/bash
+# 246 超分节点 ComfyUI 启动脚本（CUDA_VISIBLE_DEVICES=1 实际=3060，sage attention，独立 db）
+kill $(pgrep -f 'main.py --listen 0.0.0.0 --port 8189') 2>/dev/null
+sleep 2
+cd /data/ComfyUI && CUDA_VISIBLE_DEVICES=1 nohup ./venv/bin/python main.py --listen 0.0.0.0 --port 8189 --use-sage-attention --database-url sqlite:////data/ComfyUI/user/comfyui_8189.db > /tmp/comfyui_8189.log 2>&1 &
+echo started pid=$!
