@@ -1,0 +1,116 @@
+{
+  "1": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "placeholder.mp4"
+    },
+    "_meta": {
+      "title": "LoadVideo"
+    }
+  },
+  "2": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "1",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "GetVideoComponents"
+    }
+  },
+  "10": {
+    "class_type": "VOSR2ModelLoader",
+    "inputs": {
+      "model": "VOSR2",
+      "dtype": "fp16"
+    },
+    "_meta": {
+      "title": "VOSR 2.0 Model Loader"
+    }
+  },
+  "11": {
+    "class_type": "VOSR2UpscaleCached",
+    "inputs": {
+      "model": [
+        "10",
+        0
+      ],
+      "image": [
+        "2",
+        0
+      ],
+      "upscale": 1,
+      "seed": 42,
+      "color_alignment": "wavelet",
+      "tile_size": 1024,
+      "tile_overlap": 32,
+      "vae_tile_size": 1024,
+      "vae_tile_overlap": 32,
+      "source_path": "",
+      "source_extra": "{\"src\":\"minimax-ui\"}",
+      "cache_dir": "/data/ComfyUI/cache_vosr2",
+      "model_tag": "VOSR2:fp16",
+      "use_cache": true
+    },
+    "_meta": {
+      "title": "VOSR 2.0 Upscale (L2 Cached)"
+    }
+  },
+  "3": {
+    "class_type": "RTXVideoSuperResolution",
+    "inputs": {
+      "images": [
+        "11",
+        0
+      ],
+      "resize_type": "target dimensions",
+      "quality": "ULTRA",
+      "resize_type.width": 1920,
+      "resize_type.height": 1080
+    },
+    "_meta": {
+      "title": "RTX Video Super Resolution"
+    }
+  },
+  "4": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "3",
+        0
+      ],
+      "fps": [
+        "2",
+        2
+      ],
+      "audio": [
+        "2",
+        1
+      ],
+      "bit_depth": [
+        "2",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "CreateVideo"
+    }
+  },
+  "5": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename_prefix": "video/Upscaled_RTX",
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "4",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SaveVideo"
+    }
+  }
+}

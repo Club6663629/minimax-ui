@@ -238,7 +238,7 @@ async def _run_generate(task_id: int, node: WorkerNode) -> None:
             task = db.get(Task, task_id)
             if task.status != "generating_768p":
                 return  # 已被删除等
-            need_upscale = settings.upscale_enabled and task.resolution in ("1k", "2k")
+            need_upscale = settings.upscale_enabled and task.resolution in ("1k", "2k", "4k")
             if need_upscale:
                 task.status = "upscaling"
                 task.worker_url = ""
@@ -330,7 +330,7 @@ async def _resume_generate(task_id: int, node: WorkerNode) -> None:
             task = db.get(Task, task_id)
             if task.status != "generating_768p":
                 return
-            need_upscale = settings.upscale_enabled and task.resolution in ("1k", "2k")
+            need_upscale = settings.upscale_enabled and task.resolution in ("1k", "2k", "4k")
             if need_upscale:
                 task.status = "upscaling"
                 task.worker_url = ""
@@ -384,7 +384,7 @@ async def _resume_upscale(task_id: int, node: WorkerNode) -> None:
             task = db.get(Task, task_id)
             if task.status != "upscaling":
                 return
-            suffix = "2k" if task.resolution == "2k" else "1k"
+            suffix = "4k" if task.resolution == "4k" else ("2k" if task.resolution == "2k" else "1k")
             final_path = OUTPUT_DIR / f"{task_id}_{suffix}.mp4"
         shutil.move(str(out_path), final_path)
         with SessionLocal() as db:
@@ -460,7 +460,7 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
             task = db.get(Task, task_id)
             if task.status != "upscaling":
                 return
-            suffix = "2k" if task.resolution == "2k" else "1k"
+            suffix = "4k" if task.resolution == "4k" else ("2k" if task.resolution == "2k" else "1k")
             final_path = OUTPUT_DIR / f"{task_id}_{suffix}.mp4"
         shutil.move(str(path_hd), final_path)
         with SessionLocal() as db:
@@ -599,10 +599,12 @@ async def _upscale(task_id: int, node: WorkerNode) -> Path:
         tier, ratio = task.resolution, task.aspect_ratio
 
     # 按节点引擎选模板：engine:seedvr2 → 原生节点；默认 KSampler 管线（模板默认 3B FP16 权重）
-    _engine_tpl = {"seedvr2": "upscale_7b", "seedvr2_3090": "upscale_3090"}
+    _engine_tpl = {"seedvr2": "upscale_7b", "seedvr2_3090": "upscale_3090", "rtx": "upscale_rtx"}
     template = _engine_tpl.get(node.engine, "upscale")
     workflow = comfyui.load_workflow(template)
-    comfyui.inject_upscale(workflow, video_name, tier, ratio, unet_name=node.unet)
+    # VOSR2 L2 缓存需要源片在超分节点上的绝对路径；upload 无 subfolder，故 = <ComfyUI input>/<name>
+    src_abs = f"{(settings.comfyui_input_dir or '/data/ComfyUI/input').rstrip('/')}/{video_name}"
+    comfyui.inject_upscale(workflow, video_name, tier, ratio, unet_name=node.unet, src_abs_path=src_abs)
 
     prompt_id = await client.submit(workflow)
     with SessionLocal() as db:

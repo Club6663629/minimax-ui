@@ -20,6 +20,8 @@ def compute_cost(duration: int, resolution: str) -> int:
         cost += settings.cost_1k_extra
     elif resolution == "2k":
         cost += settings.cost_2k_extra
+    elif resolution == "4k":
+        cost += settings.cost_4k_extra
     return cost
 
 
@@ -29,6 +31,8 @@ def compute_upgrade_cost(resolution: str) -> int:
         return settings.cost_1k_extra
     if resolution == "2k":
         return settings.cost_2k_extra
+    if resolution == "4k":
+        return settings.cost_4k_extra
     return 0
 
 

@@ -46,7 +46,7 @@ class VideoCreateIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     duration: Literal[5, 8, 10, 15] = 5
-    resolution: Literal["768p", "1k", "2k"] = "768p"
+    resolution: Literal["768p", "1k", "2k", "4k"] = "768p"
     enhance: bool = True
     scene: Literal["general", "drama", "ecommerce", "music"] = "general"
     first_image_id: Optional[int] = None
@@ -100,7 +100,7 @@ class RedeemIn(BaseModel):
 
 
 class UpgradeIn(BaseModel):
-    resolution: Literal["1k", "2k"]
+    resolution: Literal["1k", "2k", "4k"]
 
 
 class PackageOut(BaseModel):
@@ -119,6 +119,7 @@ class PricingOut(BaseModel):
     cost_768p_15s: int
     cost_1k_extra: int
     cost_2k_extra: int
+    cost_4k_extra: int
     cloud_enabled: bool
     upscale_enabled: bool
     packages: list[PackageOut]

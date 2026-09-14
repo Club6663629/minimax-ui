@@ -18,7 +18,7 @@
     "class_type": "ResolutionSelector",
     "inputs": {
       "aspect_ratio": "16:9 (Widescreen)",
-      "megapixels": 0.4,
+      "megapixels": 0.98,
       "multiple": 32
     },
     "_meta": {
@@ -78,28 +78,10 @@
   "123": {
     "class_type": "KSamplerSelect",
     "inputs": {
-      "sampler_name": "res_multistep"
+      "sampler_name": "euler"
     },
     "_meta": {
       "title": "KSamplerSelect"
-    }
-  },
-  "124": {
-    "class_type": "BasicScheduler",
-    "inputs": {
-      "scheduler": "simple",
-      "steps": [
-        "142",
-        0
-      ],
-      "denoise": 1,
-      "model": [
-        "127",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "BasicScheduler"
     }
   },
   "125": {
@@ -118,7 +100,7 @@
         0
       ],
       "sigmas": [
-        "124",
+        "9503",
         0
       ],
       "latent_image": [
@@ -138,7 +120,7 @@
         0
       ],
       "model": [
-        "141",
+        "9502",
         0
       ]
     },
@@ -289,46 +271,6 @@
       "title": "LoadImage"
     }
   },
-  "141": {
-    "class_type": "ComfySwitchNode",
-    "inputs": {
-      "switch": [
-        "146",
-        0
-      ],
-      "on_true": [
-        "145",
-        0
-      ],
-      "on_false": [
-        "127",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "If/Else Switch (model)"
-    }
-  },
-  "142": {
-    "class_type": "ComfySwitchNode",
-    "inputs": {
-      "switch": [
-        "146",
-        0
-      ],
-      "on_true": [
-        "144",
-        0
-      ],
-      "on_false": [
-        "143",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "If/Else Switch (Steps)"
-    }
-  },
   "143": {
     "class_type": "PrimitiveInt",
     "inputs": {
@@ -349,27 +291,47 @@
       "title": "Int (Lightning LoRA)"
     }
   },
-  "145": {
-    "class_type": "LoraLoaderModelOnly",
+  "9500": {
+    "class_type": "MiniMaxH3SigmaShift",
     "inputs": {
-      "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
-      "strength_model": 1,
       "model": [
         "127",
         0
-      ]
+      ],
+      "shift_video": 12.0,
+      "shift_audio": 3.0
+    },
+    "_meta": {
+      "title": "MiniMaxH3SigmaShift"
+    }
+  },
+  "9502": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "9500",
+        0
+      ],
+      "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 1.0
     },
     "_meta": {
       "title": "LoraLoaderModelOnly"
     }
   },
-  "146": {
-    "class_type": "PrimitiveBoolean",
+  "9503": {
+    "class_type": "BasicScheduler",
     "inputs": {
-      "value": true
+      "model": [
+        "9502",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1.0
     },
     "_meta": {
-      "title": "Boolean (Enable Lightning LoRA)"
+      "title": "BasicScheduler"
     }
   }
 }

@@ -91,7 +91,7 @@ export const api = {
   listVideos: () => request<Task[]>("/api/videos"),
   retryVideo: (id: number) =>
     request<Task>(`/api/videos/${id}/retry`, { method: "POST" }),
-  upgradeVideo: (id: number, resolution: "1k" | "2k") =>
+  upgradeVideo: (id: number, resolution: "1k" | "2k" | "4k") =>
     request<Task>(`/api/videos/${id}/upgrade`, {
       method: "POST",
       body: JSON.stringify({ resolution }),

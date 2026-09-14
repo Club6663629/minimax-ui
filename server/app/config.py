@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # 留空则退回 comfyui_url 单实例串行模式（行为与旧版一致）
     comfyui_workers: str = ""
     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
+    # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
+    comfyui_input_dir: str = "/data/ComfyUI/input"
 
     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
     minimax_api_key: str = ""
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
     cost_768p_15s: int = 30       # 768p · 15 秒
     cost_1k_extra: int = 8        # 1K 升级附加（本地超分）
     cost_2k_extra: int = 15       # 2K 升级附加
+    cost_4k_extra: int = 30       # 4K 升级附加
 
 
     @property

@@ -44,6 +44,7 @@ def pricing():
         cost_768p_15s=settings.cost_768p_15s,
         cost_1k_extra=settings.cost_1k_extra,
         cost_2k_extra=settings.cost_2k_extra,
+        cost_4k_extra=settings.cost_4k_extra,
         cloud_enabled=settings.cloud_enabled,
         upscale_enabled=settings.upscale_enabled,
         packages=[PackageOut(**p) for p in PACKAGES],
@@ -71,7 +72,7 @@ def create_video(
         if a_cnt > 3:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "参考音频最多 3 个")
     # 1K/2K 依赖本地超分池（云端仅保留 Context-IR 增强，不再云端回落）
-    if body.resolution in ("1k", "2k"):
+    if body.resolution in ("1k", "2k", "4k"):
         if not settings.upscale_enabled:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
 

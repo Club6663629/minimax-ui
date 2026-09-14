@@ -53,15 +53,20 @@ UPSCALE_TIERS = {
         "short_side": 1440,   # 2560×1440 等比，~1.9×
         "target_size": {"16:9": (2560, 1440), "9:16": (1440, 2560), "1:1": (1440, 1440)},
     },
+    "4k": {
+        "steps": 1,
+        "short_side": 2160,   # 3840×2160 等比，~2.8×
+        "target_size": {"16:9": (3840, 2160), "9:16": (2160, 3840), "1:1": (2160, 2160)},
+    },
 }
 # 768p 原生画布（0.98 百万像素）的各画幅尺寸，用于换算放大倍数
 SOURCE_SIZES = {"16:9": (1344, 768), "9:16": (768, 1344), "1:1": (976, 976)}
 # 7B 原生节点 SeedVR2VideoUpscaler.resolution 以 16:9 输出高度为基准；
 # 9:16/1:1 竖屏时以宽为短边，需取长边值才能得到「短边=1080/1440」的等比输出（官方模板说明）
 UPSCALE_7B_RESOLUTION = {
-    "16:9": {"1k": 1080, "2k": 1440},
-    "9:16": {"1k": 1920, "2k": 2560},
-    "1:1": {"1k": 1080, "2k": 1440},
+    "16:9": {"1k": 1080, "2k": 1440, "4k": 2160},
+    "9:16": {"1k": 1920, "2k": 2560, "4k": 3840},
+    "1:1": {"1k": 1080, "2k": 1440, "4k": 2160},
 }
 UPSCALE_FRAME_BATCH = 21       # 帧批（4n+1）
 UPSCALE_TEMPORAL_OVERLAP = 3   # 时域重叠帧数
@@ -230,6 +235,7 @@ def inject_upscale(
     tier: str,
     aspect_ratio: str,
     unet_name: Optional[str] = None,
+    src_abs_path: Optional[str] = None,
 ) -> dict:
     """超分（SeedVR2）定点注入，按模板节点体系自适应（就地修改并返回）。
 
@@ -307,6 +313,38 @@ def inject_upscale(
             inputs["height"] = src_h
         elif class_type == "SeedVR2LoadDiTModel" and unet_name:
             inputs["dit_name"] = unet_name
+        # ---- VOSR2 级联（VOSR2 1x 缓存节点 → RTX VSR）----
+        elif class_type == "VOSR2ModelLoader":
+            # model/dtype 必须取 205 /object_info 实查的 combo 值
+            inputs["model"] = "VOSR2"
+            inputs["dtype"] = "fp16"
+        elif class_type == "VOSR2UpscaleCached":
+            # L2 磁盘缓存节点：以下所有参与 key_payload 的参数必须跨档位完全一致，
+            # 否则 2K 与 4K 永不共享缓存键（seed 尤其禁止 random）
+            inputs["upscale"] = 1
+            inputs["seed"] = 42                       # 固定常量
+            inputs["color_alignment"] = "wavelet"
+            inputs["tile_size"] = 1024
+            inputs["tile_overlap"] = 32
+            inputs["vae_tile_size"] = 1024
+            inputs["vae_tile_overlap"] = 32
+            # 源片在超分节点本地的绝对路径（缺失/为空时节点自动回退 tensor 哈希）
+            inputs["source_path"] = src_abs_path or ""
+            # 固定常量：严禁把 tier/分辨率塞进来，否则键跨档不同、永不命中
+            inputs["source_extra"] = '{"src":"minimax-ui"}'
+            inputs["cache_dir"] = inputs.get("cache_dir") or "/data/ComfyUI/cache_vosr2"
+            inputs["model_tag"] = inputs.get("model_tag") or "VOSR2:fp16"
+            inputs["use_cache"] = True
+        # ---- RTX Video Super Resolution 管线 ----
+        elif class_type == "RTXVideoSuperResolution":
+            # RTX 节点 resize_type 是 DynamicCombo（ComfyUI 0.34 comfy_api.latest）：
+            # 提交格式 = 选中项 key 字符串 + 嵌套字段点号平铺（resize_type.width / .height）
+            # ComfyUI 内部 build_nested_inputs 会把平铺字段重组为 UpscaleTypedDict 传给 execute()
+            # 若塞整个 dict，live_inputs 匹配不到 option key，execute() 会报 missing resize_type
+            inputs["resize_type"] = "target dimensions"
+            inputs["resize_type.width"] = target_w
+            inputs["resize_type.height"] = target_h
+            inputs["quality"] = "ULTRA"
 
     # 3B INT8 KSampler 管线：multiplier 放大后追加 ImageScale 精确对齐目标尺寸
     # （768p 源片 1344x768 非严格 16:9，multiplier 产出 1890x1080 ≠ 1920x1080）

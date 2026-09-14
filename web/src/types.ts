@@ -84,6 +84,7 @@ export interface Pricing {
   cost_768p_15s: number;
   cost_1k_extra: number;
   cost_2k_extra: number;
+  cost_4k_extra: number;
   cloud_enabled: boolean;
   upscale_enabled: boolean;
   packages: Package[];
@@ -159,6 +160,7 @@ export const RES_LABEL: Record<string, string> = {
   "768p": "768P",
   "1k": "1K",
   "2k": "2K",
+  "4k": "4K",
 };
 
 export const MODE_LABEL: Record<Task["mode"], string> = {

@@ -47,7 +47,7 @@ const SCENES = [
   { value: "music", label: "音乐创作" },
 ] as const;
 type Scene = (typeof SCENES)[number]["value"];
-const RESOLUTIONS = ["768p", "1k", "2k"] as const;
+const RESOLUTIONS = ["768p", "2k", "4k"] as const;
 type Resolution = (typeof RESOLUTIONS)[number];
 const MAX_REFS = 9; // 全能参考官方上限 9 个（图片/视频/音频混存）
 const MAX_VIDEO_REFS = 3; // 官方上限 3 个参考视频
@@ -332,7 +332,7 @@ function SettingsMenu({
 /** 任务卡片 */
 function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onChanged: () => void; pricing: Pricing | null; onRefreshUser?: () => void }) {
   const [retrying, setRetrying] = useState(false);
-  const [upgrading, setUpgrading] = useState<"1k" | "2k" | null>(null);
+  const [upgrading, setUpgrading] = useState<"1k" | "2k" | "4k" | null>(null);
 
   async function retry() {
     setRetrying(true);
@@ -346,7 +346,7 @@ function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onC
     }
   }
 
-  async function upgrade(res: "1k" | "2k") {
+  async function upgrade(res: "1k" | "2k" | "4k") {
     setUpgrading(res);
     try {
       await api.upgradeVideo(task.id, res);
@@ -464,8 +464,8 @@ function TaskCard({ task, onChanged, pricing, onRefreshUser }: { task: Task; onC
             <div className="flex items-center gap-2 border-t border-white/[0.06] pt-2">
               <ArrowUpCircle size={13} className="text-violet-400" />
               <span className="text-xs text-zinc-500">高清升级：</span>
-              {(["1k", "2k"] as const).map((res) => {
-                const extraCost = res === "1k" ? (pricing?.cost_1k_extra ?? 8) : (pricing?.cost_2k_extra ?? 15);
+              {(["2k", "4k"] as const).map((res) => {
+                const extraCost = res === "2k" ? (pricing?.cost_2k_extra ?? 15) : (pricing?.cost_4k_extra ?? 30);
                 const hasUpgraded = Object.keys(task.upscale_urls).includes(res);
                 return (
                   <button
@@ -568,8 +568,9 @@ export default function CreatePage() {
       15: pricing.cost_768p_15s,
     };
     let c = _BASE[duration] ?? pricing.cost_768p_10s;
-    if (resolution === "1k") c += pricing.cost_1k_extra;
+    if ((resolution as string) === "1k") c += pricing.cost_1k_extra;
     if (resolution === "2k") c += pricing.cost_2k_extra;
+    if (resolution === "4k") c += pricing.cost_4k_extra;
     return c;
   }, [pricing, duration, resolution]);
 

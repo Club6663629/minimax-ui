@@ -54,13 +54,15 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
 
     if task.status == "done":
         # 检查各分辨率成片是否存在
-        for res, suffix in (("2k", "_2k"), ("1k", "_1k")):
+        for res, suffix in (("4k", "_4k"), ("2k", "_2k"), ("1k", "_1k")):
             path = OUTPUT_DIR / f"{task.id}{suffix}.mp4"
             if path.exists():
                 upscale_urls[res] = f"/files/video/{task.id}?resolution={res}"
 
         # video_url 指向最高可用分辨率
-        if (OUTPUT_DIR / f"{task.id}_2k.mp4").exists():
+        if (OUTPUT_DIR / f"{task.id}_4k.mp4").exists():
+            video_url = f"/files/video/{task.id}?resolution=4k"
+        elif (OUTPUT_DIR / f"{task.id}_2k.mp4").exists():
             video_url = f"/files/video/{task.id}?resolution=2k"
         elif (OUTPUT_DIR / f"{task.id}_1k.mp4").exists():
             video_url = f"/files/video/{task.id}?resolution=1k"

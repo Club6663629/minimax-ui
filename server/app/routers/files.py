@@ -44,13 +44,13 @@ def download_video(
     if task.status != "done" or not task.video_path:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "视频尚未生成完成")
     # 按分辨率定位文件
-    if resolution in ("1k", "2k"):
+    if resolution in ("1k", "2k", "4k"):
         path = OUTPUT_DIR / f"{task_id}_{resolution}.mp4"
     else:
         path = Path(task.video_path)
     if not path.exists():
         raise HTTPException(status.HTTP_410_GONE, "视频文件已失效")
-    suffix = f"_{resolution}" if resolution in ("1k", "2k") else ""
+    suffix = f"_{resolution}" if resolution in ("1k", "2k", "4k") else ""
     return FileResponse(
         path, media_type="video/mp4", filename=f"h3_video_{task.id}{suffix}.mp4",
     )

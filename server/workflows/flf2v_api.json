@@ -52,28 +52,10 @@
   "9005": {
     "class_type": "KSamplerSelect",
     "inputs": {
-      "sampler_name": "res_multistep"
+      "sampler_name": "euler"
     },
     "_meta": {
       "title": "KSamplerSelect"
-    }
-  },
-  "9006": {
-    "class_type": "BasicScheduler",
-    "inputs": {
-      "scheduler": "simple",
-      "steps": [
-        "9018",
-        0
-      ],
-      "denoise": 1,
-      "model": [
-        "9017",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "BasicScheduler"
     }
   },
   "9007": {
@@ -92,7 +74,7 @@
         0
       ],
       "sigmas": [
-        "9006",
+        "9503",
         0
       ],
       "latent_image": [
@@ -112,7 +94,7 @@
         0
       ],
       "model": [
-        "9017",
+        "9502",
         0
       ]
     },
@@ -224,60 +206,6 @@
       "title": "Float (duration)"
     }
   },
-  "9016": {
-    "class_type": "LoraLoaderModelOnly",
-    "inputs": {
-      "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-      "strength_model": 1,
-      "model": [
-        "9009",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "LoraLoaderModelOnly"
-    }
-  },
-  "9017": {
-    "class_type": "ComfySwitchNode",
-    "inputs": {
-      "switch": [
-        "9021",
-        0
-      ],
-      "on_false": [
-        "9009",
-        0
-      ],
-      "on_true": [
-        "9016",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "If/Else Switch (Model)"
-    }
-  },
-  "9018": {
-    "class_type": "ComfySwitchNode",
-    "inputs": {
-      "switch": [
-        "9021",
-        0
-      ],
-      "on_false": [
-        "9019",
-        0
-      ],
-      "on_true": [
-        "9020",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "If/Else Switch (Steps)"
-    }
-  },
   "9019": {
     "class_type": "PrimitiveInt",
     "inputs": {
@@ -296,15 +224,6 @@
     },
     "_meta": {
       "title": "PrimitiveInt"
-    }
-  },
-  "9021": {
-    "class_type": "PrimitiveBoolean",
-    "inputs": {
-      "value": true
-    },
-    "_meta": {
-      "title": "Boolean (Enable Lightning LoRA)"
     }
   },
   "92": {
@@ -334,8 +253,8 @@
   "115": {
     "class_type": "ResolutionSelector",
     "inputs": {
-      "aspect_ratio": "1:1 (Square)",
-      "megapixels": 0.4,
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 0.98,
       "multiple": 32
     },
     "_meta": {
@@ -363,6 +282,49 @@
     },
     "_meta": {
       "title": "GetImageSize"
+    }
+  },
+  "9500": {
+    "class_type": "MiniMaxH3SigmaShift",
+    "inputs": {
+      "model": [
+        "9009",
+        0
+      ],
+      "shift_video": 6.0,
+      "shift_audio": 3.0
+    },
+    "_meta": {
+      "title": "MiniMaxH3SigmaShift"
+    }
+  },
+  "9502": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "9500",
+        0
+      ],
+      "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "9503": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "9502",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "BasicScheduler"
     }
   }
 }
