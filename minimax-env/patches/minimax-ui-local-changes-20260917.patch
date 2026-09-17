@@ -1,0 +1,2014 @@
+diff --git a/.gitignore b/.gitignore
+index 694c88f..cb54980 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -18,3 +18,7 @@ workflow_templates/*
+ # Agent 本地技能（从 MiniMax-H3 外部仓库安装，可重新拉取，不入库）
+ .claude/
+ 
++
++# 云实例真实配置（含 token，不入库）
++server/clouds/*.env
++!server/clouds/example.env
+diff --git a/deploy/autodl/README.md b/deploy/autodl/README.md
+new file mode 100644
+index 0000000..e09f867
+--- /dev/null
++++ b/deploy/autodl/README.md
+@@ -0,0 +1,53 @@
++# 云端实例（AutoDL）接入说明
++
++配套功能：Worker 池页「平台 / 实例 / 状态 / 开机 · 关机」按钮（手动开关机）。
++设计文档：`/data/memory/autodl-开关机-方案V2-20260915.md`（服务器 45 的 `/data/memory/`）。
++
++## 1. 云端一次性准备：开机自启脚本
++
++把 `deploy/autodl/start_comfy.sh` 放到**云端数据盘**（AutoDL 数据盘 = `/root/autodl-fs`，实例重启不丢）：
++
++```bash
++# 在云端实例上
++cp start_comfy.sh /root/autodl-fs/start_comfy.sh
++chmod +x /root/autodl-fs/start_comfy.sh
++```
++
++脚本行为：幂等（8188 已在监听则直接退出）→ `nohup ./venv/bin/python main.py --listen 0.0.0.0 --port 8188 --use-sage-attention`（工作目录 `/root/autodl-fs/ComfyUI`，日志追加 `/root/autodl-fs/comfy.log`）→ 最多等 120s 端口就绪。
++实测：ComfyUI 从启动到端口就绪约 **94 秒**。
++
++> 幂等判定用「端口是否监听」而不是 `pgrep -f main.py`：远程执行时命令行字符串里含关键字会让 pgrep 误判成"已在运行"（实测踩过）。
++
++## 2. 控制面配置：clouds/*.env（一台实例一个文件，600 权限，不入 git）
++
++```bash
++cd server/clouds
++cp example.env autodl-<instance_uuid>.env
++# 填 CLOUD_API_TOKEN / CLOUD_INSTANCE_UUID / CLOUD_WORKER_URL，然后
++chmod 600 autodl-<instance_uuid>.env
++```
++
++关键点：
++- `CLOUD_WORKER_URL` 必须与 `COMFYUI_WORKERS` 里该节点 URL **完全一致**（绑定键；对不上后端只告警、按钮不可用，防止误操作其它实例）。
++- `CLOUD_BOOT_COMMAND=bash /root/autodl-fs/start_comfy.sh`：随 `power_on` 一起下发，开机后自动拉起 ComfyUI。
++- 主 `.env` 不需要任何改动；`server/clouds/` 不存在时 = 单机部署（前端不渲染开关机按钮）。
++
++## 3. 反向隧道（固定 IP 的云端实例）
++
++控制面 gpu05 上 `comfyui-cloud-tunnel.service`（systemd，`Restart=always`）把云端 8188 映射到本地 8183：
++
++```
++autossh -M 0 -N -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
++  -L 0.0.0.0:8183:127.0.0.1:8188 -p 38561 root@connect.bjb2.seetacloud.com
++```
++
++实例开机后隧道自动重连，无需重启后端。
++
++## 4. 前端
++
++Worker 池页面：非云节点 `platform=null` → 不渲染任何按钮；云节点显示 `autodl:pro-xxxxxxxxxxxx` / 实例状态，并提供「开机」「关机」（点击即执行，带二次确认）。
++
++## 5. 后端接口
++
++- `GET  /api/admin/clouds`：实例列表（状态 / 规格白名单字段；**绝不返回 token**）
++- `POST /api/admin/clouds/power` `{"url": "<worker url>", "action": "on"|"off"}`：手动开/关机；实例 uuid 由后端按配置自查；平台失败原样透传 `msg` + `request_id`
+diff --git a/deploy/autodl/start_comfy.sh b/deploy/autodl/start_comfy.sh
+new file mode 100644
+index 0000000..79bb892
+--- /dev/null
++++ b/deploy/autodl/start_comfy.sh
+@@ -0,0 +1,24 @@
++#!/bin/bash
++# 开机自动拉起 ComfyUI（由 AutoDL start_command 调用；幂等，可重复执行）
++# 节点：RTX 5090 / 端口 8188 / SageAttention；日志 /root/autodl-fs/comfy.log
++# 创建：2026-09-15（SAI）；依赖 /root/autodl-fs/ComfyUI
++# 幂等判定用"端口是否已监听"（不用 pgrep -f：远程命令字符串里含关键字会误判）
++LOG=/root/autodl-fs/comfy.log
++COMFY_DIR=/root/autodl-fs/ComfyUI
++port_up() { (exec 3<>/dev/tcp/127.0.0.1/8188) 2>/dev/null; }
++cd "$COMFY_DIR" || { echo "$(date '+%F %T') start_comfy.sh: 目录不存在 $COMFY_DIR" >> "$LOG"; exit 1; }
++if port_up; then
++  echo "$(date '+%F %T') start_comfy.sh: 8188 已在监听，ComfyUI 无需重启" >> "$LOG"
++  exit 0
++fi
++echo "$(date '+%F %T') start_comfy.sh: 启动 ComfyUI" >> "$LOG"
++setsid nohup ./venv/bin/python main.py --listen 0.0.0.0 --port 8188 --use-sage-attention >> "$LOG" 2>&1 < /dev/null &
++for i in $(seq 1 60); do
++  if port_up; then
++    echo "$(date '+%F %T') start_comfy.sh: 端口 8188 就绪（约 $((i*2)) 秒）" >> "$LOG"
++    exit 0
++  fi
++  sleep 2
++done
++echo "$(date '+%F %T') start_comfy.sh: 120 秒内端口未就绪" >> "$LOG"
++exit 1
+diff --git a/server/app/config.py b/server/app/config.py
+index 57a12e7..84b432a 100644
+--- a/server/app/config.py
++++ b/server/app/config.py
+@@ -35,6 +35,10 @@ class Settings(BaseSettings):
+     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
+     comfyui_input_dir: str = "/data/ComfyUI/input"
+ 
++    # ---- 云端实例（远程开机/关机）----
++    # clouds/*.env 所在目录（一台实例一个文件）；留空 = <server>/clouds
++    clouds_dir: str = ""
++
+     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
+     minimax_api_key: str = ""
+     minimax_api_base: str = "https://api.minimax.cn"
+diff --git a/server/app/routers/admin.py b/server/app/routers/admin.py
+index 2302f97..49e47cb 100644
+--- a/server/app/routers/admin.py
++++ b/server/app/routers/admin.py
+@@ -1,5 +1,7 @@
+ """管理后台路由：用户管理 / 兑换码 / 全站任务 / 用量统计。"""
++import logging
+ import secrets
++import subprocess
+ from datetime import datetime
+ from typing import Optional
+ 
+@@ -10,12 +12,18 @@ from sqlalchemy.orm import Session
+ from ..auth import get_admin
+ from ..database import get_db
+ from ..models import CreditLog, RedeemCode, Task, User
+-from ..schemas import AdminAdjustIn, AdminUserOut, GenCodesIn, RedeemCodeOut, WorkerOut, WorkerPoolOut
++from ..schemas import (
++    AdminAdjustIn, AdminUserOut, CloudInfoOut, CloudPowerIn, CloudPowerOut,
++    GenCodesIn, RedeemCodeOut, WorkerOut, WorkerPoolOut,
++)
+ from ..services.billing import add_credits
++from ..services.clouds import registry
++from ..services.clouds.base import CloudAPIError
+ from ..services.pool import pool
+ from .serialize import serialize_task
+ 
+ router = APIRouter(prefix="/api/admin", tags=["admin"])
++logger = logging.getLogger(__name__)
+ 
+ 
+ # ---- 用户管理 ----
+@@ -165,3 +173,89 @@ def stats(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
+         "failed": status_counts.get("failed", 0),
+         "credits_consumed": int(consumed),
+     }
++
++
++# ---- 云端实例（远程开机 / 关机）----
++@router.get("/clouds", response_model=list[CloudInfoOut])
++async def list_clouds(_admin: User = Depends(get_admin)):
++    """云实例只读信息（状态 / 规格）。绝不返回 token 等凭据。"""
++    out: list[CloudInfoOut] = []
++    for inst in registry.all_instances():
++        await registry.refresh_status(inst)
++        await registry.refresh_spec(inst)
++        out.append(CloudInfoOut(**inst.to_dict()))
++    return out
++
++
++def _tunnel(action: str) -> None:
++    """开关机成功后联动云端 SSH 隧道（方案A，2026-09-16）。
++
++    背景：实例关机期间 autossh 会持续重连（实测 8 小时 98 次 starting ssh，
++    全部是 Connection refused），且开机后要等下一个 poll 拍才恢复（实测白等 2.9 分钟）。
++    所以：开机成功后主动 start，关机成功后主动 stop，避免关机期无意义重连。
++
++    硬约束：绝不影响开关机 API 返回——任何异常只记日志，不抛出。
++    """
++    unit = "comfyui-cloud-tunnel"
++    verb = "start" if action == "on" else "stop"
++    try:
++        proc = subprocess.run(
++            ["systemctl", verb, unit],
++            timeout=10, capture_output=True, text=True,
++        )
++        if verb == "stop" and proc.returncode == 0:
++            # autossh 收到 SIGTERM 会以非 0 退出，systemd 会把 unit 记成 failed（监控里看着像故障），清掉残留状态
++            subprocess.run(["systemctl", "reset-failed", unit],
++                           timeout=10, capture_output=True, text=True)
++        if proc.returncode == 0:
++            logger.info("隧道 %s 已下发（unit=%s）", verb, unit)
++        else:
++            logger.warning("隧道 %s 失败 rc=%s err=%s", verb, proc.returncode,
++                           (proc.stderr or "").strip())
++    except Exception as exc:  # noqa: BLE001 - 隧道失败不影响开关机结果
++        logger.warning("隧道 %s 异常：%r", verb, exc)
++
++
++@router.post("/clouds/power", response_model=CloudPowerOut)
++async def cloud_power(body: CloudPowerIn, _admin: User = Depends(get_admin)):
++    """手动开 / 关机。
++
++    范围（用户 2026-09-15 明确）：点按钮直接执行——**不做任务检测拦截、不做中断任务处理**；
++    开机后"开机即 worker"由池心跳自愈完成（不改派单逻辑）。
++
++    - 只接受节点 url，实例 uuid 由后端按 clouds/*.env 自查（杜绝操作配置外的实例）
++    - 平台失败原样透传 msg + request_id（无卡 / 授权失败 / 实例不存在都能看到原因）
++    """
++    node = pool.get_node_by_url(body.url)
++    if node is None:
++        raise HTTPException(status.HTTP_404_NOT_FOUND, "未知节点 url")
++    inst = getattr(node, "cloud", None)
++    if inst is None:
++        raise HTTPException(
++            status.HTTP_400_BAD_REQUEST,
++            detail={"ok": False, "error_code": "NOT_CLOUD",
++                    "msg": "该节点不是云实例（clouds/ 未配置，或 CLOUD_WORKER_URL 与池中 url 不一致）"},
++        )
++    if not inst.controllable:
++        raise HTTPException(
++            status.HTTP_400_BAD_REQUEST,
++            detail={"ok": False, "error_code": "NO_CREDENTIAL",
++                    "msg": "云实例缺少 CLOUD_API_TOKEN / CLOUD_INSTANCE_UUID"},
++        )
++    try:
++        result = await (registry.power_on(inst) if body.action == "on" else registry.power_off(inst))
++    except CloudAPIError as exc:
++        raise HTTPException(exc.http_status, detail=exc.detail(inst.id))
++    # 方案A：开关机成功后联动隧道（失败仅记日志，不影响本接口返回）
++    _tunnel(body.action)
++    return CloudPowerOut(
++        ok=True,
++        action=body.action,
++        instance=inst.id,
++        status=str(result.get("status") or ""),
++        instance_status=result.get("instance_status"),
++        eta_s=result.get("eta_s"),
++        already=bool(result.get("already")),
++        msg=("开机指令已下发，云端启动中（就绪后自动接单）" if body.action == "on"
++             else "关机指令已下发，节点约 30s 内自动摘牌"),
++    )
+diff --git a/server/app/routers/videos.py b/server/app/routers/videos.py
+index 660a466..7f0ecd3 100644
+--- a/server/app/routers/videos.py
++++ b/server/app/routers/videos.py
+@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
+ from ..auth import get_current_user
+ from ..config import OUTPUT_DIR, STAGING_DIR, settings
+ from ..database import get_db
+-from ..models import Task, Upload, User
++from ..models import CreditLog, Task, Upload, User
+ from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
+ from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
+ from .serialize import serialize_task
+@@ -205,11 +205,47 @@ def upgrade_video(
+ 
+ @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+ def delete_video(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
++    """删除任务（含其高清升级子任务）。
++
++    credit_logs.task_id 外键（fk_2）没有 ON DELETE CASCADE，直接删任务会抛
++    MySQL 1451 变成 500；这里先把这些流水的 task_id 置 NULL（保留财务台账与金额），
++    再在同一事务内删除任务本身及其子任务。
++    """
+     task = _get_owned_task(task_id, user, db)
+-    if task.status in ("enhancing", "generating_768p", "upscaling"):
+-        raise HTTPException(status.HTTP_409_CONFLICT, "任务执行中，暂不可删除")
+-    db.delete(task)
+-    db.commit()
++
++    # 待删集合：自身 + 以 parent_task_id 指向它的子任务（含多级）
++    ids = [task.id]
++    frontier = [task.id]
++    while frontier:
++        rows = db.query(Task.id).filter(Task.parent_task_id.in_(frontier)).all()
++        kids = [r[0] for r in rows if r[0] not in ids]
++        ids.extend(kids)
++        frontier = kids
++
++    targets = db.query(Task).filter(Task.id.in_(ids)).all()
++
++    running = [t.id for t in targets if t.status in ("enhancing", "generating_768p", "upscaling")]
++    if running:
++        raise HTTPException(
++            status.HTTP_409_CONFLICT,
++            "任务执行中，暂不可删除（#" + "、#".join(str(i) for i in running) + "）",
++        )
++
++    try:
++        # 财务台账保留：仅解除对任务的引用（task_id 可空），解除外键阻塞
++        db.query(CreditLog).filter(CreditLog.task_id.in_(ids)).update(
++            {CreditLog.task_id: None}, synchronize_session=False
++        )
++        # 子任务先删，再删主任务
++        for t in sorted(targets, key=lambda x: 0 if x.id == task.id else 1):
++            db.delete(t)
++        db.commit()
++    except Exception as exc:  # noqa: BLE001
++        db.rollback()
++        raise HTTPException(
++            status.HTTP_500_INTERNAL_SERVER_ERROR,
++            "删除任务失败：" + type(exc).__name__ + ": " + str(exc),
++        ) from exc
+ 
+ 
+ def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
+diff --git a/server/app/schemas.py b/server/app/schemas.py
+index be1b708..4bca6d2 100644
+--- a/server/app/schemas.py
++++ b/server/app/schemas.py
+@@ -165,6 +165,19 @@ class WorkerOut(BaseModel):
+     busy: bool
+     task_id: Optional[int] = None
+     consecutive_fails: int
++    # 云端实例（clouds/*.env）；非云节点为 None / false
++    platform: Optional[str] = None
++    instance_id: Optional[str] = None      # 形如 autodl:pro-7889ca37d10f
++    instance_uuid: Optional[str] = None
++    instance_status: Optional[str] = None  # running / shutdown / ...
++    op_state: Optional[str] = None         # idle | starting | stopping
++    power_controllable: bool = False
++    # 最近一次手动开关机结果（失败原因持久化；白名单字段，无凭据）
++    last_op_action: Optional[str] = None   # on | off | status
++    last_op_ok: Optional[bool] = None
++    last_op_code: Optional[str] = None
++    last_op_msg: Optional[str] = None
++    last_op_at: Optional[float] = None
+ 
+ 
+ class WorkerPoolOut(BaseModel):
+@@ -173,3 +186,40 @@ class WorkerPoolOut(BaseModel):
+     queued: int                  # 待领取（含增强中）
+     generating: int              # 生成阶段（排队+执行）
+     upscaling: int               # 超分阶段（排队+执行）
++
++
++# ---- 云端实例（远程开机/关机）----
++class CloudInfoOut(BaseModel):
++    cloud_id: str
++    platform: str
++    instance_id: str
++    instance_uuid: str
++    worker_url: str
++    display_name: str
++    instance_status: Optional[str] = None
++    op_state: str = "idle"
++    worker_healthy: bool = False
++    power_controllable: bool = False
++    allow_power_off: bool = True
++    boot_command: str = ""
++    ready_timeout: int = 600
++    last_error: str = ""
++    last_op: dict = {}
++    spec: dict = {}
++
++
++class CloudPowerIn(BaseModel):
++    url: str
++    action: Literal["on", "off"]
++
++
++class CloudPowerOut(BaseModel):
++    ok: bool = True
++    action: str
++    instance: str
++    status: str = ""
++    instance_status: Optional[str] = None
++    eta_s: Optional[int] = None
++    already: bool = False
++    msg: str = ""
++    request_id: str = ""
+diff --git a/server/app/services/clouds/__init__.py b/server/app/services/clouds/__init__.py
+new file mode 100644
+index 0000000..3d44585
+--- /dev/null
++++ b/server/app/services/clouds/__init__.py
+@@ -0,0 +1,8 @@
++"""云平台远程开关机（多平台可扩）。
++
++导出：CloudInstance / CloudProvider / CloudAPIError / registry
++"""
++from . import registry  # noqa: F401
++from .base import CloudAPIError, CloudInstance, CloudProvider  # noqa: F401
++
++__all__ = ["registry", "CloudInstance", "CloudProvider", "CloudAPIError"]
+diff --git a/server/app/services/clouds/autodl.py b/server/app/services/clouds/autodl.py
+new file mode 100644
+index 0000000..b009412
+--- /dev/null
++++ b/server/app/services/clouds/autodl.py
+@@ -0,0 +1,108 @@
++"""AutoDL 实例开放 API（https://www.autodl.com/docs/instance_pro_api/）。
++
++实测要点（2026-09-15 官方文档 + 真实请求核对，详见《autodl-开关机-API错误返回实测》）：
++- 鉴权头 `Authorization: <token>`（**不带 Bearer**）
++- 统一返回体 {"code": "Success"|..., "data": ..., "msg": ..., "request_id": ...}
++- `/status`、`/snapshot` 是 **GET + query**（instance_uuid）；用 POST 会 404
++- `/power_on` body 需 {instance_uuid, payload: "gpu"}（payload 必填），start_command 选填
++- `/power_off` body 仅 {instance_uuid}
++- **成败只看 body 的 code，不能看 HTTP 状态码**（失败也返回 HTTP 200）
++- snapshot 含 root_password/jupyter_token 等敏感字段 → 只取白名单字段对外
++"""
++from __future__ import annotations
++
++import logging
++from typing import Any, Dict, Optional
++
++import httpx
++
++from .base import CloudAPIError, CloudInstance, CloudProvider
++
++logger = logging.getLogger(__name__)
++
++# snapshot 白名单（**绝不透传 root_password / jupyter_token / ssh_command 等凭据**）
++_SNAPSHOT_FIELDS = (
++    ("region_sign", "region"),
++    ("snapshot_gpu_alias_name", "gpu"),
++    ("payg_price", "payg_price"),
++    ("origin_pay_price", "origin_pay_price"),
++    ("cpu_arch", "cpu_arch"),
++    ("chip_corp", "chip_corp"),
++    ("expand_system_disk_size", "system_disk_bytes"),
++)
++
++_CODE_MAP = {
++    "AuthorizeFailed": "AUTH_FAILED",
++    "RecordNotFoundError": "NOT_FOUND",
++    "InternalError": "PLATFORM_ERROR",
++    "ParamError": "BAD_REQUEST",
++}
++
++
++def _map_error_code(platform_code: str, msg: str) -> str:
++    """平台 code → 我方 error_code（UI 文案映射见实测文档 §2.3）。"""
++    if any(k in msg for k in ("暂无库存", "无卡", "库存")):
++        return "NO_STOCK"
++    return _CODE_MAP.get(platform_code, "PLATFORM_ERROR")
++
++
++class AutoDLProvider(CloudProvider):
++    name = "autodl"
++    TIMEOUT = 20
++
++    def headers(self, inst: CloudInstance) -> Dict[str, str]:
++        return {"Authorization": inst.api_token, "Content-Type": "application/json"}
++
++    async def _call(self, inst: CloudInstance, method: str, path: str,
++                    params: Optional[dict] = None, json_body: Optional[dict] = None) -> Any:
++        url = f"{inst.api_base.rstrip('/')}{path}"
++        try:
++            async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
++                resp = await client.request(method, url, params=params, json=json_body,
++                                            headers=self.headers(inst))
++        except httpx.TimeoutException:
++            raise CloudAPIError(f"平台接口超时（{path}）", "UPSTREAM_TIMEOUT", http_status=504)
++        except httpx.HTTPError as exc:
++            raise CloudAPIError(f"平台网络错误：{exc.__class__.__name__}", "UPSTREAM_ERROR",
++                                http_status=502)
++        try:
++            body = resp.json()
++        except Exception:
++            raise CloudAPIError(f"平台返回非 JSON（HTTP {resp.status_code}）", "UPSTREAM_ERROR",
++                                http_status=502)
++        code = str(body.get("code") or "")
++        request_id = str(body.get("request_id") or "")
++        if code.lower() != "success":
++            msg = str(body.get("msg") or f"平台返回 code={code or resp.status_code}")
++            # 日志不打印 token / 请求体凭据；只记实例与 request_id
++            logger.warning("AutoDL API 失败: %s %s instance=%s code=%s request_id=%s msg=%s",
++                           method, path, inst.instance_uuid, code, request_id, msg)
++            raise CloudAPIError(msg, _map_error_code(code, msg), request_id, http_status=502)
++        return body.get("data")
++
++    async def status(self, inst: CloudInstance) -> str:
++        data = await self._call(inst, "GET", "/api/v1/dev/instance/pro/status",
++                                params={"instance_uuid": inst.instance_uuid})
++        return str(data)
++
++    async def snapshot(self, inst: CloudInstance) -> Dict[str, Any]:
++        data = await self._call(inst, "GET", "/api/v1/dev/instance/pro/snapshot",
++                                params={"instance_uuid": inst.instance_uuid})
++        if not isinstance(data, dict):
++            return {}
++        return {out_key: data.get(api_key) for api_key, out_key in _SNAPSHOT_FIELDS}
++
++    async def power_on(self, inst: CloudInstance, start_command: Optional[str] = None) -> None:
++        # payload 必填；本地先断言，避免"漏参数"被平台伪装成"无库存"（实测 #5）
++        assert inst.instance_uuid, "缺少 instance_uuid"
++        assert inst.api_token, "缺少 CLOUD_API_TOKEN"
++        body: Dict[str, Any] = {"instance_uuid": inst.instance_uuid, "payload": "gpu"}
++        if start_command:
++            body["start_command"] = start_command
++        await self._call(inst, "POST", "/api/v1/dev/instance/pro/power_on", json_body=body)
++
++    async def power_off(self, inst: CloudInstance) -> None:
++        assert inst.instance_uuid, "缺少 instance_uuid"
++        assert inst.api_token, "缺少 CLOUD_API_TOKEN"
++        await self._call(inst, "POST", "/api/v1/dev/instance/pro/power_off",
++                         json_body={"instance_uuid": inst.instance_uuid})
+diff --git a/server/app/services/clouds/base.py b/server/app/services/clouds/base.py
+new file mode 100644
+index 0000000..638c4bc
+--- /dev/null
++++ b/server/app/services/clouds/base.py
+@@ -0,0 +1,117 @@
++"""云实例模型与 Provider 抽象（多平台可扩：autodl / ali / tencent / volcano ...）。
++
++设计依据《autodl-开关机-方案V2-20260915.md》：
++- 一台云端实例 = 一个 clouds/<platform>-<uuid>.env（独立 env，主 .env 完全不动）
++- Worker 池按 CLOUD_WORKER_URL 把实例绑定到节点；url 对不上只告警、不生效
++- 凭据仅在后端内存使用：不回传前端、不打日志（日志只打 instance id / request_id）
++"""
++from __future__ import annotations
++
++import asyncio
++import time
++from dataclasses import dataclass, field
++from typing import Any, Dict, Optional
++
++
++class CloudAPIError(Exception):
++    """云平台 API 失败（code != Success / 网络异常 / 超时）。
++
++    平台原文 msg + request_id 透传给调用方，前端直显，不翻译不吞。
++    """
++
++    def __init__(self, msg: str, code: str = "PLATFORM_ERROR",
++                 request_id: str = "", http_status: int = 502):
++        super().__init__(msg)
++        self.msg = msg
++        self.code = code
++        self.request_id = request_id
++        self.http_status = http_status
++
++    def detail(self, instance_id: str) -> Dict[str, Any]:
++        return {
++            "ok": False,
++            "error_code": self.code,
++            "msg": self.msg,
++            "request_id": self.request_id,
++            "instance": instance_id,
++        }
++
++
++@dataclass
++class CloudInstance:
++    """一台云实例（运行态在内存，不持久化）。"""
++
++    id: str                      # autodl:pro-7889ca37d10f（UI 展示"平台:实例ID"）
++    platform: str                # autodl
++    instance_uuid: str
++    worker_url: str              # 必须与 COMFYUI_WORKERS 中 url 严格一致
++    api_base: str = ""
++    api_token: str = ""
++    display_name: str = ""
++    boot_command: str = ""
++    ready_timeout: int = 600
++    ready_poll: int = 10
++    allow_power_off: bool = True
++    env_file: str = ""
++
++    # ---- 运行态 ----
++    instance_status: Optional[str] = None   # running / shutdown / ...
++    op_state: str = "idle"                  # idle | starting | stopping
++    last_error: str = ""
++    last_op: Dict[str, Any] = field(default_factory=dict)  # 最近一次开关机/状态查询结果（白名单，无凭据）
++    last_op_at: float = 0.0
++    last_status_at: float = 0.0
++    last_spec_at: float = 0.0
++    spec: Dict[str, Any] = field(default_factory=dict)
++    node: Any = None                        # WorkerNode（bind_nodes 时挂上）
++    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
++
++    @property
++    def controllable(self) -> bool:
++        return bool(self.api_token and self.instance_uuid)
++
++    @property
++    def worker_healthy(self) -> bool:
++        return bool(self.node is not None and getattr(self.node, "healthy", False))
++
++    def to_dict(self) -> Dict[str, Any]:
++        return {
++            "cloud_id": self.id,
++            "platform": self.platform,
++            "instance_id": self.id,          # 形如 autodl:pro-7889ca37d10f
++            "instance_uuid": self.instance_uuid,
++            "worker_url": self.worker_url,
++            "display_name": self.display_name or self.id,
++            "instance_status": self.instance_status,
++            "op_state": self.op_state,
++            "worker_healthy": self.worker_healthy,
++            "power_controllable": self.controllable,
++            "allow_power_off": self.allow_power_off,
++            "boot_command": self.boot_command,
++            "ready_timeout": self.ready_timeout,
++            "last_error": self.last_error,
++            "last_op": self.last_op,
++            "spec": self.spec,
++        }
++
++
++class CloudProvider:
++    """平台 Provider 抽象：实现 status / power_on / power_off / snapshot。"""
++
++    name = "base"
++
++    def headers(self, inst: CloudInstance) -> Dict[str, str]:
++        raise NotImplementedError
++
++    async def status(self, inst: CloudInstance) -> str:
++        raise NotImplementedError
++
++    async def power_on(self, inst: CloudInstance, start_command: Optional[str] = None) -> None:
++        raise NotImplementedError
++
++    async def power_off(self, inst: CloudInstance) -> None:
++        raise NotImplementedError
++
++    async def snapshot(self, inst: CloudInstance) -> Dict[str, Any]:
++        """只读规格查询（默认空实现，平台可选）。"""
++        return {}
+diff --git a/server/app/services/clouds/registry.py b/server/app/services/clouds/registry.py
+new file mode 100644
+index 0000000..38a017e
+--- /dev/null
++++ b/server/app/services/clouds/registry.py
+@@ -0,0 +1,256 @@
++"""clouds/*.env 注册表：配置加载 / Worker 节点绑定 / 状态刷新 / 开关机编排。
++
++- 目录默认 `server/clouds/`，可用主 .env 的 CLOUDS_DIR 覆盖（部署可指向持久盘）
++- 目录不存在 = 无云节点 → 行为与单机部署完全一致（51/246/205 不渲染开关机按钮）
++- 实例与节点的映射键是 CLOUD_WORKER_URL（必须与 COMFYUI_WORKERS 里的 url 严格一致），
++  因此接口只接受节点 url，杜绝"传任意 uuid 去关别人机器"
++"""
++from __future__ import annotations
++
++import asyncio
++import logging
++import time
++from pathlib import Path
++from typing import Dict, List, Optional
++
++from pydantic import BaseModel
++
++from ...config import settings
++from .autodl import AutoDLProvider
++from .base import CloudAPIError, CloudInstance, CloudProvider
++
++logger = logging.getLogger(__name__)
++
++DEFAULT_CLOUDS_DIR = Path(__file__).resolve().parents[3] / "clouds"
++
++_PROVIDERS: Dict[str, CloudProvider] = {"autodl": AutoDLProvider()}
++
++_instances: List[CloudInstance] = []
++_by_url: Dict[str, CloudInstance] = {}
++_loaded_dir: Optional[str] = None
++
++
++class CloudEnvConfig(BaseModel):
++    """clouds/<platform>-<uuid>.env 字段定义（见 clouds/example.env）。"""
++
++    CLOUD_ID: str = ""
++    CLOUD_PLATFORM: str = "autodl"
++    CLOUD_INSTANCE_UUID: str
++    CLOUD_WORKER_URL: str
++    CLOUD_API_BASE: str = ""
++    CLOUD_API_TOKEN: str = ""
++    CLOUD_DISPLAY_NAME: str = ""
++    CLOUD_BOOT_COMMAND: str = ""
++    CLOUD_READY_TIMEOUT: int = 600
++    CLOUD_READY_POLL: int = 10
++    CLOUD_ALLOW_POWER_OFF: bool = True
++
++
++def parse_env_file(path: Path) -> Dict[str, str]:
++    """极简 KEY=VALUE 解析（支持 # 注释 / 引号 / 行内不做插值）。"""
++    values: Dict[str, str] = {}
++    for raw in path.read_text(encoding="utf-8").splitlines():
++        line = raw.strip()
++        if not line or line.startswith("#") or "=" not in line:
++            continue
++        key, value = line.split("=", 1)
++        values[key.strip()] = value.strip().strip('"').strip("'")
++    return values
++
++
++def clouds_dir() -> Path:
++    return Path(settings.clouds_dir).resolve() if settings.clouds_dir else DEFAULT_CLOUDS_DIR
++
++
++def load_clouds(force: bool = False) -> List[CloudInstance]:
++    """扫描 clouds/*.env → CloudInstance（跳过 example/template；坏配置只告警不中断）。"""
++    global _instances, _by_url, _loaded_dir
++    directory = clouds_dir()
++    if not force and _loaded_dir == str(directory) and _instances:
++        return _instances
++    _instances = []
++    _by_url = {}
++    _loaded_dir = str(directory)
++    if not directory.is_dir():
++        logger.info("云端节点目录不存在（%s）：无云端节点，行为与单机部署一致", directory)
++        return _instances
++    for path in sorted(directory.glob("*.env")):
++        if path.name in ("example.env", "template.env"):
++            continue
++        try:
++            cfg = CloudEnvConfig(**parse_env_file(path))
++        except Exception as exc:
++            logger.error("云实例配置解析失败（已忽略）: %s: %s", path.name, exc)
++            continue
++        inst = CloudInstance(
++            id=cfg.CLOUD_ID or f"{cfg.CLOUD_PLATFORM}:{cfg.CLOUD_INSTANCE_UUID}",
++            platform=cfg.CLOUD_PLATFORM,
++            instance_uuid=cfg.CLOUD_INSTANCE_UUID,
++            worker_url=cfg.CLOUD_WORKER_URL.rstrip("/"),
++            api_base=cfg.CLOUD_API_BASE,
++            api_token=cfg.CLOUD_API_TOKEN,
++            display_name=cfg.CLOUD_DISPLAY_NAME,
++            boot_command=cfg.CLOUD_BOOT_COMMAND,
++            ready_timeout=cfg.CLOUD_READY_TIMEOUT,
++            ready_poll=cfg.CLOUD_READY_POLL,
++            allow_power_off=cfg.CLOUD_ALLOW_POWER_OFF,
++            env_file=path.name,
++        )
++        _instances.append(inst)
++        _by_url[inst.worker_url] = inst
++        logger.info("已加载云实例: %s（worker=%s, platform=%s, 有凭据=%s）",
++                    inst.id, inst.worker_url, inst.platform, inst.controllable)
++    return _instances
++
++
++def all_instances() -> List[CloudInstance]:
++    if not _instances:
++        load_clouds()
++    return _instances
++
++
++def get_by_worker_url(url: str) -> Optional[CloudInstance]:
++    all_instances()
++    return _by_url.get((url or "").rstrip("/"))
++
++
++def provider(inst: CloudInstance) -> CloudProvider:
++    impl = _PROVIDERS.get(inst.platform)
++    if impl is None:
++        raise CloudAPIError(f"未支持的云平台：{inst.platform}", "PLATFORM_UNSUPPORTED", http_status=400)
++    return impl
++
++
++def bind_nodes(nodes) -> None:
++    """按 CLOUD_WORKER_URL 把云实例绑到 WorkerNode；对不上只告警（防误操作）。"""
++    insts = all_instances()
++    if not insts:
++        return
++    matched = set()
++    for node in nodes:
++        inst = _by_url.get(node.url.rstrip("/"))
++        if inst is not None:
++            inst.node = node
++            node.cloud = inst
++            matched.add(inst.id)
++    for inst in insts:
++        if inst.id not in matched:
++            logger.warning("云实例 %s 的 CLOUD_WORKER_URL=%s 在 COMFYUI_WORKERS 中无匹配节点：不绑定（不可操作）",
++                           inst.id, inst.worker_url)
++
++
++def _mark_op(inst: CloudInstance, action: str, ok: bool, code: str = "",
++             msg: str = "", request_id: str = "") -> None:
++    """记录最近一次手动开关机结果（白名单字段，绝不含凭据；前端失败原因兜底来源）。"""
++    inst.last_op = {"action": action, "ok": ok, "code": code, "msg": msg,
++                    "request_id": request_id, "at": time.time()}
++
++
++async def refresh_status(inst: CloudInstance, force: bool = False,
++                         raise_on_error: bool = False) -> Optional[str]:
++    """按 TTL 刷新实例状态：过渡期(op!=idle) 5s、平时 60s。"""
++    age = time.time() - inst.last_status_at
++    ttl = 5 if inst.op_state != "idle" else 60
++    if not force and inst.instance_status is not None and age < ttl:
++        return inst.instance_status
++    try:
++        status = await provider(inst).status(inst)
++        inst.instance_status = status
++        inst.last_status_at = time.time()
++        inst.last_error = ""
++        if inst.op_state == "starting" and status == "running" and inst.worker_healthy:
++            inst.op_state = "idle"
++            logger.info("云实例已就绪（节点回池）: %s", inst.id)
++        elif inst.op_state == "stopping" and status in ("shutdown", "shutting_down", "stopped"):
++            inst.op_state = "idle"
++    except CloudAPIError as exc:
++        inst.last_error = exc.msg
++        # 记入 last_op（action=status）供 /api/admin/clouds 诊断；
++        # 但绝不覆盖 1h 内的手动开关机失败记录（否则失败原因会被轮询冲掉）
++        prev = inst.last_op or {}
++        keep = (prev.get("ok") is False and prev.get("action") in ("on", "off")
++                and time.time() - float(prev.get("at") or 0) < 3600)
++        if not keep:
++            _mark_op(inst, "status", False, exc.code, exc.msg, exc.request_id)
++        logger.warning("云实例状态查询失败: %s: %s（request_id=%s）", inst.id, exc.msg, exc.request_id)
++        if raise_on_error:
++            raise
++    return inst.instance_status
++
++
++async def refresh_spec(inst: CloudInstance, ttl: int = 3600) -> None:
++    """规格/区域/价格（只读，供 UI 展示；白名单字段，绝不含凭据）。"""
++    if inst.spec and time.time() - inst.last_spec_at < ttl:
++        return
++    try:
++        inst.spec = await provider(inst).snapshot(inst)
++        inst.last_spec_at = time.time()
++    except CloudAPIError as exc:
++        logger.warning("云实例规格查询失败: %s: %s", inst.id, exc.msg)
++
++
++async def status_loop(interval: float = 15.0) -> None:
++    """后台状态轮询（无云实例时立即返回，不占资源）。"""
++    if not all_instances():
++        return
++    logger.info("云实例状态轮询已启动：%d 个实例，间隔 %.0fs", len(all_instances()), interval)
++    while True:
++        for inst in all_instances():
++            try:
++                await refresh_status(inst)
++            except Exception:  # 轮询循环永不退出
++                logger.exception("云实例状态轮询异常: %s", inst.id)
++        await asyncio.sleep(interval)
++
++
++async def power_on(inst: CloudInstance) -> dict:
++    """下发开机（payload=gpu + start_command）；开机即 worker 由池心跳自动完成。
++
++    失败（如平台无卡）先写 inst.last_op 再抛出：原因不因前端刷新而丢失。
++    """
++    async with inst.lock:
++        try:
++            status = await refresh_status(inst, force=True)
++            if status == "running":
++                _mark_op(inst, "on", True)
++                return {"ok": True, "action": "on", "instance_status": status,
++                        "status": "running", "already": True}
++            await provider(inst).power_on(inst, inst.boot_command or None)
++            inst.op_state = "starting"
++            inst.last_op_at = time.time()
++            inst.last_error = ""
++            _mark_op(inst, "on", True)
++            logger.info("云实例开机已下发: %s（start_command=%s）",
++                        inst.id, "已配置" if inst.boot_command else "无")
++            return {"ok": True, "action": "on", "instance_status": "starting",
++                    "status": "starting", "eta_s": inst.ready_timeout}
++        except CloudAPIError as exc:
++            _mark_op(inst, "on", False, exc.code, exc.msg, exc.request_id)
++            logger.warning("云实例开机失败: %s: %s（error_code=%s request_id=%s）",
++                           inst.id, exc.msg, exc.code, exc.request_id)
++            raise
++
++
++async def power_off(inst: CloudInstance) -> dict:
++    """下发关机；平台失败时抛 CloudAPIError（含平台原文 + request_id）。"""
++    async with inst.lock:
++        try:
++            status = await refresh_status(inst, force=True, raise_on_error=True)
++            if status in ("shutdown", "shutting_down", "stopped"):
++                inst.op_state = "idle"
++                _mark_op(inst, "off", True)
++                return {"ok": True, "action": "off", "instance_status": status,
++                        "status": "already_off", "already": True}
++            await provider(inst).power_off(inst)
++            inst.op_state = "stopping"
++            inst.last_op_at = time.time()
++            inst.last_error = ""
++            _mark_op(inst, "off", True)
++            logger.info("云实例关机已下发: %s", inst.id)
++            return {"ok": True, "action": "off", "instance_status": "shutting_down",
++                    "status": "shutting_down"}
++        except CloudAPIError as exc:
++            _mark_op(inst, "off", False, exc.code, exc.msg, exc.request_id)
++            logger.warning("云实例关机失败: %s: %s（error_code=%s request_id=%s）",
++                           inst.id, exc.msg, exc.code, exc.request_id)
++            raise
+diff --git a/server/app/services/comfyui.py b/server/app/services/comfyui.py
+index 71ca5d2..ab4895a 100644
+--- a/server/app/services/comfyui.py
++++ b/server/app/services/comfyui.py
+@@ -79,6 +79,76 @@ def load_workflow(mode: str) -> dict:
+     return json.loads(path.read_text(encoding="utf-8"))
+ 
+ 
++# ---- 注意力后端门控（Sol-Attn）----
++# 生成模板统一带 Sol-Attn 节点（BlockSparseAttention，节点 9600）；该节点仅
++# 0.35.0 + comfy-kitchen>=0.2.33 提供。目标节点（如 0.34 的 4090）没有时，
++# 提交前从「本次提交的副本」里摘除并把下游引用接回上游，磁盘模板保持不变。
++SOL_ATTN_CLASSES = {"BlockSparseAttention"}
++SOL_ATTN_TITLE_HINTS = ("Sol-Attn", "Sparse Attention")
++_CAP_CACHE: dict = {}
++_CAP_TTL = 300.0
++
++
++async def _node_supports_class(base_url: str, class_type: str) -> bool:
++    """探测目标 ComfyUI 是否注册了 class_type（进程内缓存 TTL；探测失败按“支持”处理，避免误摘）。"""
++    import time
++
++    key = (base_url.rstrip("/"), class_type)
++    now = time.time()
++    cached = _CAP_CACHE.get(key)
++    if cached and now - cached[0] < _CAP_TTL:
++        return cached[1]
++    ok = True
++    try:
++        async with httpx.AsyncClient(timeout=5.0) as client:
++            resp = await client.get("%s/object_info/%s" % (key[0], class_type))
++            resp.raise_for_status()
++            data = resp.json()
++        ok = bool(isinstance(data, dict) and data.get(class_type))
++    except Exception as exc:  # noqa: BLE001
++        logger.warning("注意力节点能力探测失败(%s %s): %s；按支持处理", key[0], class_type, exc)
++        ok = True
++    _CAP_CACHE[key] = (now, ok)
++    return ok
++
++
++async def gate_attention_nodes(workflow: dict, base_url: str) -> dict:
++    """目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游 → 回到目标节点原生 attention 路径。
++
++    原地修改并返回同一 dict；找不到安全重连点时原样保留，绝不阻断提交。
++    """
++    for nid, node in list(workflow.items()):
++        if not isinstance(node, dict):
++            continue
++        class_type = node.get("class_type")
++        title = (node.get("_meta") or {}).get("title") or ""
++        if class_type not in SOL_ATTN_CLASSES and not any(h in title for h in SOL_ATTN_TITLE_HINTS):
++            continue
++        if class_type and await _node_supports_class(base_url, class_type):
++            continue
++        src = (node.get("inputs") or {}).get("model")
++        if not (isinstance(src, list) and len(src) == 2):
++            logger.warning("节点 %s(%s) 无 model 输入，无法安全摘除，保持原样", nid, class_type)
++            continue
++        upstream, out_idx = src[0], src[1]
++        rewired = 0
++        for other_id, other in workflow.items():
++            if other_id == nid or not isinstance(other, dict):
++                continue
++            inputs = other.get("inputs")
++            if not isinstance(inputs, dict):
++                continue
++            for slot, value in inputs.items():
++                if (isinstance(value, list) and len(value) == 2
++                        and str(value[0]) == str(nid) and value[1] == out_idx):
++                    inputs[slot] = [upstream, out_idx]
++                    rewired += 1
++        del workflow[nid]
++        logger.info("[gate] 节点 %s(%s) 目标节点不支持，已摘除并重连 %s 处引用 → 上游 %s:%s",
++                    nid, class_type, rewired, upstream, out_idx)
++    return workflow
++
++
+ def _next_node_id(workflow: dict) -> str:
+     """取工作流下一个可用节点 ID 字符串。"""
+     nums = [int(k) for k in workflow if str(k).isdigit()]
+@@ -372,7 +442,9 @@ def _insert_exact_scale(workflow: dict, target_w: int, target_h: int) -> None:
+     src_nid, src_output = str(images_input[0]), images_input[1]
+     # 已注入过则跳过
+     src_node = workflow.get(src_nid)
+-    if src_node and isinstance(src_node, dict) and src_node.get("class_type") == "ImageScale":
++    # 2026-09-17 SAI：RTX VSR 的 target dimensions 分支已直接输出目标尺寸（节点内部对齐 8 的倍数），
++    # FlashVSR 链路（2x → RTX）下再插 ImageScale 只是同尺寸重算，4K/124 帧实测白耗 84.6s，故跳过。
++    if src_node and isinstance(src_node, dict) and src_node.get("class_type") in ("ImageScale", "RTXVideoSuperResolution"):
+         return
+     # 分配新节点 ID
+     nums = [int(k) for k in workflow if str(k).isdigit()]
+diff --git a/server/app/services/pool.py b/server/app/services/pool.py
+index a5131bd..60811e4 100644
+--- a/server/app/services/pool.py
++++ b/server/app/services/pool.py
+@@ -17,6 +17,7 @@ from typing import List, Optional
+ import httpx
+ 
+ from ..config import settings
++from .clouds import registry
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -35,6 +36,7 @@ class WorkerNode:
+         self.consecutive_fails = 0
+         self.task_id: Optional[int] = None  # 正在执行的任务（None=空闲）
+         self.queue_busy = False             # ComfyUI 真实队列是否忙碌（心跳探测 /queue）
++        self.cloud = None                   # 云端实例（clouds/*.env 按 url 绑定；非云节点为 None）
+ 
+     @property
+     def busy(self) -> bool:
+@@ -88,6 +90,19 @@ class WorkerNode:
+             "task_id": self.task_id,
+             "queue_busy": self.queue_busy,
+             "consecutive_fails": self.consecutive_fails,
++            # 云端实例信息（无 cloud 配置时全为 None / false，前端不渲染开关机按钮）
++            "platform": self.cloud.platform if self.cloud else None,
++            "instance_id": self.cloud.id if self.cloud else None,
++            "instance_uuid": self.cloud.instance_uuid if self.cloud else None,
++            "instance_status": self.cloud.instance_status if self.cloud else None,
++            "op_state": self.cloud.op_state if self.cloud else None,
++            "power_controllable": bool(self.cloud and self.cloud.controllable),
++            # 最近一次手动开关机结果（失败原因持久化，刷新页面不丢；白名单字段，无凭据）
++            "last_op_action": (self.cloud.last_op or {}).get("action") if self.cloud else None,
++            "last_op_ok": (self.cloud.last_op or {}).get("ok") if self.cloud else None,
++            "last_op_code": (self.cloud.last_op or {}).get("code") if self.cloud else None,
++            "last_op_msg": (self.cloud.last_op or {}).get("msg") if self.cloud else None,
++            "last_op_at": (self.cloud.last_op or {}).get("at") if self.cloud else None,
+         }
+ 
+ 
+@@ -128,13 +143,21 @@ class WorkerPool:
+         self.mock = settings.mock_comfy
+         self.nodes = _mock_workers() if self.mock else _parse_workers()
+         self._hb_task: Optional[asyncio.Task] = None
++        self._cloud_task: Optional[asyncio.Task] = None
+         self._rr_index = 0  # 生成节点轮询指针（round-robin，避免永远优先第一个节点）
++        # 云端实例绑定：按 CLOUD_WORKER_URL 精确匹配；目录不存在/不匹配只告警（防误操作）
++        try:
++            registry.bind_nodes(self.nodes)
++        except Exception:
++            logger.exception("云端实例绑定失败（忽略，不影响本地节点）")
+ 
+     # ---- 生命周期 ----
+     async def start(self) -> None:
+         if self.mock or self._hb_task is not None:
+             return
+         self._hb_task = asyncio.get_event_loop().create_task(self._heartbeat_loop())
++        # 云实例状态轮询（无云实例时内部立即返回）
++        self._cloud_task = asyncio.get_event_loop().create_task(registry.status_loop())
+         logger.info(
+             "Worker 池已启动：%d 生成 + %d 超分",
+             sum(1 for n in self.nodes if n.role == "generate"),
+@@ -145,6 +168,9 @@ class WorkerPool:
+         if self._hb_task is not None:
+             self._hb_task.cancel()
+             self._hb_task = None
++        if self._cloud_task is not None:
++            self._cloud_task.cancel()
++            self._cloud_task = None
+ 
+     async def _heartbeat_loop(self) -> None:
+         """每 10s 探活全部节点；连续失败 30s 摘除，恢复后自动回池。"""
+diff --git a/server/app/services/worker.py b/server/app/services/worker.py
+index 540e4b0..d980fa1 100644
+--- a/server/app/services/worker.py
++++ b/server/app/services/worker.py
+@@ -556,6 +556,8 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
+         video_names=video_names, audio_names=audio_names,
+         unet_name=node.unet_for(mode),
+     )
++    # 目标节点不支持 Sol-Attn 时按能力摘除（磁盘模板不动）
++    workflow = await comfyui.gate_attention_nodes(workflow, node.url)
+ 
+     prompt_id = await client.submit(workflow)
+     with SessionLocal() as db:
+diff --git a/server/clouds/README.md b/server/clouds/README.md
+new file mode 100644
+index 0000000..8103b48
+--- /dev/null
++++ b/server/clouds/README.md
+@@ -0,0 +1,28 @@
++# 云端实例（远程开机/关机）配置
++
++一台云端实例 = 一个 `.env` 文件，文件名建议 `<platform>-<uuid>.env`。
++
++- 格式化模板见 `example.env`
++- **真实实例的 `.env` 已被 .gitignore 排除**（含 API token），不要提交、不要打进 patch 包
++- 目录缺失或为空 = 无云端节点，前端不渲染任何开关机按钮，行为与单机部署一致
++- 平台支持：`autodl`（后续可再加 `ali` / `tencent` / `volcano`，在
++  `app/services/clouds/` 下新增一个 Provider 并在 `registry._PROVIDERS` 注册）
++
++字段说明
++
++| 字段 | 必填 | 说明 |
++|---|---|---|
++| `CLOUD_ID` | 是 | UI 展示的"平台:实例ID"，如 `autodl:pro-7889ca37d10f` |
++| `CLOUD_PLATFORM` | 是 | 平台键，决定用哪个 Provider（当前仅 `autodl`） |
++| `CLOUD_INSTANCE_UUID` | 是 | 平台侧实例 ID |
++| `CLOUD_WORKER_URL` | 是 | **必须与 COMFYUI_WORKERS 中该节点的 url 严格一致**（唯一映射键） |
++| `CLOUD_API_BASE` | 是 | 平台 API 根地址，如 `https://api.autodl.com` |
++| `CLOUD_API_TOKEN` | 是 | 平台 API Token（仅后端内存使用，不回传前端、不进日志） |
++| `CLOUD_DISPLAY_NAME` | 否 | 展示名，如 `AutoDL-5090(bj-B2)` |
++| `CLOUD_BOOT_COMMAND` | 否 | 开机后执行的命令（建议指向云端数据盘上的幂等启动脚本） |
++| `CLOUD_READY_TIMEOUT` | 否 | 开机→就绪最长期望时长（秒，默认 600） |
++| `CLOUD_READY_POLL` | 否 | 状态轮询间隔（秒，默认 10） |
++| `CLOUD_ALLOW_POWER_OFF` | 否 | `false` = 该实例只允许开机，不允许关机（默认 true） |
++
++用法：把文件放到 `server/clouds/`，`chmod 600`，重启后端即生效（或把目录放到持久盘并用
++主 `.env` 的 `CLOUDS_DIR` 指过去）。
+diff --git a/server/clouds/example.env b/server/clouds/example.env
+new file mode 100644
+index 0000000..355068b
+--- /dev/null
++++ b/server/clouds/example.env
+@@ -0,0 +1,15 @@
++# 云端实例配置模板（占位符，可提交 git）
++# 用法：复制成 <platform>-<uuid>.env 并填写真实值，chmod 600（真实文件不入库）
++CLOUD_ID=autodl:pro-xxxxxxxxxxxx
++CLOUD_DISPLAY_NAME=AutoDL-5090(bj-B2)
++CLOUD_PLATFORM=autodl
++CLOUD_INSTANCE_UUID=pro-xxxxxxxxxxxx
++# 必须与 COMFYUI_WORKERS 中该节点 url 完全一致
++CLOUD_WORKER_URL=http://127.0.0.1:8183
++CLOUD_API_BASE=https://api.autodl.com
++CLOUD_API_TOKEN=replace-with-platform-token
++# 开机后执行的命令（放云端数据盘，幂等）
++CLOUD_BOOT_COMMAND=bash /root/autodl-fs/start_comfy.sh
++CLOUD_READY_TIMEOUT=600
++CLOUD_READY_POLL=10
++CLOUD_ALLOW_POWER_OFF=true
+diff --git a/server/workflows/flf2v_api.json b/server/workflows/flf2v_api.json
+index 63d161d..4c9ae1f 100644
+--- a/server/workflows/flf2v_api.json
++++ b/server/workflows/flf2v_api.json
+@@ -94,7 +94,7 @@
+         0
+       ],
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ]
+     },
+@@ -316,7 +316,7 @@
+     "class_type": "BasicScheduler",
+     "inputs": {
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ],
+       "scheduler": "simple",
+@@ -326,5 +326,26 @@
+     "_meta": {
+       "title": "BasicScheduler"
+     }
++  },
++  "9600": {
++    "class_type": "BlockSparseAttention",
++    "inputs": {
++      "selection": "sol-attn",
++      "selection.tau": 1.3,
++      "start_percent": 0.2,
++      "end_percent": 1.0,
++      "dense_blocks": "",
++      "min_tokens": 12288,
++      "extra_tokens": 256,
++      "sink_conditioning": "exact_kv_and_rows",
++      "verbose": true,
++      "model": [
++        "9502",
++        0
++      ]
++    },
++    "_meta": {
++      "title": "Model Sparse Attention (Sol-Attn)"
++    }
+   }
+ }
+\ No newline at end of file
+diff --git a/server/workflows/r2v_api.json b/server/workflows/r2v_api.json
+index acdb489..37e7d08 100644
+--- a/server/workflows/r2v_api.json
++++ b/server/workflows/r2v_api.json
+@@ -120,7 +120,7 @@
+         0
+       ],
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ]
+     },
+@@ -323,7 +323,7 @@
+     "class_type": "BasicScheduler",
+     "inputs": {
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ],
+       "scheduler": "simple",
+@@ -333,5 +333,26 @@
+     "_meta": {
+       "title": "BasicScheduler"
+     }
++  },
++  "9600": {
++    "class_type": "BlockSparseAttention",
++    "inputs": {
++      "selection": "sol-attn",
++      "selection.tau": 1.3,
++      "start_percent": 0.2,
++      "end_percent": 1.0,
++      "dense_blocks": "",
++      "min_tokens": 12288,
++      "extra_tokens": 256,
++      "sink_conditioning": "exact_kv_and_rows",
++      "verbose": true,
++      "model": [
++        "9502",
++        0
++      ]
++    },
++    "_meta": {
++      "title": "Model Sparse Attention (Sol-Attn)"
++    }
+   }
+ }
+\ No newline at end of file
+diff --git a/server/workflows/t2v_api.json b/server/workflows/t2v_api.json
+index 2e7dc0f..1793002 100644
+--- a/server/workflows/t2v_api.json
++++ b/server/workflows/t2v_api.json
+@@ -94,7 +94,7 @@
+         0
+       ],
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ]
+     },
+@@ -280,7 +280,7 @@
+     "class_type": "BasicScheduler",
+     "inputs": {
+       "model": [
+-        "9502",
++        "9600",
+         0
+       ],
+       "scheduler": "simple",
+@@ -290,5 +290,26 @@
+     "_meta": {
+       "title": "BasicScheduler"
+     }
++  },
++  "9600": {
++    "class_type": "BlockSparseAttention",
++    "inputs": {
++      "selection": "sol-attn",
++      "selection.tau": 1.3,
++      "start_percent": 0.2,
++      "end_percent": 1.0,
++      "dense_blocks": "",
++      "min_tokens": 12288,
++      "extra_tokens": 256,
++      "sink_conditioning": "exact_kv_and_rows",
++      "verbose": true,
++      "model": [
++        "9502",
++        0
++      ]
++    },
++    "_meta": {
++      "title": "Model Sparse Attention (Sol-Attn)"
++    }
+   }
+ }
+\ No newline at end of file
+diff --git a/server/workflows/upscale_rtx_api.json b/server/workflows/upscale_rtx_api.json
+index 475ee9c..d51afe0 100644
+--- a/server/workflows/upscale_rtx_api.json
++++ b/server/workflows/upscale_rtx_api.json
+@@ -1,116 +1,239 @@
+ {
+-  "1": {
+-    "class_type": "LoadVideo",
+-    "inputs": {
+-      "file": "placeholder.mp4"
+-    },
+-    "_meta": {
+-      "title": "LoadVideo"
+-    }
+-  },
+-  "2": {
+-    "class_type": "GetVideoComponents",
+-    "inputs": {
+-      "video": [
+-        "1",
+-        0
+-      ]
+-    },
+-    "_meta": {
+-      "title": "GetVideoComponents"
+-    }
+-  },
+-  "10": {
+-    "class_type": "VOSR2ModelLoader",
+-    "inputs": {
+-      "model": "VOSR2",
+-      "dtype": "fp16"
+-    },
+-    "_meta": {
+-      "title": "VOSR 2.0 Model Loader"
+-    }
+-  },
+-  "11": {
+-    "class_type": "VOSR2UpscaleCached",
+-    "inputs": {
+-      "model": [
+-        "10",
+-        0
+-      ],
+-      "image": [
+-        "2",
+-        0
+-      ],
+-      "upscale": 1,
+-      "seed": 42,
+-      "color_alignment": "wavelet",
+-      "tile_size": 1024,
+-      "tile_overlap": 32,
+-      "vae_tile_size": 1024,
+-      "vae_tile_overlap": 32,
+-      "source_path": "",
+-      "source_extra": "{\"src\":\"minimax-ui\"}",
+-      "cache_dir": "/data/ComfyUI/cache_vosr2",
+-      "model_tag": "VOSR2:fp16",
+-      "use_cache": true
+-    },
+-    "_meta": {
+-      "title": "VOSR 2.0 Upscale (L2 Cached)"
+-    }
+-  },
+-  "3": {
+-    "class_type": "RTXVideoSuperResolution",
+-    "inputs": {
+-      "images": [
+-        "11",
+-        0
+-      ],
+-      "resize_type": "target dimensions",
+-      "quality": "ULTRA",
+-      "resize_type.width": 1920,
+-      "resize_type.height": 1080
+-    },
+-    "_meta": {
+-      "title": "RTX Video Super Resolution"
+-    }
+-  },
+-  "4": {
+-    "class_type": "CreateVideo",
+-    "inputs": {
+-      "images": [
+-        "3",
+-        0
+-      ],
+-      "fps": [
+-        "2",
+-        2
+-      ],
+-      "audio": [
+-        "2",
+-        1
+-      ],
+-      "bit_depth": [
+-        "2",
+-        3
+-      ]
+-    },
+-    "_meta": {
+-      "title": "CreateVideo"
+-    }
++ "1": {
++  "class_type": "LoadVideo",
++  "inputs": {
++   "file": "placeholder.mp4"
++  }
++ },
++ "2": {
++  "class_type": "GetVideoComponents",
++  "inputs": {
++   "video": [
++    "1",
++    0
++   ]
++  }
++ },
++ "3": {
++  "class_type": "FlashVSRModelLoader",
++  "inputs": {
++   "model_name": "FlashVSR1_1.safetensors"
++  }
++ },
++ "4": {
++  "class_type": "ModelAttentionBackend",
++  "inputs": {
++   "model": [
++    "3",
++    0
++   ],
++   "attention": "comfy kitchen attention"
++  }
++ },
++ "5": {
++  "class_type": "FlashVSRLQLoader",
++  "inputs": {
++   "lq_name": "LQ_proj_in.safetensors",
++   "compute_dtype": "fp16"
++  }
++ },
++ "6": {
++  "class_type": "FlashVSRPromptLoader",
++  "inputs": {
++   "prompt_name": "Prompt.safetensors"
++  }
++ },
++ "7": {
++  "class_type": "FlashVSRPrepareVideo",
++  "inputs": {
++   "images": [
++    "2",
++    0
++   ],
++   "scale_multiplier": 2.0
++  }
++ },
++ "8": {
++  "class_type": "FlashVSRApply",
++  "inputs": {
++   "model": [
++    "20",
++    0
++   ],
++   "lq_projector": [
++    "5",
++    0
++   ],
++   "video": [
++    "7",
++    0
++   ],
++   "conditioning_strength": 1.0
++  }
++ },
++ "9": {
++  "class_type": "BasicGuider",
++  "inputs": {
++   "model": [
++    "8",
++    0
++   ],
++   "conditioning": [
++    "6",
++    0
++   ]
++  }
++ },
++ "10": {
++  "class_type": "RandomNoise",
++  "inputs": {
++   "noise_seed": 42
++  }
++ },
++ "11": {
++  "class_type": "FlashVSRStreamingSampler",
++  "inputs": {
++   "runtime": [
++    "8",
++    1
++   ],
++   "sampling_mode": "streaming_faithful_lowvram",
++   "sparse_ratio": 2.0,
++   "local_range": 11,
++   "query_block_chunk": 12,
++   "new_latent_frames": 2,
++   "profile_cuda_events": false
++  }
++ },
++ "12": {
++  "class_type": "SamplerCustomAdvanced",
++  "inputs": {
++   "noise": [
++    "10",
++    0
++   ],
++   "guider": [
++    "9",
++    0
++   ],
++   "sampler": [
++    "11",
++    0
++   ],
++   "sigmas": [
++    "11",
++    1
++   ],
++   "latent_image": [
++    "7",
++    1
++   ]
++  }
++ },
++ "13": {
++  "class_type": "FlashVSRTCDecoderLoader",
++  "inputs": {
++   "decoder_name": "TCDecoder-fp16.safetensors",
++   "compute_dtype": "fp16",
++   "fuse_tgrow": true,
++   "channels_last": true,
++   "compile_memblocks": false
++  }
++ },
++ "14": {
++  "class_type": "FlashVSRTCDecode",
++  "inputs": {
++   "samples": [
++    "12",
++    0
++   ],
++   "decoder": [
++    "13",
++    0
++   ],
++   "video": [
++    "7",
++    0
++   ],
++   "output_chunk_size": 4,
++   "temporal_batch_size": 1,
++   "profile_cuda_events": false
++  }
++ },
++ "15": {
++  "class_type": "FlashVSRCropFrames",
++  "inputs": {
++   "images": [
++    "14",
++    0
++   ],
++   "video": [
++    "7",
++    0
++   ],
++   "color_correction": "wavelet_quarter_res",
++   "color_chunk_size": 1,
++   "inplace_correction": true,
++   "color_device": "auto",
++   "profile_stages": false
++  }
++ },
++ "16": {
++  "class_type": "RTXVideoSuperResolution",
++  "inputs": {
++   "images": [
++    "15",
++    0
++   ],
++   "resize_type": "target dimensions",
++   "quality": "ULTRA",
++   "resize_type.width": 1920,
++   "resize_type.height": 1080
++  }
++ },
++ "18": {
++  "class_type": "CreateVideo",
++  "inputs": {
++   "images": [
++    "16",
++    0
++   ],
++   "fps": [
++    "2",
++    2
++   ],
++   "audio": [
++    "2",
++    1
++   ],
++   "bit_depth": [
++    "2",
++    3
++   ]
++  }
++ },
++ "19": {
++  "class_type": "SaveVideo",
++  "inputs": {
++   "video": [
++    "18",
++    0
++   ],
++   "filename_prefix": "video/Upscaled_FS2X",
++   "format": "auto",
++   "codec": "auto"
+   },
+-  "5": {
+-    "class_type": "SaveVideo",
+-    "inputs": {
+-      "filename_prefix": "video/Upscaled_RTX",
+-      "format": "auto",
+-      "codec": "auto",
+-      "video": [
+-        "4",
+-        0
+-      ]
+-    },
+-    "_meta": {
+-      "title": "SaveVideo"
+-    }
+-  }
+-}
++  "_meta": {
++   "title": "SaveVideo (NVENC via core H264->h264_nvenc patch)"
++  }
++ },
++ "20": {
++  "class_type": "FlashVSRBlockSparseAttention",
++  "inputs": {
++   "model": [
++    "4",
++    0
++   ]
++  }
++ }
++}
+\ No newline at end of file
+diff --git a/web/src/api/client.ts b/web/src/api/client.ts
+index 7eeb491..71ee025 100644
+--- a/web/src/api/client.ts
++++ b/web/src/api/client.ts
+@@ -10,13 +10,17 @@ import type {
+   UploadOut,
+   User,
+   WorkerPoolOut,
++  CloudPowerResult,
+ } from "../types";
+ 
+ export class ApiError extends Error {
+   status: number;
+-  constructor(status: number, message: string) {
++  /** 后端结构化错误码（如 NO_STOCK / NOT_CLOUD）；非结构化错误为 undefined。 */
++  errorCode?: string;
++  constructor(status: number, message: string, errorCode?: string) {
+     super(message);
+     this.status = status;
++    this.errorCode = errorCode;
+   }
+ }
+ 
+@@ -61,11 +65,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+     /* 非 JSON 响应 */
+   }
+   if (!resp.ok) {
+-    const detail =
+-      typeof data === "object" && data !== null && "detail" in data
+-        ? String((data as { detail: unknown }).detail)
+-        : `请求失败 (${resp.status})`;
+-    throw new ApiError(resp.status, detail);
++    const detail = (data as { detail?: unknown } | null)?.detail;
++    let message = `请求失败 (${resp.status})`;
++    let errorCode: string | undefined;
++    if (typeof detail === "string") {
++      message = detail;
++    } else if (detail && typeof detail === "object") {
++      // 后端结构化错误（云开关机等）：{ok,error_code,msg,request_id}
++      const obj = detail as { msg?: string; error_code?: string };
++      errorCode = obj.error_code;
++      if (obj.msg) message = obj.msg;
++      else if (obj.error_code) message = obj.error_code;
++    }
++    throw new ApiError(resp.status, message, errorCode);
+   }
+   return data as T;
+ }
+@@ -132,4 +144,10 @@ export const api = {
+   adminCodes: () => request<RedeemCodeOut[]>("/api/admin/redeem-codes"),
+   adminStats: () => request<AdminStats>("/api/admin/stats"),
+   adminWorkers: () => request<WorkerPoolOut>("/api/admin/workers"),
++  // 云端实例开机 / 关机（手动，点按钮直接执行）
++  adminCloudPower: (url: string, action: "on" | "off") =>
++    request<CloudPowerResult>("/api/admin/clouds/power", {
++      method: "POST",
++      body: JSON.stringify({ url, action }),
++    }),
+ };
+diff --git a/web/src/pages/AdminPage.tsx b/web/src/pages/AdminPage.tsx
+index c23416c..d9f1610 100644
+--- a/web/src/pages/AdminPage.tsx
++++ b/web/src/pages/AdminPage.tsx
+@@ -1,5 +1,5 @@
+ /** 管理后台：概览统计 / 用户管理 / 兑换码 / 任务监控 / Worker 池（仅管理员）。 */
+-import { Copy, Cpu, RefreshCw, Ticket, Users } from "lucide-react";
++import { Copy, Cpu, Power, PowerOff, RefreshCw, Ticket, Users } from "lucide-react";
+ import { useCallback, useEffect, useState } from "react";
+ import { api } from "../api/client";
+ import { useAuth } from "../state/auth";
+@@ -10,6 +10,7 @@ import {
+   type AdminUser,
+   type RedeemCodeOut,
+   type Task,
++  type WorkerInfo,
+   type WorkerPoolOut,
+ } from "../types";
+ 
+@@ -20,6 +21,78 @@ function fmtTime(s: string | null): string {
+   return new Date(s).toLocaleString("zh-CN", { hour12: false });
+ }
+ 
++/** 标签列：长模型名折叠为「模型×N」，短标签（1k/2k/4k/engine:rtx 等）原样显示；完整值见 hover。 */
++function compactTags(tags: string[]): string {
++  if (!tags.length) return "-";
++  const short = tags.filter((t) => t.length <= 24);
++  const longCount = tags.length - short.length;
++  return [...short, ...(longCount ? [`模型×${longCount}`] : [])].join(" · ");
++}
++
++/** 云开关机失败短因：命中错误码给中文短词，未命中则截取平台原文（12 字）。 */
++function shortReason(code: string | null | undefined, msg: string): string {
++  const MAP: Record<string, string> = {
++    NO_STOCK: "无库存",
++    AUTH_FAILED: "token失效",
++    NOT_FOUND: "实例不存在",
++    UPSTREAM_TIMEOUT: "平台超时",
++    UPSTREAM_ERROR: "网络异常",
++    BAD_REQUEST: "配置无效",
++    NO_CREDENTIAL: "缺凭据",
++    NOT_CLOUD: "非云节点",
++    PLATFORM_UNSUPPORTED: "平台不支持",
++  };
++  if (code && MAP[code]) return MAP[code];
++  const t = (msg || "").replace(/\s+/g, " ").trim();
++  if (!t) return code ? "未知原因" : "";
++  return t.length > 12 ? `${t.slice(0, 12)}…` : t;
++}
++
++/** 失败记录（本次会话内存 / 后端持久化 二选一）。 */
++type PowerNote = { code?: string | null; msg: string; at: number };
++
++// 失败原因展示 TTL：1 小时（过期不再显示；下次操作即覆盖）
++const NOTE_TTL_MS = 3600_000;
++
++/** 取当前应展示的失败记录：本地新失败优先，其次后端持久化（仅手动开关机、1h 内）。 */
++function liveFail(w: WorkerInfo, note?: PowerNote): PowerNote | null {
++  if (note) return note;
++  if (w.last_op_ok !== false) return null;
++  if (w.last_op_action !== "on" && w.last_op_action !== "off") return null;
++  const at = (w.last_op_at ?? 0) * 1000;
++  if (!at || Date.now() - at > NOTE_TTL_MS) return null;
++  return { code: w.last_op_code, msg: w.last_op_msg || "", at };
++}
++
++/** 电源列状态 pill：紧凑中文状态；后端长句只作 hover tooltip，不再占表格空间。 */
++function powerPill(
++  w: WorkerInfo,
++  busy: boolean,
++  act: "" | "on" | "off",
++  fail: PowerNote | null,
++): { text: string; cls: string; title: string } {
++  const AMBER = "bg-amber-500/15 text-amber-300 ring-amber-500/30";
++  const GREEN = "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30";
++  const GREY = "bg-zinc-500/15 text-zinc-400 ring-zinc-500/30";
++  const ROSE = "bg-rose-500/15 text-rose-300 ring-rose-500/30";
++  if (fail) {
++    const reason = shortReason(fail.code, fail.msg);
++    const when = new Date(fail.at).toLocaleString("zh-CN", { hour12: false });
++    const full = `${fail.msg || "未知错误"}${fail.code ? `（${fail.code}）` : ""}\n时间：${when}`;
++    return { text: reason ? `失败·${reason}` : "失败", cls: ROSE, title: full };
++  }
++  if (busy) {
++    return act === "on"
++      ? { text: "开机中…", cls: AMBER, title: "开机指令已下发，云端启动中（就绪后自动接单）" }
++      : { text: "关机中…", cls: AMBER, title: "关机指令已下发，节点约 30s 内自动摘牌" };
++  }
++  if (w.op_state === "starting") return { text: "开机中…", cls: AMBER, title: "开机指令已下发，云端启动中（就绪后自动接单）" };
++  if (w.op_state === "stopping") return { text: "关机中…", cls: AMBER, title: "关机指令已下发，节点约 30s 内自动摘牌" };
++  if (w.instance_status === "running") return { text: "运行中", cls: GREEN, title: `实例运行中：${w.instance_id ?? ""}` };
++  if (w.instance_status === "shutdown") return { text: "已关机", cls: GREY, title: "实例已关机（开机后可重新入池接单）" };
++  return { text: w.instance_status || "未知", cls: GREY, title: w.instance_id ?? "" };
++}
++
+ export default function AdminPage() {
+   const { user } = useAuth();
+   const [tab, setTab] = useState<Tab>("overview");
+@@ -28,6 +101,11 @@ export default function AdminPage() {
+   const [codes, setCodes] = useState<RedeemCodeOut[]>([]);
+   const [tasks, setTasks] = useState<Task[]>([]);
+   const [workerPool, setWorkerPool] = useState<WorkerPoolOut | null>(null);
++  // 云端实例开关机
++  const [cloudBusy, setCloudBusy] = useState("");
++  const [cloudMsg, setCloudMsg] = useState<Record<string, PowerNote>>({});
++  const [confirmPower, setConfirmPower] = useState<WorkerInfo | null>(null);
++  const [cloudAct, setCloudAct] = useState<"" | "on" | "off">("");
+ 
+   // 用户积分调整
+   const [adjustTarget, setAdjustTarget] = useState<AdminUser | null>(null);
+@@ -38,6 +116,30 @@ export default function AdminPage() {
+   const [codeCount, setCodeCount] = useState("5");
+   const [message, setMessage] = useState("");
+ 
++  // ---- 云端实例开机 / 关机（手动；本次不做任务检测拦截）----
++  const doCloudPower = async (w: WorkerInfo, action: "on" | "off") => {
++    setCloudBusy(w.url);
++    setCloudMsg((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== w.url)));
++    try {
++      setCloudAct(action);
++      await api.adminCloudPower(w.url, action);
++      // 指令受理后只保留失败信息；进行中/完成由电源列 pill 依据 op_state/instance_status 呈现
++      // 3s 后刷新一次池状态（开机后节点回池约 30s 内）
++      setTimeout(() => {
++        api.adminWorkers().then(setWorkerPool).catch(() => {});
++      }, 3000);
++    } catch (e) {
++      const err = e as { message?: string; errorCode?: string };
++      setCloudMsg((m) => ({
++        ...m,
++        [w.url]: { code: err.errorCode, msg: err.message || "未知错误", at: Date.now() },
++      }));
++    } finally {
++      setCloudBusy("");
++      setCloudAct("");
++    }
++  };
++
+   const load = useCallback(async () => {
+     try {
+       const [s, u, c, t, w] = await Promise.all([
+@@ -381,34 +483,94 @@ export default function AdminPage() {
+               {workerPool.mock && <span className="text-xs font-normal text-amber-400">Mock 模式</span>}
+               <span className="ml-auto text-xs font-normal text-zinc-600">每 5 秒自动刷新</span>
+             </h3>
+-            <table className="w-full min-w-[700px] text-sm">
++            <table className="w-full min-w-[560px] text-sm">
+               <thead>
+                 <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+-                  <th className="pb-2 font-normal">节点</th>
+-                  <th className="pb-2 font-normal">角色</th>
+-                  <th className="pb-2 font-normal">标签</th>
+-                  <th className="pb-2 font-normal">健康</th>
+-                  <th className="pb-2 font-normal">状态</th>
+-                  <th className="pb-2 font-normal">当前任务</th>
++                  <th className="pb-2 pr-3 font-normal">节点</th>
++                  <th className="pb-2 pr-3 font-normal">角色</th>
++                  <th className="pb-2 pr-3 font-normal">标签</th>
++                  <th className="pb-2 pr-3 font-normal">状态</th>
++                  <th className="pb-2 pr-3 font-normal">当前任务</th>
++                  <th className="pb-2 font-normal">电源</th>
+                 </tr>
+               </thead>
+               <tbody>
+                 {workerPool.workers.map((w) => (
+                   <tr key={w.url} className="border-b border-white/[0.04] last:border-0">
+-                    <td className="py-2.5 font-mono text-xs text-zinc-300">{w.url}</td>
+-                    <td className="py-2.5">
++                    <td className="py-2.5 pr-3">
++                      <span className="flex items-center gap-1.5 whitespace-nowrap">
++                        <span className="font-mono text-xs text-zinc-300" title={w.url}>
++                          {w.url.replace(/^https?:\/\//, "")}
++                        </span>
++                        {w.platform && (
++                          <span
++                            className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] leading-none text-sky-300 ring-1 ring-sky-500/30"
++                            title={w.instance_id ?? w.platform}
++                          >
++                            {w.platform}
++                          </span>
++                        )}
++                      </span>
++                    </td>
++                    <td className="py-2.5 pr-3">
+                       <span className={w.role === "generate" ? "text-indigo-300" : "text-violet-300"}>
+                         {w.role === "generate" ? "生成" : "超分"}
+                       </span>
+                     </td>
+-                    <td className="py-2.5 text-xs text-zinc-500">{w.tags.join(", ") || "-"}</td>
++                    <td className="py-2.5 pr-3 text-xs text-zinc-500" title={w.tags.join("\n")}>
++                      {compactTags(w.tags)}
++                    </td>
++                    <td className="py-2.5 pr-3 text-xs whitespace-nowrap">
++                      {!w.healthy ? (
++                        <span className="text-rose-400" title={`连续失败 ${w.consecutive_fails} 次，已从池中摘除`}>
++                          ⊘ 离线·{w.consecutive_fails}
++                        </span>
++                      ) : w.busy ? (
++                        <span className="text-amber-400" title="正在执行任务">
++                          ● 忙碌
++                        </span>
++                      ) : (
++                        <span className="text-emerald-400" title="空闲，可接单">
++                          ● 空闲
++                        </span>
++                      )}
++                    </td>
++                    <td className="py-2.5 pr-3 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                     <td className="py-2.5">
+-                      <span className={w.healthy ? "text-emerald-400" : "text-rose-400"}>
+-                        {w.healthy ? "在线" : `已摘除(${w.consecutive_fails})`}
+-                      </span>
++                      {w.power_controllable ? (
++                        (() => {
++                          const p = powerPill(w, cloudBusy === w.url, cloudAct, liveFail(w, cloudMsg[w.url]));
++                          return (
++                            <div className="flex items-center gap-1.5 whitespace-nowrap">
++                              <span
++                                className={`rounded px-1.5 py-0.5 text-[11px] leading-none ring-1 ${p.cls}`}
++                                title={p.title}
++                              >
++                                {p.text}
++                              </span>
++                              <button
++                                className="btn-ghost !px-2 !py-0.5 text-xs"
++                                title="开机：云端启动并自动拉起 ComfyUI，就绪后作为 Worker 接单"
++                                disabled={!!cloudBusy || w.instance_status === "running"}
++                                onClick={() => doCloudPower(w, "on")}
++                              >
++                                <Power size={12} /> 开机
++                              </button>
++                              <button
++                                className="btn-ghost !px-2 !py-0.5 text-xs"
++                                title="关机：实例退出 Worker 池"
++                                disabled={!!cloudBusy || w.instance_status === "shutdown"}
++                                onClick={() => setConfirmPower(w)}
++                              >
++                                <PowerOff size={12} /> 关机
++                              </button>
++                            </div>
++                          );
++                        })()
++                      ) : (
++                        <span className="text-xs text-zinc-600">—</span>
++                      )}
+                     </td>
+-                    <td className="py-2.5 text-zinc-400">{w.busy ? "忙碌" : "空闲"}</td>
+-                    <td className="py-2.5 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                   </tr>
+                 ))}
+               </tbody>
+@@ -417,6 +579,37 @@ export default function AdminPage() {
+         </div>
+       )}
+ 
++      {/* ---- 云端实例关机二次确认 ---- */}
++      {confirmPower && (
++        <div
++          className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4"
++          onClick={() => setConfirmPower(null)}
++        >
++          <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
++            <h3 className="mb-1 text-base font-semibold text-white">确认关闭云端实例？</h3>
++            <p className="mb-4 text-xs text-zinc-500">
++              {confirmPower.instance_id}（{confirmPower.url}）将关机并退出 Worker 池；
++              若节点上仍有任务在执行，会被中断。
++            </p>
++            <div className="flex justify-end gap-2">
++              <button className="btn-ghost" onClick={() => setConfirmPower(null)}>
++                取消
++              </button>
++              <button
++                className="btn-primary"
++                onClick={() => {
++                  const w = confirmPower;
++                  setConfirmPower(null);
++                  doCloudPower(w, "off");
++                }}
++              >
++                确认关机
++              </button>
++            </div>
++          </div>
++        </div>
++      )}
++
+       {/* ---- 调整积分弹窗 ---- */}
+       {adjustTarget && (
+         <div
+diff --git a/web/src/types.ts b/web/src/types.ts
+index 0daeb91..1ed00a3 100644
+--- a/web/src/types.ts
++++ b/web/src/types.ts
+@@ -130,6 +130,19 @@ export interface WorkerInfo {
+   busy: boolean;
+   task_id: number | null;
+   consecutive_fails: number;
++  // 云端实例（clouds/*.env）；非云节点为 null / false
++  platform: string | null;
++  instance_id: string | null;      // 形如 autodl:pro-7889ca37d10f
++  instance_uuid: string | null;
++  instance_status: string | null;  // running / shutdown / ...
++  op_state: string | null;         // idle | starting | stopping
++  power_controllable: boolean;
++  // 最近一次手动开关机结果（后端持久化；刷新页面后仍能显示失败原因）
++  last_op_action: "on" | "off" | "status" | null;
++  last_op_ok: boolean | null;
++  last_op_code: string | null;
++  last_op_msg: string | null;
++  last_op_at: number | null;       // unix 秒
+ }
+ 
+ export interface WorkerPoolOut {
+@@ -140,6 +153,19 @@ export interface WorkerPoolOut {
+   upscaling: number;
+ }
+ 
++// 云端实例开机/关机结果
++export interface CloudPowerResult {
++  ok: boolean;
++  action: "on" | "off";
++  instance: string;
++  status: string;
++  instance_status?: string | null;
++  eta_s?: number | null;
++  already?: boolean;
++  msg?: string;
++  request_id?: string;
++}
++
+ export const ACTIVE_STATUSES: TaskStatus[] = [
+   "queued",
+   "enhancing",

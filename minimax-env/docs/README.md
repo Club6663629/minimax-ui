@@ -5,17 +5,18 @@
 ## 交付物
 | 路径 | 内容 |
 |---|---|
-| `patches/minimax-ui-local-changes.patch` | minimax-ui 代码本地修改（相对 GitHub `origin/main`），可直接 `git apply` |
+| `patches/minimax-ui-local-changes-20260917.patch` | minimax-ui 代码本地修改（相对 GitHub `origin/main`，2026-09-17，23 文件），可直接 `git apply` |
+| `../env-info/` | patch 覆盖不到的环境变更归档：环境变更说明、`server/.env` 脱敏副本、comfyui-cloud-tunnel 隧道单元、gpu05 nginx 配置 |
 | `node45/` `node51/` `node246/` `node205/` | 各节点环境快照：启动脚本、ComfyUI 版本、模型清单、custom_nodes、端口/参数 |
-| `docs/` | 节点环境文档（版本/参数/启动脚本），Markdown |
+| `docs/` | 节点环境文档（版本/参数/启动脚本）与补丁说明，Markdown |
 | `scripts/collect_node.sh` | 只读采集脚本，任何节点上执行即可重新生成 `nodeXX/env.txt` |
 
 ## 应用 patch
 ```bash
 cd /data/workspace/minimax-ui
 git fetch origin
-git apply --check patches/minimax-ui-local-changes.patch   # 试运行
-git apply        patches/minimax-ui-local-changes.patch   # 应用
+git apply --check ../minimax-env/patches/minimax-ui-local-changes-20260917.patch   # 试运行
+git apply        ../minimax-env/patches/minimax-ui-local-changes-20260917.patch   # 应用
 ```
 
 ## 重新采集环境

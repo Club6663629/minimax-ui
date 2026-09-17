@@ -1,0 +1,16 @@
+# /etc/systemd/system/comfyui-cloud-tunnel.service
+[Unit]
+Description=ComfyUI Cloud Node SSH Tunnel (45:8183 -> cloud:8188)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=AUTOSSH_GATETIME=0
+Environment=AUTOSSH_POLL=5
+ExecStart=/usr/bin/autossh -M 0 -N -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -L 0.0.0.0:8183:127.0.0.1:8188 -p 38561 root@connect.bjb2.seetacloud.com
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
