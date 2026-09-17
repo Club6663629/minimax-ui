@@ -165,6 +165,19 @@ class WorkerOut(BaseModel):
     busy: bool
     task_id: Optional[int] = None
     consecutive_fails: int
+    # 云端实例（clouds/*.env）；非云节点为 None / false
+    platform: Optional[str] = None
+    instance_id: Optional[str] = None      # 形如 autodl:pro-7889ca37d10f
+    instance_uuid: Optional[str] = None
+    instance_status: Optional[str] = None  # running / shutdown / ...
+    op_state: Optional[str] = None         # idle | starting | stopping
+    power_controllable: bool = False
+    # 最近一次手动开关机结果（失败原因持久化；白名单字段，无凭据）
+    last_op_action: Optional[str] = None   # on | off | status
+    last_op_ok: Optional[bool] = None
+    last_op_code: Optional[str] = None
+    last_op_msg: Optional[str] = None
+    last_op_at: Optional[float] = None
 
 
 class WorkerPoolOut(BaseModel):
@@ -173,3 +186,40 @@ class WorkerPoolOut(BaseModel):
     queued: int                  # 待领取（含增强中）
     generating: int              # 生成阶段（排队+执行）
     upscaling: int               # 超分阶段（排队+执行）
+
+
+# ---- 云端实例（远程开机/关机）----
+class CloudInfoOut(BaseModel):
+    cloud_id: str
+    platform: str
+    instance_id: str
+    instance_uuid: str
+    worker_url: str
+    display_name: str
+    instance_status: Optional[str] = None
+    op_state: str = "idle"
+    worker_healthy: bool = False
+    power_controllable: bool = False
+    allow_power_off: bool = True
+    boot_command: str = ""
+    ready_timeout: int = 600
+    last_error: str = ""
+    last_op: dict = {}
+    spec: dict = {}
+
+
+class CloudPowerIn(BaseModel):
+    url: str
+    action: Literal["on", "off"]
+
+
+class CloudPowerOut(BaseModel):
+    ok: bool = True
+    action: str
+    instance: str
+    status: str = ""
+    instance_status: Optional[str] = None
+    eta_s: Optional[int] = None
+    already: bool = False
+    msg: str = ""
+    request_id: str = ""

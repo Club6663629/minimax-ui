@@ -1,5 +1,7 @@
 """管理后台路由：用户管理 / 兑换码 / 全站任务 / 用量统计。"""
+import logging
 import secrets
+import subprocess
 from datetime import datetime
 from typing import Optional
 
@@ -10,12 +12,18 @@ from sqlalchemy.orm import Session
 from ..auth import get_admin
 from ..database import get_db
 from ..models import CreditLog, RedeemCode, Task, User
-from ..schemas import AdminAdjustIn, AdminUserOut, GenCodesIn, RedeemCodeOut, WorkerOut, WorkerPoolOut
+from ..schemas import (
+    AdminAdjustIn, AdminUserOut, CloudInfoOut, CloudPowerIn, CloudPowerOut,
+    GenCodesIn, RedeemCodeOut, WorkerOut, WorkerPoolOut,
+)
 from ..services.billing import add_credits
+from ..services.clouds import registry
+from ..services.clouds.base import CloudAPIError
 from ..services.pool import pool
 from .serialize import serialize_task
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
 # ---- 用户管理 ----
@@ -165,3 +173,89 @@ def stats(db: Session = Depends(get_db), _admin: User = Depends(get_admin)):
         "failed": status_counts.get("failed", 0),
         "credits_consumed": int(consumed),
     }
+
+
+# ---- 云端实例（远程开机 / 关机）----
+@router.get("/clouds", response_model=list[CloudInfoOut])
+async def list_clouds(_admin: User = Depends(get_admin)):
+    """云实例只读信息（状态 / 规格）。绝不返回 token 等凭据。"""
+    out: list[CloudInfoOut] = []
+    for inst in registry.all_instances():
+        await registry.refresh_status(inst)
+        await registry.refresh_spec(inst)
+        out.append(CloudInfoOut(**inst.to_dict()))
+    return out
+
+
+def _tunnel(action: str) -> None:
+    """开关机成功后联动云端 SSH 隧道（方案A，2026-09-16）。
+
+    背景：实例关机期间 autossh 会持续重连（实测 8 小时 98 次 starting ssh，
+    全部是 Connection refused），且开机后要等下一个 poll 拍才恢复（实测白等 2.9 分钟）。
+    所以：开机成功后主动 start，关机成功后主动 stop，避免关机期无意义重连。
+
+    硬约束：绝不影响开关机 API 返回——任何异常只记日志，不抛出。
+    """
+    unit = "comfyui-cloud-tunnel"
+    verb = "start" if action == "on" else "stop"
+    try:
+        proc = subprocess.run(
+            ["systemctl", verb, unit],
+            timeout=10, capture_output=True, text=True,
+        )
+        if verb == "stop" and proc.returncode == 0:
+            # autossh 收到 SIGTERM 会以非 0 退出，systemd 会把 unit 记成 failed（监控里看着像故障），清掉残留状态
+            subprocess.run(["systemctl", "reset-failed", unit],
+                           timeout=10, capture_output=True, text=True)
+        if proc.returncode == 0:
+            logger.info("隧道 %s 已下发（unit=%s）", verb, unit)
+        else:
+            logger.warning("隧道 %s 失败 rc=%s err=%s", verb, proc.returncode,
+                           (proc.stderr or "").strip())
+    except Exception as exc:  # noqa: BLE001 - 隧道失败不影响开关机结果
+        logger.warning("隧道 %s 异常：%r", verb, exc)
+
+
+@router.post("/clouds/power", response_model=CloudPowerOut)
+async def cloud_power(body: CloudPowerIn, _admin: User = Depends(get_admin)):
+    """手动开 / 关机。
+
+    范围（用户 2026-09-15 明确）：点按钮直接执行——**不做任务检测拦截、不做中断任务处理**；
+    开机后"开机即 worker"由池心跳自愈完成（不改派单逻辑）。
+
+    - 只接受节点 url，实例 uuid 由后端按 clouds/*.env 自查（杜绝操作配置外的实例）
+    - 平台失败原样透传 msg + request_id（无卡 / 授权失败 / 实例不存在都能看到原因）
+    """
+    node = pool.get_node_by_url(body.url)
+    if node is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "未知节点 url")
+    inst = getattr(node, "cloud", None)
+    if inst is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"ok": False, "error_code": "NOT_CLOUD",
+                    "msg": "该节点不是云实例（clouds/ 未配置，或 CLOUD_WORKER_URL 与池中 url 不一致）"},
+        )
+    if not inst.controllable:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"ok": False, "error_code": "NO_CREDENTIAL",
+                    "msg": "云实例缺少 CLOUD_API_TOKEN / CLOUD_INSTANCE_UUID"},
+        )
+    try:
+        result = await (registry.power_on(inst) if body.action == "on" else registry.power_off(inst))
+    except CloudAPIError as exc:
+        raise HTTPException(exc.http_status, detail=exc.detail(inst.id))
+    # 方案A：开关机成功后联动隧道（失败仅记日志，不影响本接口返回）
+    _tunnel(body.action)
+    return CloudPowerOut(
+        ok=True,
+        action=body.action,
+        instance=inst.id,
+        status=str(result.get("status") or ""),
+        instance_status=result.get("instance_status"),
+        eta_s=result.get("eta_s"),
+        already=bool(result.get("already")),
+        msg=("开机指令已下发，云端启动中（就绪后自动接单）" if body.action == "on"
+             else "关机指令已下发，节点约 30s 内自动摘牌"),
+    )

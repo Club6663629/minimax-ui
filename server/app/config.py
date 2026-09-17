@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
     comfyui_input_dir: str = "/data/ComfyUI/input"
 
+    # ---- 云端实例（远程开机/关机）----
+    # clouds/*.env 所在目录（一台实例一个文件）；留空 = <server>/clouds
+    clouds_dir: str = ""
+
     # ---- MiniMax 云端 API（可选；为空则纯本地 768p 出片）----
     minimax_api_key: str = ""
     minimax_api_base: str = "https://api.minimax.cn"

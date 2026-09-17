@@ -1,5 +1,5 @@
 /** 管理后台：概览统计 / 用户管理 / 兑换码 / 任务监控 / Worker 池（仅管理员）。 */
-import { Copy, Cpu, RefreshCw, Ticket, Users } from "lucide-react";
+import { Copy, Cpu, Power, PowerOff, RefreshCw, Ticket, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../state/auth";
@@ -10,6 +10,7 @@ import {
   type AdminUser,
   type RedeemCodeOut,
   type Task,
+  type WorkerInfo,
   type WorkerPoolOut,
 } from "../types";
 
@@ -20,6 +21,78 @@ function fmtTime(s: string | null): string {
   return new Date(s).toLocaleString("zh-CN", { hour12: false });
 }
 
+/** 标签列：长模型名折叠为「模型×N」，短标签（1k/2k/4k/engine:rtx 等）原样显示；完整值见 hover。 */
+function compactTags(tags: string[]): string {
+  if (!tags.length) return "-";
+  const short = tags.filter((t) => t.length <= 24);
+  const longCount = tags.length - short.length;
+  return [...short, ...(longCount ? [`模型×${longCount}`] : [])].join(" · ");
+}
+
+/** 云开关机失败短因：命中错误码给中文短词，未命中则截取平台原文（12 字）。 */
+function shortReason(code: string | null | undefined, msg: string): string {
+  const MAP: Record<string, string> = {
+    NO_STOCK: "无库存",
+    AUTH_FAILED: "token失效",
+    NOT_FOUND: "实例不存在",
+    UPSTREAM_TIMEOUT: "平台超时",
+    UPSTREAM_ERROR: "网络异常",
+    BAD_REQUEST: "配置无效",
+    NO_CREDENTIAL: "缺凭据",
+    NOT_CLOUD: "非云节点",
+    PLATFORM_UNSUPPORTED: "平台不支持",
+  };
+  if (code && MAP[code]) return MAP[code];
+  const t = (msg || "").replace(/\s+/g, " ").trim();
+  if (!t) return code ? "未知原因" : "";
+  return t.length > 12 ? `${t.slice(0, 12)}…` : t;
+}
+
+/** 失败记录（本次会话内存 / 后端持久化 二选一）。 */
+type PowerNote = { code?: string | null; msg: string; at: number };
+
+// 失败原因展示 TTL：1 小时（过期不再显示；下次操作即覆盖）
+const NOTE_TTL_MS = 3600_000;
+
+/** 取当前应展示的失败记录：本地新失败优先，其次后端持久化（仅手动开关机、1h 内）。 */
+function liveFail(w: WorkerInfo, note?: PowerNote): PowerNote | null {
+  if (note) return note;
+  if (w.last_op_ok !== false) return null;
+  if (w.last_op_action !== "on" && w.last_op_action !== "off") return null;
+  const at = (w.last_op_at ?? 0) * 1000;
+  if (!at || Date.now() - at > NOTE_TTL_MS) return null;
+  return { code: w.last_op_code, msg: w.last_op_msg || "", at };
+}
+
+/** 电源列状态 pill：紧凑中文状态；后端长句只作 hover tooltip，不再占表格空间。 */
+function powerPill(
+  w: WorkerInfo,
+  busy: boolean,
+  act: "" | "on" | "off",
+  fail: PowerNote | null,
+): { text: string; cls: string; title: string } {
+  const AMBER = "bg-amber-500/15 text-amber-300 ring-amber-500/30";
+  const GREEN = "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30";
+  const GREY = "bg-zinc-500/15 text-zinc-400 ring-zinc-500/30";
+  const ROSE = "bg-rose-500/15 text-rose-300 ring-rose-500/30";
+  if (fail) {
+    const reason = shortReason(fail.code, fail.msg);
+    const when = new Date(fail.at).toLocaleString("zh-CN", { hour12: false });
+    const full = `${fail.msg || "未知错误"}${fail.code ? `（${fail.code}）` : ""}\n时间：${when}`;
+    return { text: reason ? `失败·${reason}` : "失败", cls: ROSE, title: full };
+  }
+  if (busy) {
+    return act === "on"
+      ? { text: "开机中…", cls: AMBER, title: "开机指令已下发，云端启动中（就绪后自动接单）" }
+      : { text: "关机中…", cls: AMBER, title: "关机指令已下发，节点约 30s 内自动摘牌" };
+  }
+  if (w.op_state === "starting") return { text: "开机中…", cls: AMBER, title: "开机指令已下发，云端启动中（就绪后自动接单）" };
+  if (w.op_state === "stopping") return { text: "关机中…", cls: AMBER, title: "关机指令已下发，节点约 30s 内自动摘牌" };
+  if (w.instance_status === "running") return { text: "运行中", cls: GREEN, title: `实例运行中：${w.instance_id ?? ""}` };
+  if (w.instance_status === "shutdown") return { text: "已关机", cls: GREY, title: "实例已关机（开机后可重新入池接单）" };
+  return { text: w.instance_status || "未知", cls: GREY, title: w.instance_id ?? "" };
+}
+
 export default function AdminPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState<Tab>("overview");
@@ -28,6 +101,11 @@ export default function AdminPage() {
   const [codes, setCodes] = useState<RedeemCodeOut[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [workerPool, setWorkerPool] = useState<WorkerPoolOut | null>(null);
+  // 云端实例开关机
+  const [cloudBusy, setCloudBusy] = useState("");
+  const [cloudMsg, setCloudMsg] = useState<Record<string, PowerNote>>({});
+  const [confirmPower, setConfirmPower] = useState<WorkerInfo | null>(null);
+  const [cloudAct, setCloudAct] = useState<"" | "on" | "off">("");
 
   // 用户积分调整
   const [adjustTarget, setAdjustTarget] = useState<AdminUser | null>(null);
@@ -37,6 +115,30 @@ export default function AdminPage() {
   const [codeValue, setCodeValue] = useState("100");
   const [codeCount, setCodeCount] = useState("5");
   const [message, setMessage] = useState("");
+
+  // ---- 云端实例开机 / 关机（手动；本次不做任务检测拦截）----
+  const doCloudPower = async (w: WorkerInfo, action: "on" | "off") => {
+    setCloudBusy(w.url);
+    setCloudMsg((m) => Object.fromEntries(Object.entries(m).filter(([k]) => k !== w.url)));
+    try {
+      setCloudAct(action);
+      await api.adminCloudPower(w.url, action);
+      // 指令受理后只保留失败信息；进行中/完成由电源列 pill 依据 op_state/instance_status 呈现
+      // 3s 后刷新一次池状态（开机后节点回池约 30s 内）
+      setTimeout(() => {
+        api.adminWorkers().then(setWorkerPool).catch(() => {});
+      }, 3000);
+    } catch (e) {
+      const err = e as { message?: string; errorCode?: string };
+      setCloudMsg((m) => ({
+        ...m,
+        [w.url]: { code: err.errorCode, msg: err.message || "未知错误", at: Date.now() },
+      }));
+    } finally {
+      setCloudBusy("");
+      setCloudAct("");
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -381,38 +483,129 @@ export default function AdminPage() {
               {workerPool.mock && <span className="text-xs font-normal text-amber-400">Mock 模式</span>}
               <span className="ml-auto text-xs font-normal text-zinc-600">每 5 秒自动刷新</span>
             </h3>
-            <table className="w-full min-w-[700px] text-sm">
+            <table className="w-full min-w-[560px] text-sm">
               <thead>
                 <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
-                  <th className="pb-2 font-normal">节点</th>
-                  <th className="pb-2 font-normal">角色</th>
-                  <th className="pb-2 font-normal">标签</th>
-                  <th className="pb-2 font-normal">健康</th>
-                  <th className="pb-2 font-normal">状态</th>
-                  <th className="pb-2 font-normal">当前任务</th>
+                  <th className="pb-2 pr-3 font-normal">节点</th>
+                  <th className="pb-2 pr-3 font-normal">角色</th>
+                  <th className="pb-2 pr-3 font-normal">标签</th>
+                  <th className="pb-2 pr-3 font-normal">状态</th>
+                  <th className="pb-2 pr-3 font-normal">当前任务</th>
+                  <th className="pb-2 font-normal">电源</th>
                 </tr>
               </thead>
               <tbody>
                 {workerPool.workers.map((w) => (
                   <tr key={w.url} className="border-b border-white/[0.04] last:border-0">
-                    <td className="py-2.5 font-mono text-xs text-zinc-300">{w.url}</td>
-                    <td className="py-2.5">
+                    <td className="py-2.5 pr-3">
+                      <span className="flex items-center gap-1.5 whitespace-nowrap">
+                        <span className="font-mono text-xs text-zinc-300" title={w.url}>
+                          {w.url.replace(/^https?:\/\//, "")}
+                        </span>
+                        {w.platform && (
+                          <span
+                            className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] leading-none text-sky-300 ring-1 ring-sky-500/30"
+                            title={w.instance_id ?? w.platform}
+                          >
+                            {w.platform}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-3">
                       <span className={w.role === "generate" ? "text-indigo-300" : "text-violet-300"}>
                         {w.role === "generate" ? "生成" : "超分"}
                       </span>
                     </td>
-                    <td className="py-2.5 text-xs text-zinc-500">{w.tags.join(", ") || "-"}</td>
-                    <td className="py-2.5">
-                      <span className={w.healthy ? "text-emerald-400" : "text-rose-400"}>
-                        {w.healthy ? "在线" : `已摘除(${w.consecutive_fails})`}
-                      </span>
+                    <td className="py-2.5 pr-3 text-xs text-zinc-500" title={w.tags.join("\n")}>
+                      {compactTags(w.tags)}
                     </td>
-                    <td className="py-2.5 text-zinc-400">{w.busy ? "忙碌" : "空闲"}</td>
-                    <td className="py-2.5 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                    <td className="py-2.5 pr-3 text-xs whitespace-nowrap">
+                      {!w.healthy ? (
+                        <span className="text-rose-400" title={`连续失败 ${w.consecutive_fails} 次，已从池中摘除`}>
+                          ⊘ 离线·{w.consecutive_fails}
+                        </span>
+                      ) : w.busy ? (
+                        <span className="text-amber-400" title="正在执行任务">
+                          ● 忙碌
+                        </span>
+                      ) : (
+                        <span className="text-emerald-400" title="空闲，可接单">
+                          ● 空闲
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                    <td className="py-2.5">
+                      {w.power_controllable ? (
+                        (() => {
+                          const p = powerPill(w, cloudBusy === w.url, cloudAct, liveFail(w, cloudMsg[w.url]));
+                          return (
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[11px] leading-none ring-1 ${p.cls}`}
+                                title={p.title}
+                              >
+                                {p.text}
+                              </span>
+                              <button
+                                className="btn-ghost !px-2 !py-0.5 text-xs"
+                                title="开机：云端启动并自动拉起 ComfyUI，就绪后作为 Worker 接单"
+                                disabled={!!cloudBusy || w.instance_status === "running"}
+                                onClick={() => doCloudPower(w, "on")}
+                              >
+                                <Power size={12} /> 开机
+                              </button>
+                              <button
+                                className="btn-ghost !px-2 !py-0.5 text-xs"
+                                title="关机：实例退出 Worker 池"
+                                disabled={!!cloudBusy || w.instance_status === "shutdown"}
+                                onClick={() => setConfirmPower(w)}
+                              >
+                                <PowerOff size={12} /> 关机
+                              </button>
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <span className="text-xs text-zinc-600">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ---- 云端实例关机二次确认 ---- */}
+      {confirmPower && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4"
+          onClick={() => setConfirmPower(null)}
+        >
+          <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-1 text-base font-semibold text-white">确认关闭云端实例？</h3>
+            <p className="mb-4 text-xs text-zinc-500">
+              {confirmPower.instance_id}（{confirmPower.url}）将关机并退出 Worker 池；
+              若节点上仍有任务在执行，会被中断。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button className="btn-ghost" onClick={() => setConfirmPower(null)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  const w = confirmPower;
+                  setConfirmPower(null);
+                  doCloudPower(w, "off");
+                }}
+              >
+                确认关机
+              </button>
+            </div>
           </div>
         </div>
       )}

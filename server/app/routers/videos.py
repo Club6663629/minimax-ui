@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import get_db
-from ..models import Task, Upload, User
+from ..models import CreditLog, Task, Upload, User
 from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
 from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
 from .serialize import serialize_task
@@ -205,11 +205,47 @@ def upgrade_video(
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_video(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """删除任务（含其高清升级子任务）。
+
+    credit_logs.task_id 外键（fk_2）没有 ON DELETE CASCADE，直接删任务会抛
+    MySQL 1451 变成 500；这里先把这些流水的 task_id 置 NULL（保留财务台账与金额），
+    再在同一事务内删除任务本身及其子任务。
+    """
     task = _get_owned_task(task_id, user, db)
-    if task.status in ("enhancing", "generating_768p", "upscaling"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "任务执行中，暂不可删除")
-    db.delete(task)
-    db.commit()
+
+    # 待删集合：自身 + 以 parent_task_id 指向它的子任务（含多级）
+    ids = [task.id]
+    frontier = [task.id]
+    while frontier:
+        rows = db.query(Task.id).filter(Task.parent_task_id.in_(frontier)).all()
+        kids = [r[0] for r in rows if r[0] not in ids]
+        ids.extend(kids)
+        frontier = kids
+
+    targets = db.query(Task).filter(Task.id.in_(ids)).all()
+
+    running = [t.id for t in targets if t.status in ("enhancing", "generating_768p", "upscaling")]
+    if running:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "任务执行中，暂不可删除（#" + "、#".join(str(i) for i in running) + "）",
+        )
+
+    try:
+        # 财务台账保留：仅解除对任务的引用（task_id 可空），解除外键阻塞
+        db.query(CreditLog).filter(CreditLog.task_id.in_(ids)).update(
+            {CreditLog.task_id: None}, synchronize_session=False
+        )
+        # 子任务先删，再删主任务
+        for t in sorted(targets, key=lambda x: 0 if x.id == task.id else 1):
+            db.delete(t)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "删除任务失败：" + type(exc).__name__ + ": " + str(exc),
+        ) from exc
 
 
 def _get_owned_task(task_id: int, user: User, db: Session) -> Task:

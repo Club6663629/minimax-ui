@@ -10,13 +10,17 @@ import type {
   UploadOut,
   User,
   WorkerPoolOut,
+  CloudPowerResult,
 } from "../types";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** 后端结构化错误码（如 NO_STOCK / NOT_CLOUD）；非结构化错误为 undefined。 */
+  errorCode?: string;
+  constructor(status: number, message: string, errorCode?: string) {
     super(message);
     this.status = status;
+    this.errorCode = errorCode;
   }
 }
 
@@ -61,11 +65,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     /* 非 JSON 响应 */
   }
   if (!resp.ok) {
-    const detail =
-      typeof data === "object" && data !== null && "detail" in data
-        ? String((data as { detail: unknown }).detail)
-        : `请求失败 (${resp.status})`;
-    throw new ApiError(resp.status, detail);
+    const detail = (data as { detail?: unknown } | null)?.detail;
+    let message = `请求失败 (${resp.status})`;
+    let errorCode: string | undefined;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (detail && typeof detail === "object") {
+      // 后端结构化错误（云开关机等）：{ok,error_code,msg,request_id}
+      const obj = detail as { msg?: string; error_code?: string };
+      errorCode = obj.error_code;
+      if (obj.msg) message = obj.msg;
+      else if (obj.error_code) message = obj.error_code;
+    }
+    throw new ApiError(resp.status, message, errorCode);
   }
   return data as T;
 }
@@ -132,4 +144,10 @@ export const api = {
   adminCodes: () => request<RedeemCodeOut[]>("/api/admin/redeem-codes"),
   adminStats: () => request<AdminStats>("/api/admin/stats"),
   adminWorkers: () => request<WorkerPoolOut>("/api/admin/workers"),
+  // 云端实例开机 / 关机（手动，点按钮直接执行）
+  adminCloudPower: (url: string, action: "on" | "off") =>
+    request<CloudPowerResult>("/api/admin/clouds/power", {
+      method: "POST",
+      body: JSON.stringify({ url, action }),
+    }),
 };

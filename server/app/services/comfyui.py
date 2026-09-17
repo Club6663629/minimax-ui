@@ -79,6 +79,76 @@ def load_workflow(mode: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ---- 注意力后端门控（Sol-Attn）----
+# 生成模板统一带 Sol-Attn 节点（BlockSparseAttention，节点 9600）；该节点仅
+# 0.35.0 + comfy-kitchen>=0.2.33 提供。目标节点（如 0.34 的 4090）没有时，
+# 提交前从「本次提交的副本」里摘除并把下游引用接回上游，磁盘模板保持不变。
+SOL_ATTN_CLASSES = {"BlockSparseAttention"}
+SOL_ATTN_TITLE_HINTS = ("Sol-Attn", "Sparse Attention")
+_CAP_CACHE: dict = {}
+_CAP_TTL = 300.0
+
+
+async def _node_supports_class(base_url: str, class_type: str) -> bool:
+    """探测目标 ComfyUI 是否注册了 class_type（进程内缓存 TTL；探测失败按“支持”处理，避免误摘）。"""
+    import time
+
+    key = (base_url.rstrip("/"), class_type)
+    now = time.time()
+    cached = _CAP_CACHE.get(key)
+    if cached and now - cached[0] < _CAP_TTL:
+        return cached[1]
+    ok = True
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("%s/object_info/%s" % (key[0], class_type))
+            resp.raise_for_status()
+            data = resp.json()
+        ok = bool(isinstance(data, dict) and data.get(class_type))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("注意力节点能力探测失败(%s %s): %s；按支持处理", key[0], class_type, exc)
+        ok = True
+    _CAP_CACHE[key] = (now, ok)
+    return ok
+
+
+async def gate_attention_nodes(workflow: dict, base_url: str) -> dict:
+    """目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游 → 回到目标节点原生 attention 路径。
+
+    原地修改并返回同一 dict；找不到安全重连点时原样保留，绝不阻断提交。
+    """
+    for nid, node in list(workflow.items()):
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        title = (node.get("_meta") or {}).get("title") or ""
+        if class_type not in SOL_ATTN_CLASSES and not any(h in title for h in SOL_ATTN_TITLE_HINTS):
+            continue
+        if class_type and await _node_supports_class(base_url, class_type):
+            continue
+        src = (node.get("inputs") or {}).get("model")
+        if not (isinstance(src, list) and len(src) == 2):
+            logger.warning("节点 %s(%s) 无 model 输入，无法安全摘除，保持原样", nid, class_type)
+            continue
+        upstream, out_idx = src[0], src[1]
+        rewired = 0
+        for other_id, other in workflow.items():
+            if other_id == nid or not isinstance(other, dict):
+                continue
+            inputs = other.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            for slot, value in inputs.items():
+                if (isinstance(value, list) and len(value) == 2
+                        and str(value[0]) == str(nid) and value[1] == out_idx):
+                    inputs[slot] = [upstream, out_idx]
+                    rewired += 1
+        del workflow[nid]
+        logger.info("[gate] 节点 %s(%s) 目标节点不支持，已摘除并重连 %s 处引用 → 上游 %s:%s",
+                    nid, class_type, rewired, upstream, out_idx)
+    return workflow
+
+
 def _next_node_id(workflow: dict) -> str:
     """取工作流下一个可用节点 ID 字符串。"""
     nums = [int(k) for k in workflow if str(k).isdigit()]
@@ -372,7 +442,9 @@ def _insert_exact_scale(workflow: dict, target_w: int, target_h: int) -> None:
     src_nid, src_output = str(images_input[0]), images_input[1]
     # 已注入过则跳过
     src_node = workflow.get(src_nid)
-    if src_node and isinstance(src_node, dict) and src_node.get("class_type") == "ImageScale":
+    # 2026-09-17 SAI：RTX VSR 的 target dimensions 分支已直接输出目标尺寸（节点内部对齐 8 的倍数），
+    # FlashVSR 链路（2x → RTX）下再插 ImageScale 只是同尺寸重算，4K/124 帧实测白耗 84.6s，故跳过。
+    if src_node and isinstance(src_node, dict) and src_node.get("class_type") in ("ImageScale", "RTXVideoSuperResolution"):
         return
     # 分配新节点 ID
     nums = [int(k) for k in workflow if str(k).isdigit()]

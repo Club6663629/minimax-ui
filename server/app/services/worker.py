@@ -556,6 +556,8 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         video_names=video_names, audio_names=audio_names,
         unet_name=node.unet_for(mode),
     )
+    # 目标节点不支持 Sol-Attn 时按能力摘除（磁盘模板不动）
+    workflow = await comfyui.gate_attention_nodes(workflow, node.url)
 
     prompt_id = await client.submit(workflow)
     with SessionLocal() as db:

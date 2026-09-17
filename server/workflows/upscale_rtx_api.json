@@ -1,116 +1,239 @@
 {
-  "1": {
-    "class_type": "LoadVideo",
-    "inputs": {
-      "file": "placeholder.mp4"
-    },
-    "_meta": {
-      "title": "LoadVideo"
-    }
-  },
-  "2": {
-    "class_type": "GetVideoComponents",
-    "inputs": {
-      "video": [
-        "1",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "GetVideoComponents"
-    }
-  },
-  "10": {
-    "class_type": "VOSR2ModelLoader",
-    "inputs": {
-      "model": "VOSR2",
-      "dtype": "fp16"
-    },
-    "_meta": {
-      "title": "VOSR 2.0 Model Loader"
-    }
-  },
-  "11": {
-    "class_type": "VOSR2UpscaleCached",
-    "inputs": {
-      "model": [
-        "10",
-        0
-      ],
-      "image": [
-        "2",
-        0
-      ],
-      "upscale": 1,
-      "seed": 42,
-      "color_alignment": "wavelet",
-      "tile_size": 1024,
-      "tile_overlap": 32,
-      "vae_tile_size": 1024,
-      "vae_tile_overlap": 32,
-      "source_path": "",
-      "source_extra": "{\"src\":\"minimax-ui\"}",
-      "cache_dir": "/data/ComfyUI/cache_vosr2",
-      "model_tag": "VOSR2:fp16",
-      "use_cache": true
-    },
-    "_meta": {
-      "title": "VOSR 2.0 Upscale (L2 Cached)"
-    }
-  },
-  "3": {
-    "class_type": "RTXVideoSuperResolution",
-    "inputs": {
-      "images": [
-        "11",
-        0
-      ],
-      "resize_type": "target dimensions",
-      "quality": "ULTRA",
-      "resize_type.width": 1920,
-      "resize_type.height": 1080
-    },
-    "_meta": {
-      "title": "RTX Video Super Resolution"
-    }
-  },
-  "4": {
-    "class_type": "CreateVideo",
-    "inputs": {
-      "images": [
-        "3",
-        0
-      ],
-      "fps": [
-        "2",
-        2
-      ],
-      "audio": [
-        "2",
-        1
-      ],
-      "bit_depth": [
-        "2",
-        3
-      ]
-    },
-    "_meta": {
-      "title": "CreateVideo"
-    }
-  },
-  "5": {
-    "class_type": "SaveVideo",
-    "inputs": {
-      "filename_prefix": "video/Upscaled_RTX",
-      "format": "auto",
-      "codec": "auto",
-      "video": [
-        "4",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "SaveVideo"
-    }
+ "1": {
+  "class_type": "LoadVideo",
+  "inputs": {
+   "file": "placeholder.mp4"
   }
+ },
+ "2": {
+  "class_type": "GetVideoComponents",
+  "inputs": {
+   "video": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "class_type": "FlashVSRModelLoader",
+  "inputs": {
+   "model_name": "FlashVSR1_1.safetensors"
+  }
+ },
+ "4": {
+  "class_type": "ModelAttentionBackend",
+  "inputs": {
+   "model": [
+    "3",
+    0
+   ],
+   "attention": "comfy kitchen attention"
+  }
+ },
+ "5": {
+  "class_type": "FlashVSRLQLoader",
+  "inputs": {
+   "lq_name": "LQ_proj_in.safetensors",
+   "compute_dtype": "fp16"
+  }
+ },
+ "6": {
+  "class_type": "FlashVSRPromptLoader",
+  "inputs": {
+   "prompt_name": "Prompt.safetensors"
+  }
+ },
+ "7": {
+  "class_type": "FlashVSRPrepareVideo",
+  "inputs": {
+   "images": [
+    "2",
+    0
+   ],
+   "scale_multiplier": 2.0
+  }
+ },
+ "8": {
+  "class_type": "FlashVSRApply",
+  "inputs": {
+   "model": [
+    "20",
+    0
+   ],
+   "lq_projector": [
+    "5",
+    0
+   ],
+   "video": [
+    "7",
+    0
+   ],
+   "conditioning_strength": 1.0
+  }
+ },
+ "9": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "8",
+    0
+   ],
+   "conditioning": [
+    "6",
+    0
+   ]
+  }
+ },
+ "10": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 42
+  }
+ },
+ "11": {
+  "class_type": "FlashVSRStreamingSampler",
+  "inputs": {
+   "runtime": [
+    "8",
+    1
+   ],
+   "sampling_mode": "streaming_faithful_lowvram",
+   "sparse_ratio": 2.0,
+   "local_range": 11,
+   "query_block_chunk": 12,
+   "new_latent_frames": 2,
+   "profile_cuda_events": false
+  }
+ },
+ "12": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "10",
+    0
+   ],
+   "guider": [
+    "9",
+    0
+   ],
+   "sampler": [
+    "11",
+    0
+   ],
+   "sigmas": [
+    "11",
+    1
+   ],
+   "latent_image": [
+    "7",
+    1
+   ]
+  }
+ },
+ "13": {
+  "class_type": "FlashVSRTCDecoderLoader",
+  "inputs": {
+   "decoder_name": "TCDecoder-fp16.safetensors",
+   "compute_dtype": "fp16",
+   "fuse_tgrow": true,
+   "channels_last": true,
+   "compile_memblocks": false
+  }
+ },
+ "14": {
+  "class_type": "FlashVSRTCDecode",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "decoder": [
+    "13",
+    0
+   ],
+   "video": [
+    "7",
+    0
+   ],
+   "output_chunk_size": 4,
+   "temporal_batch_size": 1,
+   "profile_cuda_events": false
+  }
+ },
+ "15": {
+  "class_type": "FlashVSRCropFrames",
+  "inputs": {
+   "images": [
+    "14",
+    0
+   ],
+   "video": [
+    "7",
+    0
+   ],
+   "color_correction": "wavelet_quarter_res",
+   "color_chunk_size": 1,
+   "inplace_correction": true,
+   "color_device": "auto",
+   "profile_stages": false
+  }
+ },
+ "16": {
+  "class_type": "RTXVideoSuperResolution",
+  "inputs": {
+   "images": [
+    "15",
+    0
+   ],
+   "resize_type": "target dimensions",
+   "quality": "ULTRA",
+   "resize_type.width": 1920,
+   "resize_type.height": 1080
+  }
+ },
+ "18": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "16",
+    0
+   ],
+   "fps": [
+    "2",
+    2
+   ],
+   "audio": [
+    "2",
+    1
+   ],
+   "bit_depth": [
+    "2",
+    3
+   ]
+  }
+ },
+ "19": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "18",
+    0
+   ],
+   "filename_prefix": "video/Upscaled_FS2X",
+   "format": "auto",
+   "codec": "auto"
+  },
+  "_meta": {
+   "title": "SaveVideo (NVENC via core H264->h264_nvenc patch)"
+  }
+ },
+ "20": {
+  "class_type": "FlashVSRBlockSparseAttention",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ]
+  }
+ }
 }

@@ -130,6 +130,19 @@ export interface WorkerInfo {
   busy: boolean;
   task_id: number | null;
   consecutive_fails: number;
+  // 云端实例（clouds/*.env）；非云节点为 null / false
+  platform: string | null;
+  instance_id: string | null;      // 形如 autodl:pro-7889ca37d10f
+  instance_uuid: string | null;
+  instance_status: string | null;  // running / shutdown / ...
+  op_state: string | null;         // idle | starting | stopping
+  power_controllable: boolean;
+  // 最近一次手动开关机结果（后端持久化；刷新页面后仍能显示失败原因）
+  last_op_action: "on" | "off" | "status" | null;
+  last_op_ok: boolean | null;
+  last_op_code: string | null;
+  last_op_msg: string | null;
+  last_op_at: number | null;       // unix 秒
 }
 
 export interface WorkerPoolOut {
@@ -138,6 +151,19 @@ export interface WorkerPoolOut {
   queued: number;
   generating: number;
   upscaling: number;
+}
+
+// 云端实例开机/关机结果
+export interface CloudPowerResult {
+  ok: boolean;
+  action: "on" | "off";
+  instance: string;
+  status: string;
+  instance_status?: string | null;
+  eta_s?: number | null;
+  already?: boolean;
+  msg?: string;
+  request_id?: string;
 }
 
 export const ACTIVE_STATUSES: TaskStatus[] = [

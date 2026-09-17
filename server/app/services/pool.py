@@ -17,6 +17,7 @@ from typing import List, Optional
 import httpx
 
 from ..config import settings
+from .clouds import registry
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class WorkerNode:
         self.consecutive_fails = 0
         self.task_id: Optional[int] = None  # 正在执行的任务（None=空闲）
         self.queue_busy = False             # ComfyUI 真实队列是否忙碌（心跳探测 /queue）
+        self.cloud = None                   # 云端实例（clouds/*.env 按 url 绑定；非云节点为 None）
 
     @property
     def busy(self) -> bool:
@@ -88,6 +90,19 @@ class WorkerNode:
             "task_id": self.task_id,
             "queue_busy": self.queue_busy,
             "consecutive_fails": self.consecutive_fails,
+            # 云端实例信息（无 cloud 配置时全为 None / false，前端不渲染开关机按钮）
+            "platform": self.cloud.platform if self.cloud else None,
+            "instance_id": self.cloud.id if self.cloud else None,
+            "instance_uuid": self.cloud.instance_uuid if self.cloud else None,
+            "instance_status": self.cloud.instance_status if self.cloud else None,
+            "op_state": self.cloud.op_state if self.cloud else None,
+            "power_controllable": bool(self.cloud and self.cloud.controllable),
+            # 最近一次手动开关机结果（失败原因持久化，刷新页面不丢；白名单字段，无凭据）
+            "last_op_action": (self.cloud.last_op or {}).get("action") if self.cloud else None,
+            "last_op_ok": (self.cloud.last_op or {}).get("ok") if self.cloud else None,
+            "last_op_code": (self.cloud.last_op or {}).get("code") if self.cloud else None,
+            "last_op_msg": (self.cloud.last_op or {}).get("msg") if self.cloud else None,
+            "last_op_at": (self.cloud.last_op or {}).get("at") if self.cloud else None,
         }
 
 
@@ -128,13 +143,21 @@ class WorkerPool:
         self.mock = settings.mock_comfy
         self.nodes = _mock_workers() if self.mock else _parse_workers()
         self._hb_task: Optional[asyncio.Task] = None
+        self._cloud_task: Optional[asyncio.Task] = None
         self._rr_index = 0  # 生成节点轮询指针（round-robin，避免永远优先第一个节点）
+        # 云端实例绑定：按 CLOUD_WORKER_URL 精确匹配；目录不存在/不匹配只告警（防误操作）
+        try:
+            registry.bind_nodes(self.nodes)
+        except Exception:
+            logger.exception("云端实例绑定失败（忽略，不影响本地节点）")
 
     # ---- 生命周期 ----
     async def start(self) -> None:
         if self.mock or self._hb_task is not None:
             return
         self._hb_task = asyncio.get_event_loop().create_task(self._heartbeat_loop())
+        # 云实例状态轮询（无云实例时内部立即返回）
+        self._cloud_task = asyncio.get_event_loop().create_task(registry.status_loop())
         logger.info(
             "Worker 池已启动：%d 生成 + %d 超分",
             sum(1 for n in self.nodes if n.role == "generate"),
@@ -145,6 +168,9 @@ class WorkerPool:
         if self._hb_task is not None:
             self._hb_task.cancel()
             self._hb_task = None
+        if self._cloud_task is not None:
+            self._cloud_task.cancel()
+            self._cloud_task = None
 
     async def _heartbeat_loop(self) -> None:
         """每 10s 探活全部节点；连续失败 30s 摘除，恢复后自动回池。"""
