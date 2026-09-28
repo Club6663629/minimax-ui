@@ -64,6 +64,12 @@ class WorkerNode:
         mode 权重族映射：t2v/flf2v → fl2va，r2v → ref2va。
         未配置对应标签时返回 None（沿用模板默认 int8 权重，A100 场景）。
         """
+        # 优先取「该 mode 专用」权重标签：unet:<mode>:<文件>。
+        # 长视频导演台（director）用 Singularity，短视频 t2v/flf2v/r2v 用官方 convrot，
+        # 两者不能再共用族标签，否则 unet 覆写会把导演台换成官方权重。
+        for t in self.tags:
+            if t.startswith(f"unet:{mode}:"):
+                return t.split(":", 2)[2]
         family = "ref2va" if mode == "r2v" else "fl2va"
         for t in self.tags:
             if t.startswith(f"unet:{family}:"):
@@ -237,6 +243,26 @@ class WorkerPool:
         idx = self._rr_index % n
         self._rr_index = (self._rr_index + 1) % n
         return candidates[idx]
+
+    def has_director(self) -> bool:
+        """是否配置了长视频导演台节点（标签 director）。"""
+        return any(n.role == "generate" and n.has_tag("director") for n in self.nodes)
+
+    def acquire_director(self, task_id: int) -> Optional[WorkerNode]:
+        """领取导演台节点：只认带 director 标签、且当前完全空闲（无占位且队列空）的节点。
+
+        导演台独占整卡（一次提交跑完全部段、可达数十分钟），故不做 heavy 优先与兜底派发；
+        短视频生成侧的 _claim 与领取逻辑在其运行期间互斥（见 worker._generate_loop）。
+        """
+        idle = [
+            n for n in self.nodes
+            if n.role == "generate" and n.has_tag("director") and n.healthy and not n.busy
+        ]
+        if not idle:
+            return None
+        node = self._pick_round_robin(idle)
+        node.task_id = task_id
+        return node
 
     def acquire_upscale(self, tier: str, task_id: int) -> Optional[WorkerNode]:
         """领取超分节点：主力池（带档位标签）优先，2K 优先派发由调度侧排序保证；

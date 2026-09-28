@@ -34,6 +34,11 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
     except (TypeError, ValueError):
         ref_ids = []
 
+    try:
+        segments = json.loads(getattr(task, "segments", "") or "[]")
+    except (TypeError, ValueError):
+        segments = []
+
     # 参考区按扩展名分类：ref_image_urls 仅图片（保持兼容），新增视频/音频列表
     ref_image_urls: list[str] = []
     ref_video_urls: list[str] = []
@@ -92,6 +97,7 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
         parent_task_id=task.parent_task_id,
         upscale_target=task.upscale_target,
         worker_url=task.worker_url or "",
+        segments=segments,
         created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,

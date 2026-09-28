@@ -43,7 +43,7 @@ class Task(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
 
-    mode: Mapped[str] = mapped_column(String(10))  # t2v | flf2v | r2v
+    mode: Mapped[str] = mapped_column(String(10))  # t2v | flf2v | r2v | director
     prompt: Mapped[str] = mapped_column(Text)
     enhanced_prompt: Mapped[str] = mapped_column(Text, default="")
     aspect_ratio: Mapped[str] = mapped_column(String(8), default="16:9")
@@ -56,6 +56,9 @@ class Task(Base):
     last_image_id: Mapped[Optional[int]] = mapped_column(ForeignKey("uploads.id"))
     # 全能参考模式的多张参考图（JSON 数组，官方上限 9 张）
     ref_image_ids: Mapped[str] = mapped_column(Text, default="")
+    # 长视频导演台（mode=director）段清单：JSON 数组，每项
+    # {index, prompt, ref_image_ids, frames, start_frame, end_frame, seed}
+    segments: Mapped[str] = mapped_column(Text, default="")
 
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     error: Mapped[str] = mapped_column(Text, default="")

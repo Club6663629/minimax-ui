@@ -39,7 +39,7 @@ ASPECT_PRESETS = {
     "9:16": "9:16 (Portrait Widescreen)",
     "1:1": "1:1 (Square)",
 }
-MEGAPIXELS_768P = 0.98
+MEGAPIXELS_768P = 1.0
 
 # ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
 UPSCALE_TIERS = {
@@ -79,6 +79,158 @@ def load_workflow(mode: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------- 长视频导演台
+# TimelineDirector（Songssx）有限分段：director_api.json 为 13 节点扁平表，
+# 段窗口语义见插件 docs/TIMELINE_SEGMENT_WINDOWS_CN.md：
+#   - 段长 = endFrame - startFrame，必须吸附到 5 + 17n 帧（上限 3592 ≈150s@24fps）
+#   - 段间交叠必须是 H3 合法 guide 帧数（0 / 1 / 5+17n），插件默认 39 帧（=5+17*2）
+#   - 总帧数 = 末段 endFrame（不是各段长度直接相加）
+DIRECTOR_OVERLAP_FRAMES = 39
+DIRECTOR_MAX_SEGMENT_FRAMES = 3592
+DIRECTOR_SECOND_PASS_MODEL = "minimax_h3_latent_upscaler_3d_fp16.safetensors"
+# 已实测的导演台画布（16:9 / megapixels=1.0 / multiple=32）
+DIRECTOR_SIZE = {"16:9": (1376, 768), "9:16": (768, 1376)}
+
+
+def align_h3_frames(requested_frames: float, fps: int = 24) -> int:
+    """把期望帧数吸附到 H3 合法帧数 5 + 17n（与插件 _aligned_h3_length 同规则）。"""
+    requested = max(5.0, float(requested_frames))
+    n = max(0, round((requested - 5.0) / 17.0))
+    return min(int(5 + 17 * n), DIRECTOR_MAX_SEGMENT_FRAMES)
+
+
+def valid_overlap_frames(overlap: int) -> int:
+    """交叠吸附：0 / 1 / 5+17n 三档（插件 _valid_guide_frames 规则）。"""
+    overlap = int(overlap)
+    if overlap <= 0:
+        return 0
+    if overlap == 1:
+        return 1
+    if overlap < 5:
+        return 1
+    n = max(0, round((overlap - 5.0) / 17.0))
+    return int(5 + 17 * n)
+
+
+def plan_director_segments(segments, aspect_ratio: str = "16:9", fps: int = 24,
+                           overlap_frames: int = DIRECTOR_OVERLAP_FRAMES) -> dict:
+    """把「每段时长(秒) + 提示词 + 参考图」排版为插件的段窗口。
+
+    segments: [{"prompt": str, "duration": float, "ref_image_ids": [int]}]
+    返回 {"segments":[{index,prompt,ref_image_ids,frames,start_frame,end_frame}],
+          "total_frames": int, "width": int, "height": int, "fps": int, "overlap_frames": int}
+    """
+    if aspect_ratio not in DIRECTOR_SIZE:
+        raise ValueError(f"导演台画布暂只支持 16:9 / 9:16（已实测 16:9 → 1376x768），收到 {aspect_ratio}")
+    if not segments:
+        raise ValueError("导演台至少需要 1 段")
+    if len(segments) > 64:
+        raise ValueError("导演台段数上限 64（插件限制）")
+    overlap = valid_overlap_frames(overlap_frames)
+    planned, cursor = [], 0
+    for i, seg in enumerate(segments):
+        # 段清单有两种来源：路由层传入的「原始段」（duration 秒）与
+        # worker 从 tasks.segments 读回的「已排版段」（frames/start_frame/end_frame）。
+        # 已排版段直接沿用 frames，保证重排幂等（否则 KeyError: duration）。
+        if seg.get("frames"):
+            frames = int(seg["frames"])
+        else:
+            frames = align_h3_frames(round(float(seg["duration"]) * fps), fps)
+        if i == 0:
+            start = 0
+        else:
+            start = cursor - overlap
+            assert start > planned[-1]["start_frame"], "段起点必须前进"
+        end = start + frames
+        planned.append({
+            "index": i,
+            "prompt": str(seg["prompt"]),
+            "ref_image_ids": list(seg.get("ref_image_ids") or []),
+            "frames": frames,
+            "start_frame": start,
+            "end_frame": end,
+        })
+        cursor = end
+    w, h = DIRECTOR_SIZE[aspect_ratio]
+    return {
+        "segments": planned,
+        "total_frames": planned[-1]["end_frame"],
+        "width": w, "height": h, "fps": fps, "overlap_frames": overlap,
+    }
+
+
+def build_director_timeline(plan: dict, images, global_prompt: str = "") -> str:
+    """组装 TimelinePlanner 的 timeline_data（结构对齐已跑通实例的提交体）。"""
+    fps = plan["fps"]
+    seg0 = plan["segments"][0]
+    timeline = {
+        "version": 9,
+        "fps": fps,
+        "globalPrompt": global_prompt,
+        "secondPass": False,
+        "secondPassModel": DIRECTOR_SECOND_PASS_MODEL,
+        "secondPassHighSteps": 2,
+        "selection": {"start": 0, "duration": seg0["frames"] / fps},
+        "videoAudioEnabled": True,
+        "videoClips": [],
+        "images": images,
+        "audios": [],
+        "segmentConfig": {
+            "count": len(plan["segments"]),
+            "mode": "timeline",
+            "segments": [
+                {
+                    "images": [f"u{rid}" for rid in s["ref_image_ids"]],
+                    "audios": [],
+                    "prompt": s["prompt"],
+                    "startFrame": s["start_frame"],
+                    "endFrame": s["end_frame"],
+                }
+                for s in plan["segments"]
+            ],
+        },
+    }
+    return json.dumps(timeline, ensure_ascii=False)
+
+
+def inject_director(workflow: dict, plan: dict, images, seed: int,
+                    unet_name: Optional[str] = None) -> dict:
+    """把段窗口/画布/权重/种子注入 director_api.json（就地修改并返回）。
+
+    - UNETLoader：unet_name（导演台用 Singularity v1.3 int8，由 worker 的
+      pool.unet_for("director") 取 unet:director:<文件> 标签传入）
+    - MiniMaxH3TimelinePlanner：width/height/generation_seconds(=总帧数/24)/timeline_data
+    - MiniMaxH3FiniteSegmentSampler：seed（各段由插件按该基种子派生）
+    其余节点（SigmaShift shift12/3、ref2v turbo LoRA、Sol-Attn 0.4/tau1.0、euler、8 步）沿用模板。
+    """
+    fps = plan["fps"]
+    timeline_data = build_director_timeline(plan, images)
+    hit = []
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        ct = node.get("class_type")
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if ct == "UNETLoader" and unet_name:
+            inputs["unet_name"] = unet_name
+            hit.append("unet")
+        elif ct == "MiniMaxH3TimelinePlanner":
+            inputs["width"] = plan["width"]
+            inputs["height"] = plan["height"]
+            inputs["generation_seconds"] = plan["total_frames"] / fps
+            inputs["timeline_data"] = timeline_data
+            hit.append("planner")
+        elif ct == "MiniMaxH3FiniteSegmentSampler":
+            inputs["seed"] = int(seed)
+            hit.append("sampler")
+    missing = {"unet", "planner", "sampler"} - set(hit)
+    if missing:
+        raise ComfyUIError(f"director_api.json 缺少节点: {sorted(missing)}")
+    return workflow
+
+
 # ---- 注意力后端门控（Sol-Attn）----
 # 生成模板统一带 Sol-Attn 节点（BlockSparseAttention，节点 9600）；该节点仅
 # 0.35.0 + comfy-kitchen>=0.2.33 提供。目标节点（如 0.34 的 4090）没有时，
@@ -113,7 +265,11 @@ async def _node_supports_class(base_url: str, class_type: str) -> bool:
 
 
 async def gate_attention_nodes(workflow: dict, base_url: str) -> dict:
-    """目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游 → 回到目标节点原生 attention 路径。
+    """【2026-09-20 起已停用，保留备查/回滚】目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游。
+
+    停用原因：51/246 两个 4090 生成节点升级到 ComfyUI 0.36.0 + comfy-kitchen 0.2.35 后，
+    全部生成节点均注册 BlockSparseAttention(9600)，不再需要在提交前做能力探测与摘除。
+    worker.py 中的调用已注释；如需回滚见该处注释。
 
     原地修改并返回同一 dict；找不到安全重连点时原样保留，绝不阻断提交。
     """
@@ -525,12 +681,14 @@ class ComfyUIClient:
             raise ComfyUIError(f"提交工作流未返回 prompt_id: {r.text[:200]}")
         return prompt_id
 
-    async def wait_result(self, prompt_id: str) -> dict:
+    async def wait_result(self, prompt_id: str, timeout_seconds: Optional[float] = None) -> dict:
         """轮询 /history/{prompt_id}，完成后返回产物文件信息
-        {"filename": ..., "subfolder": ..., "type": ...}。"""
-        deadline_loops = int(
-            settings.comfyui_timeout_minutes * 60 / settings.comfyui_poll_interval
-        )
+        {"filename": ..., "subfolder": ..., "type": ...}。
+
+        timeout_seconds 覆盖默认 comfyui_timeout_minutes（长视频导演台单次可达数十分钟）。
+        """
+        total_seconds = float(timeout_seconds) if timeout_seconds else settings.comfyui_timeout_minutes * 60
+        deadline_loops = int(total_seconds / settings.comfyui_poll_interval)
         async with httpx.AsyncClient(timeout=30) as client:
             for _ in range(deadline_loops):
                 await asyncio.sleep(settings.comfyui_poll_interval)

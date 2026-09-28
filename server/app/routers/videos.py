@@ -1,5 +1,6 @@
 """视频任务路由：提交 / 列表 / 详情 / 重试 / 升级 / 删除 / 价格。"""
 import json
+import random
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,7 +11,13 @@ from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import get_db
 from ..models import CreditLog, Task, Upload, User
 from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
-from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
+from ..services import comfyui
+from ..services.billing import (
+    PACKAGES,
+    compute_cost,
+    compute_director_cost,
+    compute_upgrade_cost,
+)
 from .serialize import serialize_task
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
@@ -51,12 +58,61 @@ def pricing():
     )
 
 
+def _create_director(body: VideoCreateIn, user: User, db: Session):
+    """长视频导演台（mode=director）：一次提交跑完全部段（本轮只做后端/API）。
+
+    段清单写入 tasks.segments（每段 frames/start_frame/end_frame/seed/提示词/参考图），
+    帧数吸附 5+17n、段间交叠 39 帧（=5+17*2，插件合法交叠集 0/1/5+17n 的默认值）。
+    """
+    if not settings.director_enabled:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "长视频导演台未启用（DIRECTOR_ENABLED=false，拍板后再开启）",
+        )
+    segs = [s.model_dump() for s in body.segments] or [
+        {"prompt": body.prompt.strip(), "duration": float(body.duration), "ref_image_ids": []}
+    ]
+    try:
+        plan = comfyui.plan_director_segments(segs, aspect_ratio=body.aspect_ratio)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    seed = random.randint(0, 2 ** 63 - 1)
+    for seg in plan["segments"]:
+        seg["seed"] = seed
+    total_seconds = plan["total_frames"] / plan["fps"]
+    cost = compute_director_cost(total_seconds)
+    if user.credits < cost:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"积分不足，长视频 {total_seconds:.1f}s 需 {cost} 积分",
+        )
+    task = Task(
+        user_id=user.id,
+        mode="director",
+        prompt=(body.prompt.strip() or " / ".join(s["prompt"][:60] for s in plan["segments"]))[:2000],
+        aspect_ratio=body.aspect_ratio,
+        duration=int(round(total_seconds)),
+        resolution="768p",
+        enhance=False,               # 导演台不做云端提示词增强（不产生付费调用）
+        scene=body.scene,
+        segments=json.dumps(plan["segments"], ensure_ascii=False),
+        status="queued",
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return serialize_task(task, db=db)
+
+
 @router.post("", response_model=TaskOut)
 def create_video(
     body: VideoCreateIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # 长视频导演台：独立分支（段清单 → 帧窗口 → 一次提交跑完全部段）
+    if body.mode == "director":
+        return _create_director(body, user, db)
     # 模式与输入图校验
     if body.mode == "flf2v" and not (body.first_image_id or body.last_image_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "首尾帧模式需要至少上传首帧或尾帧图片")

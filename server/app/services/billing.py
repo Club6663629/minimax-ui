@@ -1,4 +1,5 @@
 """计费：成本计算 + 积分流水记账。"""
+import math
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,16 @@ def compute_cost(duration: int, resolution: str) -> int:
     elif resolution == "4k":
         cost += settings.cost_4k_extra
     return cost
+
+
+def compute_director_cost(total_seconds: float) -> int:
+    """长视频导演台（mode=director）计费：按 5s 档单价 × 向上取整的 5s 块数。
+
+    导演台一次提交跑完全部段（单卡独占、总时长可达数分钟），故按总时长折算；
+    本轮只做后端/API，前端入口未开（DIRECTOR_ENABLED=false）。
+    """
+    blocks = max(1, math.ceil(float(total_seconds) / 5.0))
+    return blocks * settings.cost_768p_5s
 
 
 def compute_upgrade_cost(resolution: str) -> int:

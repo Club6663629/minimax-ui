@@ -42,7 +42,7 @@ class UploadOut(BaseModel):
 
 # ---- 视频任务 ----
 class VideoCreateIn(BaseModel):
-    mode: Literal["t2v", "flf2v", "r2v"]
+    mode: Literal["t2v", "flf2v", "r2v", "director"]
     prompt: str = Field(min_length=1, max_length=2000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
     duration: Literal[5, 8, 10, 15] = 5
@@ -52,6 +52,21 @@ class VideoCreateIn(BaseModel):
     first_image_id: Optional[int] = None
     last_image_id: Optional[int] = None
     # 全能参考资料 id：图片/视频/音频混存，总数上限 9（其中视频 ≤3、音频 ≤3）
+    ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
+    # 长视频导演台（mode=director）段清单，1..64 段；留空则用 prompt+duration 作单段
+    segments: list["DirectorSegmentIn"] = Field(default_factory=list, max_length=64)
+
+
+class DirectorSegmentIn(BaseModel):
+    """长视频导演台的单段：一条完整本段提示词 + 本段参考图。
+
+    duration 会被吸附到 H3 合法帧数 5+17n（与插件 minimax_h3_timeline_director.py:783 同规则）。
+    """
+
+    prompt: str = Field(min_length=1, max_length=8000)
+    duration: float = Field(default=10.0, gt=0, le=150)  # 秒
+    # 本段参考图上限 9（与插件 MAX_REF_IMAGES=9 / r2v 参考上限一致）：
+    # 段间连续性素材 = 上一段末帧 + 从上一段均匀抽取的 5 帧，共 6 张
     ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
 
 
@@ -78,6 +93,8 @@ class TaskOut(BaseModel):
     parent_task_id: Optional[int] = None
     upscale_target: Optional[str] = None
     worker_url: str = ""
+    # 导演台段清单（已吸附的 frames/start_frame/end_frame/seed 原样回传，供核对）
+    segments: list[dict] = []
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]

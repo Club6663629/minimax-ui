@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # 留空则退回 comfyui_url 单实例串行模式（行为与旧版一致）
     comfyui_workers: str = ""
     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
+    # 长视频导演台（TimelineDirector，director_api.json）后端入口开关；默认关，拍板后置 true
+    director_enabled: bool = False
     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
     comfyui_input_dir: str = "/data/ComfyUI/input"
 

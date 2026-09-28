@@ -15,6 +15,7 @@ Mock 模式（MOCK_COMFY=1）：不依赖 ComfyUI，用 ffmpeg 生成测试视�
 import asyncio
 import json
 import logging
+import random
 import shutil
 import subprocess
 from datetime import datetime
@@ -29,7 +30,7 @@ from ..database import SessionLocal
 from ..models import Task, Upload, User
 from . import cloud, comfyui
 from ..scenes import apply_scene
-from .billing import add_credits, compute_cost
+from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ def _claim_queued() -> Optional[int]:
     with SessionLocal() as db:
         task = (
             db.query(Task)
-            .filter(Task.status == "queued", Task.enhance.is_(True))
+            .filter(Task.status == "queued", Task.enhance.is_(True), Task.mode != "director")
             .order_by(Task.id)
             .first()
         )
@@ -147,6 +148,15 @@ async def _run_enhance(task_id: int) -> None:
 # ---------------------------------------------------------------- ② 生成队列
 async def _generate_loop() -> None:
     while True:
+        # 长视频导演台独占整卡：队列里有待跑的 director 任务时，只跑它
+        # （同一时刻不再领取短视频任务），避免同卡两路任务穿插。
+        if settings.director_enabled and pool.has_director() and _director_pending():
+            if not _director_busy():
+                director_id = await asyncio.to_thread(_claim_director)
+                if director_id is not None:
+                    await _dispatch_director(director_id)
+            await asyncio.sleep(2)
+            continue
         # 无空闲生成槽位时不领取，避免反复扣费/退费的流水噪声
         if not any(n.role == "generate" and n.healthy and not n.busy for n in pool.nodes):
             await asyncio.sleep(2)
@@ -165,6 +175,7 @@ def _claim_generate() -> Optional[int]:
             db.query(Task)
             .filter(
                 Task.worker_url == "",
+                Task.mode != "director",   # 导演台走 _claim_director（独占整卡）
                 or_(
                     Task.status == "generating_768p",
                     and_(Task.status == "queued", Task.enhance.is_(False)),
@@ -199,6 +210,180 @@ def _claim_generate() -> Optional[int]:
         task.worker_url = "pending"  # 占位与计费同事务提交，防领取后派发前被重复领取
         db.commit()
         return task_id
+
+
+
+# ---------------------------------------------------------------- 长视频导演台
+# mode=director：一次提交跑完全部段（TimelineDirector 有限分段），单卡独占，
+# 与短视频生成任务互斥（有 director 待跑时生成循环不再领取短视频任务）。
+DIRECTOR_TIMEOUT_SECONDS = 3600   # 长视频单次可达数十分钟，超时放宽到 1 小时
+_DIRECTOR_RUNNING = False         # 进程内独占标记（后端单进程，天然全局）
+
+
+def _director_pending() -> bool:
+    """队列里是否还有待跑的导演台任务（queued / generating_768p 且未占位）。"""
+    with SessionLocal() as db:
+        return db.query(Task).filter(
+            Task.mode == "director",
+            Task.worker_url == "",
+            Task.status.in_(("queued", "generating_768p")),
+        ).first() is not None
+
+
+def _director_busy() -> bool:
+    return _DIRECTOR_RUNNING
+
+
+def _claim_director() -> Optional[int]:
+    """领取导演台任务（计费口径同短视频：派发即扣、失败全额退还）。"""
+    with SessionLocal() as db:
+        task = (
+            db.query(Task)
+            .filter(
+                Task.mode == "director",
+                Task.worker_url == "",
+                or_(Task.status == "generating_768p", Task.status == "queued"),
+            )
+            .order_by(Task.id)
+            .first()
+        )
+        if task is None:
+            return None
+        task_id, user_id = task.id, task.user_id
+        if task.cost > 0:  # 重投任务已在首次派发时计费
+            task.status = "generating_768p"
+            task.worker_url = "pending"
+            db.commit()
+            return task_id
+        user = db.get(User, user_id)
+        cost = compute_director_cost(task.duration)
+        if user.credits < cost:
+            task.status = "failed"
+            task.error = "积分不足"
+            task.finished_at = datetime.now()
+            db.commit()
+            return None
+        add_credits(db, user, -cost, "consume",
+                    note=f"长视频导演台 {task.duration}s/768p", task_id=task_id)
+        task.status = "generating_768p"
+        task.cost = cost
+        task.started_at = datetime.now()
+        task.worker_url = "pending"
+        db.commit()
+        return task_id
+
+
+async def _dispatch_director(task_id: int) -> None:
+    """派发导演台任务：只认 director 标签的空闲节点（独占整卡，无兜底）。"""
+    node = pool.acquire_director(task_id)
+    if node is None:
+        await asyncio.to_thread(_uncharge, task_id)  # 暂无专用空闲槽位：退积分回队
+        return
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if task is None:
+            pool.release(node)
+            return
+        task.attempts += 1
+        task.worker_url = node.url
+        db.commit()
+    asyncio.get_event_loop().create_task(_run_director(task_id, node))
+
+
+async def _run_director(task_id: int, node: WorkerNode) -> None:
+    try:
+        staging = await _generate_director(task_id, node)
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "generating_768p":
+                return
+            final_path = OUTPUT_DIR / f"{task_id}.mp4"
+            shutil.move(str(staging), final_path)
+            task.video_path = str(final_path)
+            task.status = "done"
+            task.finished_at = datetime.now()
+            db.commit()
+            logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("导演台任务 #%s 生成失败", task_id)
+        await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
+    finally:
+        pool.release(node)
+
+
+def _probe_image_size(path) -> tuple:
+    """用 ffprobe 取参考图真实宽高（写入 timeline_data.images，供插件按参考图尺寸构图）。"""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=20,
+        ).stdout.strip().splitlines()
+        w, h = out[0].split(",")[:2]
+        return int(w), int(h)
+    except Exception:  # 探测失败不阻断：留空由插件自行判断
+        logger.warning("ffprobe 取参考图尺寸失败: %s", path)
+        return 0, 0
+
+
+async def _generate_director(task_id: int, node: WorkerNode) -> Path:
+    """长视频导演台：按段清单一次提交 director_api.json，产物落 staging。"""
+    global _DIRECTOR_RUNNING
+    out_path = STAGING_DIR / f"{task_id}_director.mp4"
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        aspect = task.aspect_ratio
+        try:
+            segments = json.loads(task.segments or "[]")
+        except (TypeError, ValueError):
+            segments = []
+        if not segments:
+            raise RuntimeError("导演台任务缺少段清单(segments)")
+        seed = int(segments[0].get("seed") or 0) or random.randint(0, 2 ** 63 - 1)
+        # 段清单里的参考图 → 节点 input 目录（同一 upload 只传一次）
+        upload_ids = []
+        for seg in segments:
+            for rid in seg.get("ref_image_ids") or []:
+                if rid not in upload_ids:
+                    upload_ids.append(rid)
+        uploads = {uid: db.get(Upload, uid) for uid in upload_ids}
+
+    plan = comfyui.plan_director_segments(segments, aspect_ratio=aspect)
+    client = comfyui.ComfyUIClient(node.url)
+    images, uploaded = [], {}
+    for uid, up in uploads.items():
+        if up is None:
+            continue
+        p = Path(up.path)
+        name = await client.upload_image(p)
+        w, h = await asyncio.to_thread(_probe_image_size, p)
+        uploaded[uid] = {"id": f"u{uid}", "file": name, "name": p.name, "width": w, "height": h}
+        images.append(uploaded[uid])
+
+    workflow = comfyui.load_workflow("director")
+    comfyui.inject_director(workflow, plan, images, seed, unet_name=node.unet_for("director"))
+    _DIRECTOR_RUNNING = True
+    try:
+        prompt_id = await client.submit(workflow)
+        with SessionLocal() as db:
+            db.get(Task, task_id).comfy_prompt_id = prompt_id
+            db.commit()
+        logger.info(
+            "导演台任务 #%s 已提交节点 %s：%d 段 / 总 %d 帧（%.3fs）/ 交叠 %d 帧 / seed=%s",
+            task_id, node.url, len(plan["segments"]), plan["total_frames"],
+            plan["total_frames"] / plan["fps"], plan["overlap_frames"], seed,
+        )
+        file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
+        content = await client.fetch_file(
+            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
+        )
+        out_path.write_bytes(content)
+    finally:
+        _DIRECTOR_RUNNING = False
+    logger.info("导演台任务 #%s 产物已落盘: %s", task_id, out_path)
+    return out_path
 
 
 async def _dispatch_generate(task_id: int) -> None:
@@ -556,8 +741,11 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         video_names=video_names, audio_names=audio_names,
         unet_name=node.unet_for(mode),
     )
-    # 目标节点不支持 Sol-Attn 时按能力摘除（磁盘模板不动）
-    workflow = await comfyui.gate_attention_nodes(workflow, node.url)
+    # 2026-09-20 路线B：51:8188 / 246:8188 两个 4090 生成节点已升级 ComfyUI 0.36.0 +
+    # comfy-kitchen 0.2.35，均注册 BlockSparseAttention(9600)；云端 8183(5090,0.34+kitchen0.2.34)
+    # 亦支持。故**不再按能力摘除 Sol-Attn 节点**，所有生成节点统一走 Sol-Attn。
+    # 回滚：取消下面一行注释，并恢复 comfyui.py 的 .bak.routeB.<ts> 备份后重启 8001。
+    # workflow = await comfyui.gate_attention_nodes(workflow, node.url)
 
     prompt_id = await client.submit(workflow)
     with SessionLocal() as db:
