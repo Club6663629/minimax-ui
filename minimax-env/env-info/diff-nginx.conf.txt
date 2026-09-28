@@ -1,0 +1,98 @@
+--- /tmp/base26/nginx-minimax-ui.conf	2026-09-28 14:42:24.258119563 +0800
++++ /data/workspace/minimax-ui-patch-20260926/env-info/nginx-minimax-ui.conf	2026-09-28 14:41:07.862802104 +0800
+@@ -1,7 +1,16 @@
++# 2026-09-21 修复：/qwen21/ 反代丢失 %2F（工作流文件名带目录分隔符，前端选工作流静默失败）
++# map 必须位于 http 上下文（本文件由 nginx.conf 第 59 行 include 在 http 块内），用未解码的 $request_uri 剥前缀
++map $request_uri $qwen21_uri {
++    default          "/";
++    ~^/qwen21(/.*)$  $1;
++}
++
+ # MiniMax H3 Studio 前端（测试部署，独立端口 8080）
+ server {
+     listen 8080;
+     server_name _;
++    # 2026-09-22 修复A（配套）：redirect 一律用相对 Location，避免把内部 http://$host:8080 暴露给公网客户端
++    absolute_redirect off;
+ 
+     client_max_body_size 50m;
+ 
+@@ -9,11 +18,36 @@
+     index index.html;
+ 
+     # 视频产物临时访问（复用已验证通的 minimax.ai4ss.com 链路）
++    # 2026-09-17 按用户要求取消 /video/ 公网挂载（数据目录 /data/ComfyUI/output/video 保留不动）
++    # 显式 404，避免 SPA try_files 回落到 /index.html 造成"还挂着"的误判
++    # 2026-09-18 用户要求：把视频产物目录挂出来（只读静态；任务号直链 /video/<task_id>.mp4）
+     location /video/ {
+-        alias /data/ComfyUI/output/video/;
++        alias /data/minimax-ui/output/;
++        autoindex on;
++        types { text/html html htm; video/mp4 mp4; text/markdown md; application/json json; image/jpeg jpg jpeg; image/png png; image/webp webp; video/webm webm; audio/flac flac; text/plain txt log; }
++    }
++
++    # 2026-09-18 用户要求：FastH3 V2 / 4090 报告页挂公网（只读静态、curated 目录；/video/ 仍保持 404）
++    location /fasth3v2/ {
++        alias /data/ComfyUI/output/pub/fasth3v2-4090-20260918/;
++        autoindex on;
++        types { text/html html htm; video/mp4 mp4; text/markdown md; application/json json; image/jpeg jpg jpeg; image/png png; image/webp webp; video/webm webm; audio/flac flac; text/plain txt log; }
++    }
++
++
++    # 2026-09-24 H3 段间引导（Motion Context）2 段链式实测对比页——只读静态挂载，临时
++    # 目录由 SAI 容器 scp 到 45（/data/ComfyUI/output/pub/interguide-20260924/），不改生成池/模板
++    location /interguide/ {
++        alias /data/ComfyUI/output/pub/interguide-20260924/;
++        autoindex on;
++        types { text/html html htm; video/mp4 mp4; text/markdown md; application/json json; image/jpeg jpg jpeg; image/png png; image/webp webp; video/webm webm; audio/flac flac; text/plain txt log; }
++    }
++
++    # 2026-09-24 vpromot H3导演台长视频制作工作流 拆解/对比页（只读静态挂载，SAI 容器 scp 到 45 /data/ComfyUI/output/pub/vpromot-20260924/）
++    location /vpromot/ {
++        alias /data/ComfyUI/output/pub/vpromot-20260924/;
+         autoindex on;
+-        add_header Content-Type video/mp4;
+-        add_header Accept-Ranges bytes;
++        types { text/html html htm; text/markdown md; application/json json; text/plain txt log; image/jpeg jpg jpeg; image/png png; video/mp4 mp4; }
+     }
+ 
+     # ===== ComfyUI 工作流画布反代（节点直连，只读浏览用） =====
+@@ -39,6 +73,38 @@
+         proxy_buffering off;
+     }
+ 
++    # 2026-09-21 按用户要求：A100 上 Qwen-Image 2.1 ComfyUI 实例（127.0.0.1:8192）画布挂公网，供用户自行操作
++    # 2026-09-21 修复：原 `proxy_pass http://127.0.0.1:8192/;`（带 URI）会使 nginx 归一化请求 URI，把 %2F 解码成 /
++    #   → /api/userdata/workflows%2Fxxx.json 到上游变成 /api/userdata/workflows/xxx.json → 404 → 选工作流静默失败
++    #   改为「不带 URI 的 proxy_pass + 变量」，URI 取未解码的 $request_uri（map 剥前缀），保留 %2F 透传
++    # 2026-09-22 修复A：GET /qwen21（不带尾斜杠）原被 nginx 自动 301 到 http://$host:8080/qwen21/，
++    #   公网只暴露 80/443，:8080 不可达 → 外部 agent/浏览器报"服务不可用"。
++    #   显式相对 301（配合 server 级 absolute_redirect off）→ Location: /qwen21/，任何 scheme/host/端口都对。
++    location = /qwen21 { return 301 /qwen21/; }
++
++    location /qwen21/ {
++        # ===== 2026-09-21 方案 A：API Key 门禁（仅 Key，无限流；map 定义见 /etc/nginx/conf.d/qwen21-apikey.conf）=====
++        # 携带方式三选一：X-API-Key 头 / ?api_key= 查询参数 / qwen21_key Cookie（浏览器 UI 首次带参数后自动种 Cookie）
++        if ($qwen21_granted = 0) {
++            return 401 '{"error":"missing_or_invalid_api_key","howto":"HTTP header X-API-Key: <key> OR Authorization: Bearer <key> ; browser: open /qwen21/?api_key=<key> once"}';
++        }
++        add_header Set-Cookie $qwen21_set_cookie always;
++
++        set $qwen21_up http://127.0.0.1:8192;
++        proxy_pass $qwen21_up$qwen21_uri;
++        proxy_http_version 1.1;
++        proxy_set_header Upgrade $http_upgrade;
++        proxy_set_header Connection "upgrade";
++        proxy_set_header Host $host;
++        proxy_set_header X-Real-IP $remote_addr;
++        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-Proto $scheme;
++        proxy_read_timeout 3600s;
++        proxy_send_timeout 3600s;
++        proxy_buffering off;
++        client_max_body_size 200m;
++    }
++
+     location / {
+         try_files $uri $uri/ /index.html;
+     }

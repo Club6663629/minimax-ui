@@ -1,0 +1,1168 @@
+diff --git a/.gitignore b/.gitignore
+index b7e9e31..cb54980 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -14,7 +14,6 @@ web/dist/
+ *.log
+ workflow_templates/*
+ *.patch
+-!minimax-env/patches/*.patch
+ 
+ # Agent 本地技能（从 MiniMax-H3 外部仓库安装，可重新拉取，不入库）
+ .claude/
+diff --git a/server/app/config.py b/server/app/config.py
+index 84b432a..f08b306 100644
+--- a/server/app/config.py
++++ b/server/app/config.py
+@@ -32,6 +32,8 @@ class Settings(BaseSettings):
+     # 留空则退回 comfyui_url 单实例串行模式（行为与旧版一致）
+     comfyui_workers: str = ""
+     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
++    # 长视频导演台（TimelineDirector，director_api.json）后端入口开关；默认关，拍板后置 true
++    director_enabled: bool = False
+     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
+     comfyui_input_dir: str = "/data/ComfyUI/input"
+ 
+diff --git a/server/app/models.py b/server/app/models.py
+index 14acdbf..b04562c 100644
+--- a/server/app/models.py
++++ b/server/app/models.py
+@@ -43,7 +43,7 @@ class Task(Base):
+     id: Mapped[int] = mapped_column(primary_key=True)
+     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+ 
+-    mode: Mapped[str] = mapped_column(String(10))  # t2v | flf2v | r2v
++    mode: Mapped[str] = mapped_column(String(10))  # t2v | flf2v | r2v | director
+     prompt: Mapped[str] = mapped_column(Text)
+     enhanced_prompt: Mapped[str] = mapped_column(Text, default="")
+     aspect_ratio: Mapped[str] = mapped_column(String(8), default="16:9")
+@@ -56,6 +56,9 @@ class Task(Base):
+     last_image_id: Mapped[Optional[int]] = mapped_column(ForeignKey("uploads.id"))
+     # 全能参考模式的多张参考图（JSON 数组，官方上限 9 张）
+     ref_image_ids: Mapped[str] = mapped_column(Text, default="")
++    # 长视频导演台（mode=director）段清单：JSON 数组，每项
++    # {index, prompt, ref_image_ids, frames, start_frame, end_frame, seed}
++    segments: Mapped[str] = mapped_column(Text, default="")
+ 
+     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+     error: Mapped[str] = mapped_column(Text, default="")
+diff --git a/server/app/routers/serialize.py b/server/app/routers/serialize.py
+index e6b1449..04908c9 100644
+--- a/server/app/routers/serialize.py
++++ b/server/app/routers/serialize.py
+@@ -34,6 +34,11 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
+     except (TypeError, ValueError):
+         ref_ids = []
+ 
++    try:
++        segments = json.loads(getattr(task, "segments", "") or "[]")
++    except (TypeError, ValueError):
++        segments = []
++
+     # 参考区按扩展名分类：ref_image_urls 仅图片（保持兼容），新增视频/音频列表
+     ref_image_urls: list[str] = []
+     ref_video_urls: list[str] = []
+@@ -92,6 +97,7 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
+         parent_task_id=task.parent_task_id,
+         upscale_target=task.upscale_target,
+         worker_url=task.worker_url or "",
++        segments=segments,
+         created_at=task.created_at,
+         started_at=task.started_at,
+         finished_at=task.finished_at,
+diff --git a/server/app/routers/videos.py b/server/app/routers/videos.py
+index 7f0ecd3..35c6be8 100644
+--- a/server/app/routers/videos.py
++++ b/server/app/routers/videos.py
+@@ -1,5 +1,6 @@
+ """视频任务路由：提交 / 列表 / 详情 / 重试 / 升级 / 删除 / 价格。"""
+ import json
++import random
+ from pathlib import Path
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, status
+@@ -10,7 +11,13 @@ from ..config import OUTPUT_DIR, STAGING_DIR, settings
+ from ..database import get_db
+ from ..models import CreditLog, Task, Upload, User
+ from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
+-from ..services.billing import PACKAGES, compute_cost, compute_upgrade_cost
++from ..services import comfyui
++from ..services.billing import (
++    PACKAGES,
++    compute_cost,
++    compute_director_cost,
++    compute_upgrade_cost,
++)
+ from .serialize import serialize_task
+ 
+ router = APIRouter(prefix="/api/videos", tags=["videos"])
+@@ -51,12 +58,61 @@ def pricing():
+     )
+ 
+ 
++def _create_director(body: VideoCreateIn, user: User, db: Session):
++    """长视频导演台（mode=director）：一次提交跑完全部段（本轮只做后端/API）。
++
++    段清单写入 tasks.segments（每段 frames/start_frame/end_frame/seed/提示词/参考图），
++    帧数吸附 5+17n、段间交叠 39 帧（=5+17*2，插件合法交叠集 0/1/5+17n 的默认值）。
++    """
++    if not settings.director_enabled:
++        raise HTTPException(
++            status.HTTP_400_BAD_REQUEST,
++            "长视频导演台未启用（DIRECTOR_ENABLED=false，拍板后再开启）",
++        )
++    segs = [s.model_dump() for s in body.segments] or [
++        {"prompt": body.prompt.strip(), "duration": float(body.duration), "ref_image_ids": []}
++    ]
++    try:
++        plan = comfyui.plan_director_segments(segs, aspect_ratio=body.aspect_ratio)
++    except ValueError as exc:
++        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
++    seed = random.randint(0, 2 ** 63 - 1)
++    for seg in plan["segments"]:
++        seg["seed"] = seed
++    total_seconds = plan["total_frames"] / plan["fps"]
++    cost = compute_director_cost(total_seconds)
++    if user.credits < cost:
++        raise HTTPException(
++            status.HTTP_402_PAYMENT_REQUIRED,
++            f"积分不足，长视频 {total_seconds:.1f}s 需 {cost} 积分",
++        )
++    task = Task(
++        user_id=user.id,
++        mode="director",
++        prompt=(body.prompt.strip() or " / ".join(s["prompt"][:60] for s in plan["segments"]))[:2000],
++        aspect_ratio=body.aspect_ratio,
++        duration=int(round(total_seconds)),
++        resolution="768p",
++        enhance=False,               # 导演台不做云端提示词增强（不产生付费调用）
++        scene=body.scene,
++        segments=json.dumps(plan["segments"], ensure_ascii=False),
++        status="queued",
++    )
++    db.add(task)
++    db.commit()
++    db.refresh(task)
++    return serialize_task(task, db=db)
++
++
+ @router.post("", response_model=TaskOut)
+ def create_video(
+     body: VideoCreateIn,
+     user: User = Depends(get_current_user),
+     db: Session = Depends(get_db),
+ ):
++    # 长视频导演台：独立分支（段清单 → 帧窗口 → 一次提交跑完全部段）
++    if body.mode == "director":
++        return _create_director(body, user, db)
+     # 模式与输入图校验
+     if body.mode == "flf2v" and not (body.first_image_id or body.last_image_id):
+         raise HTTPException(status.HTTP_400_BAD_REQUEST, "首尾帧模式需要至少上传首帧或尾帧图片")
+diff --git a/server/app/schemas.py b/server/app/schemas.py
+index 4bca6d2..8da23b6 100644
+--- a/server/app/schemas.py
++++ b/server/app/schemas.py
+@@ -42,7 +42,7 @@ class UploadOut(BaseModel):
+ 
+ # ---- 视频任务 ----
+ class VideoCreateIn(BaseModel):
+-    mode: Literal["t2v", "flf2v", "r2v"]
++    mode: Literal["t2v", "flf2v", "r2v", "director"]
+     prompt: str = Field(min_length=1, max_length=2000)
+     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
+     duration: Literal[5, 8, 10, 15] = 5
+@@ -53,6 +53,21 @@ class VideoCreateIn(BaseModel):
+     last_image_id: Optional[int] = None
+     # 全能参考资料 id：图片/视频/音频混存，总数上限 9（其中视频 ≤3、音频 ≤3）
+     ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
++    # 长视频导演台（mode=director）段清单，1..64 段；留空则用 prompt+duration 作单段
++    segments: list["DirectorSegmentIn"] = Field(default_factory=list, max_length=64)
++
++
++class DirectorSegmentIn(BaseModel):
++    """长视频导演台的单段：一条完整本段提示词 + 本段参考图。
++
++    duration 会被吸附到 H3 合法帧数 5+17n（与插件 minimax_h3_timeline_director.py:783 同规则）。
++    """
++
++    prompt: str = Field(min_length=1, max_length=8000)
++    duration: float = Field(default=10.0, gt=0, le=150)  # 秒
++    # 本段参考图上限 9（与插件 MAX_REF_IMAGES=9 / r2v 参考上限一致）：
++    # 段间连续性素材 = 上一段末帧 + 从上一段均匀抽取的 5 帧，共 6 张
++    ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
+ 
+ 
+ class TaskOut(BaseModel):
+@@ -78,6 +93,8 @@ class TaskOut(BaseModel):
+     parent_task_id: Optional[int] = None
+     upscale_target: Optional[str] = None
+     worker_url: str = ""
++    # 导演台段清单（已吸附的 frames/start_frame/end_frame/seed 原样回传，供核对）
++    segments: list[dict] = []
+     created_at: datetime
+     started_at: Optional[datetime]
+     finished_at: Optional[datetime]
+diff --git a/server/app/services/billing.py b/server/app/services/billing.py
+index 14b95e4..a02bbcd 100644
+--- a/server/app/services/billing.py
++++ b/server/app/services/billing.py
+@@ -1,4 +1,5 @@
+ """计费：成本计算 + 积分流水记账。"""
++import math
+ from typing import Optional
+ 
+ from sqlalchemy.orm import Session
+@@ -25,6 +26,16 @@ def compute_cost(duration: int, resolution: str) -> int:
+     return cost
+ 
+ 
++def compute_director_cost(total_seconds: float) -> int:
++    """长视频导演台（mode=director）计费：按 5s 档单价 × 向上取整的 5s 块数。
++
++    导演台一次提交跑完全部段（单卡独占、总时长可达数分钟），故按总时长折算；
++    本轮只做后端/API，前端入口未开（DIRECTOR_ENABLED=false）。
++    """
++    blocks = max(1, math.ceil(float(total_seconds) / 5.0))
++    return blocks * settings.cost_768p_5s
++
++
+ def compute_upgrade_cost(resolution: str) -> int:
+     """高清升级附加费用（仅超分成本，无基础生成费）。"""
+     if resolution == "1k":
+diff --git a/server/app/services/comfyui.py b/server/app/services/comfyui.py
+index ab4895a..289a230 100644
+--- a/server/app/services/comfyui.py
++++ b/server/app/services/comfyui.py
+@@ -39,7 +39,7 @@ ASPECT_PRESETS = {
+     "9:16": "9:16 (Portrait Widescreen)",
+     "1:1": "1:1 (Square)",
+ }
+-MEGAPIXELS_768P = 0.98
++MEGAPIXELS_768P = 1.0
+ 
+ # ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
+ UPSCALE_TIERS = {
+@@ -79,6 +79,158 @@ def load_workflow(mode: str) -> dict:
+     return json.loads(path.read_text(encoding="utf-8"))
+ 
+ 
++# ---------------------------------------------------------------- 长视频导演台
++# TimelineDirector（Songssx）有限分段：director_api.json 为 13 节点扁平表，
++# 段窗口语义见插件 docs/TIMELINE_SEGMENT_WINDOWS_CN.md：
++#   - 段长 = endFrame - startFrame，必须吸附到 5 + 17n 帧（上限 3592 ≈150s@24fps）
++#   - 段间交叠必须是 H3 合法 guide 帧数（0 / 1 / 5+17n），插件默认 39 帧（=5+17*2）
++#   - 总帧数 = 末段 endFrame（不是各段长度直接相加）
++DIRECTOR_OVERLAP_FRAMES = 39
++DIRECTOR_MAX_SEGMENT_FRAMES = 3592
++DIRECTOR_SECOND_PASS_MODEL = "minimax_h3_latent_upscaler_3d_fp16.safetensors"
++# 已实测的导演台画布（16:9 / megapixels=1.0 / multiple=32）
++DIRECTOR_SIZE = {"16:9": (1376, 768), "9:16": (768, 1376)}
++
++
++def align_h3_frames(requested_frames: float, fps: int = 24) -> int:
++    """把期望帧数吸附到 H3 合法帧数 5 + 17n（与插件 _aligned_h3_length 同规则）。"""
++    requested = max(5.0, float(requested_frames))
++    n = max(0, round((requested - 5.0) / 17.0))
++    return min(int(5 + 17 * n), DIRECTOR_MAX_SEGMENT_FRAMES)
++
++
++def valid_overlap_frames(overlap: int) -> int:
++    """交叠吸附：0 / 1 / 5+17n 三档（插件 _valid_guide_frames 规则）。"""
++    overlap = int(overlap)
++    if overlap <= 0:
++        return 0
++    if overlap == 1:
++        return 1
++    if overlap < 5:
++        return 1
++    n = max(0, round((overlap - 5.0) / 17.0))
++    return int(5 + 17 * n)
++
++
++def plan_director_segments(segments, aspect_ratio: str = "16:9", fps: int = 24,
++                           overlap_frames: int = DIRECTOR_OVERLAP_FRAMES) -> dict:
++    """把「每段时长(秒) + 提示词 + 参考图」排版为插件的段窗口。
++
++    segments: [{"prompt": str, "duration": float, "ref_image_ids": [int]}]
++    返回 {"segments":[{index,prompt,ref_image_ids,frames,start_frame,end_frame}],
++          "total_frames": int, "width": int, "height": int, "fps": int, "overlap_frames": int}
++    """
++    if aspect_ratio not in DIRECTOR_SIZE:
++        raise ValueError(f"导演台画布暂只支持 16:9 / 9:16（已实测 16:9 → 1376x768），收到 {aspect_ratio}")
++    if not segments:
++        raise ValueError("导演台至少需要 1 段")
++    if len(segments) > 64:
++        raise ValueError("导演台段数上限 64（插件限制）")
++    overlap = valid_overlap_frames(overlap_frames)
++    planned, cursor = [], 0
++    for i, seg in enumerate(segments):
++        # 段清单有两种来源：路由层传入的「原始段」（duration 秒）与
++        # worker 从 tasks.segments 读回的「已排版段」（frames/start_frame/end_frame）。
++        # 已排版段直接沿用 frames，保证重排幂等（否则 KeyError: duration）。
++        if seg.get("frames"):
++            frames = int(seg["frames"])
++        else:
++            frames = align_h3_frames(round(float(seg["duration"]) * fps), fps)
++        if i == 0:
++            start = 0
++        else:
++            start = cursor - overlap
++            assert start > planned[-1]["start_frame"], "段起点必须前进"
++        end = start + frames
++        planned.append({
++            "index": i,
++            "prompt": str(seg["prompt"]),
++            "ref_image_ids": list(seg.get("ref_image_ids") or []),
++            "frames": frames,
++            "start_frame": start,
++            "end_frame": end,
++        })
++        cursor = end
++    w, h = DIRECTOR_SIZE[aspect_ratio]
++    return {
++        "segments": planned,
++        "total_frames": planned[-1]["end_frame"],
++        "width": w, "height": h, "fps": fps, "overlap_frames": overlap,
++    }
++
++
++def build_director_timeline(plan: dict, images, global_prompt: str = "") -> str:
++    """组装 TimelinePlanner 的 timeline_data（结构对齐已跑通实例的提交体）。"""
++    fps = plan["fps"]
++    seg0 = plan["segments"][0]
++    timeline = {
++        "version": 9,
++        "fps": fps,
++        "globalPrompt": global_prompt,
++        "secondPass": False,
++        "secondPassModel": DIRECTOR_SECOND_PASS_MODEL,
++        "secondPassHighSteps": 2,
++        "selection": {"start": 0, "duration": seg0["frames"] / fps},
++        "videoAudioEnabled": True,
++        "videoClips": [],
++        "images": images,
++        "audios": [],
++        "segmentConfig": {
++            "count": len(plan["segments"]),
++            "mode": "timeline",
++            "segments": [
++                {
++                    "images": [f"u{rid}" for rid in s["ref_image_ids"]],
++                    "audios": [],
++                    "prompt": s["prompt"],
++                    "startFrame": s["start_frame"],
++                    "endFrame": s["end_frame"],
++                }
++                for s in plan["segments"]
++            ],
++        },
++    }
++    return json.dumps(timeline, ensure_ascii=False)
++
++
++def inject_director(workflow: dict, plan: dict, images, seed: int,
++                    unet_name: Optional[str] = None) -> dict:
++    """把段窗口/画布/权重/种子注入 director_api.json（就地修改并返回）。
++
++    - UNETLoader：unet_name（导演台用 Singularity v1.3 int8，由 worker 的
++      pool.unet_for("director") 取 unet:director:<文件> 标签传入）
++    - MiniMaxH3TimelinePlanner：width/height/generation_seconds(=总帧数/24)/timeline_data
++    - MiniMaxH3FiniteSegmentSampler：seed（各段由插件按该基种子派生）
++    其余节点（SigmaShift shift12/3、ref2v turbo LoRA、Sol-Attn 0.4/tau1.0、euler、8 步）沿用模板。
++    """
++    fps = plan["fps"]
++    timeline_data = build_director_timeline(plan, images)
++    hit = []
++    for node in workflow.values():
++        if not isinstance(node, dict):
++            continue
++        ct = node.get("class_type")
++        inputs = node.get("inputs")
++        if not isinstance(inputs, dict):
++            continue
++        if ct == "UNETLoader" and unet_name:
++            inputs["unet_name"] = unet_name
++            hit.append("unet")
++        elif ct == "MiniMaxH3TimelinePlanner":
++            inputs["width"] = plan["width"]
++            inputs["height"] = plan["height"]
++            inputs["generation_seconds"] = plan["total_frames"] / fps
++            inputs["timeline_data"] = timeline_data
++            hit.append("planner")
++        elif ct == "MiniMaxH3FiniteSegmentSampler":
++            inputs["seed"] = int(seed)
++            hit.append("sampler")
++    missing = {"unet", "planner", "sampler"} - set(hit)
++    if missing:
++        raise ComfyUIError(f"director_api.json 缺少节点: {sorted(missing)}")
++    return workflow
++
++
+ # ---- 注意力后端门控（Sol-Attn）----
+ # 生成模板统一带 Sol-Attn 节点（BlockSparseAttention，节点 9600）；该节点仅
+ # 0.35.0 + comfy-kitchen>=0.2.33 提供。目标节点（如 0.34 的 4090）没有时，
+@@ -113,7 +265,11 @@ async def _node_supports_class(base_url: str, class_type: str) -> bool:
+ 
+ 
+ async def gate_attention_nodes(workflow: dict, base_url: str) -> dict:
+-    """目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游 → 回到目标节点原生 attention 路径。
++    """【2026-09-20 起已停用，保留备查/回滚】目标节点不具备 Sol-Attn 能力时摘除该节点，重连上游。
++
++    停用原因：51/246 两个 4090 生成节点升级到 ComfyUI 0.36.0 + comfy-kitchen 0.2.35 后，
++    全部生成节点均注册 BlockSparseAttention(9600)，不再需要在提交前做能力探测与摘除。
++    worker.py 中的调用已注释；如需回滚见该处注释。
+ 
+     原地修改并返回同一 dict；找不到安全重连点时原样保留，绝不阻断提交。
+     """
+@@ -525,12 +681,14 @@ class ComfyUIClient:
+             raise ComfyUIError(f"提交工作流未返回 prompt_id: {r.text[:200]}")
+         return prompt_id
+ 
+-    async def wait_result(self, prompt_id: str) -> dict:
++    async def wait_result(self, prompt_id: str, timeout_seconds: Optional[float] = None) -> dict:
+         """轮询 /history/{prompt_id}，完成后返回产物文件信息
+-        {"filename": ..., "subfolder": ..., "type": ...}。"""
+-        deadline_loops = int(
+-            settings.comfyui_timeout_minutes * 60 / settings.comfyui_poll_interval
+-        )
++        {"filename": ..., "subfolder": ..., "type": ...}。
++
++        timeout_seconds 覆盖默认 comfyui_timeout_minutes（长视频导演台单次可达数十分钟）。
++        """
++        total_seconds = float(timeout_seconds) if timeout_seconds else settings.comfyui_timeout_minutes * 60
++        deadline_loops = int(total_seconds / settings.comfyui_poll_interval)
+         async with httpx.AsyncClient(timeout=30) as client:
+             for _ in range(deadline_loops):
+                 await asyncio.sleep(settings.comfyui_poll_interval)
+diff --git a/server/app/services/pool.py b/server/app/services/pool.py
+index 60811e4..f9d4fdb 100644
+--- a/server/app/services/pool.py
++++ b/server/app/services/pool.py
+@@ -64,6 +64,12 @@ class WorkerNode:
+         mode 权重族映射：t2v/flf2v → fl2va，r2v → ref2va。
+         未配置对应标签时返回 None（沿用模板默认 int8 权重，A100 场景）。
+         """
++        # 优先取「该 mode 专用」权重标签：unet:<mode>:<文件>。
++        # 长视频导演台（director）用 Singularity，短视频 t2v/flf2v/r2v 用官方 convrot，
++        # 两者不能再共用族标签，否则 unet 覆写会把导演台换成官方权重。
++        for t in self.tags:
++            if t.startswith(f"unet:{mode}:"):
++                return t.split(":", 2)[2]
+         family = "ref2va" if mode == "r2v" else "fl2va"
+         for t in self.tags:
+             if t.startswith(f"unet:{family}:"):
+@@ -238,6 +244,26 @@ class WorkerPool:
+         self._rr_index = (self._rr_index + 1) % n
+         return candidates[idx]
+ 
++    def has_director(self) -> bool:
++        """是否配置了长视频导演台节点（标签 director）。"""
++        return any(n.role == "generate" and n.has_tag("director") for n in self.nodes)
++
++    def acquire_director(self, task_id: int) -> Optional[WorkerNode]:
++        """领取导演台节点：只认带 director 标签、且当前完全空闲（无占位且队列空）的节点。
++
++        导演台独占整卡（一次提交跑完全部段、可达数十分钟），故不做 heavy 优先与兜底派发；
++        短视频生成侧的 _claim 与领取逻辑在其运行期间互斥（见 worker._generate_loop）。
++        """
++        idle = [
++            n for n in self.nodes
++            if n.role == "generate" and n.has_tag("director") and n.healthy and not n.busy
++        ]
++        if not idle:
++            return None
++        node = self._pick_round_robin(idle)
++        node.task_id = task_id
++        return node
++
+     def acquire_upscale(self, tier: str, task_id: int) -> Optional[WorkerNode]:
+         """领取超分节点：主力池（带档位标签）优先，2K 优先派发由调度侧排序保证；
+         overflow 节点仅在主力全忙时承接 1K。"""
+diff --git a/server/app/services/worker.py b/server/app/services/worker.py
+index d980fa1..31b1d2d 100644
+--- a/server/app/services/worker.py
++++ b/server/app/services/worker.py
+@@ -15,6 +15,7 @@ Mock 模式（MOCK_COMFY=1）：不依赖 ComfyUI，用 ffmpeg 生成测试视
+ import asyncio
+ import json
+ import logging
++import random
+ import shutil
+ import subprocess
+ from datetime import datetime
+@@ -29,7 +30,7 @@ from ..database import SessionLocal
+ from ..models import Task, Upload, User
+ from . import cloud, comfyui
+ from ..scenes import apply_scene
+-from .billing import add_credits, compute_cost
++from .billing import add_credits, compute_cost, compute_director_cost
+ from .pool import WorkerNode, pool
+ 
+ logger = logging.getLogger(__name__)
+@@ -107,7 +108,7 @@ def _claim_queued() -> Optional[int]:
+     with SessionLocal() as db:
+         task = (
+             db.query(Task)
+-            .filter(Task.status == "queued", Task.enhance.is_(True))
++            .filter(Task.status == "queued", Task.enhance.is_(True), Task.mode != "director")
+             .order_by(Task.id)
+             .first()
+         )
+@@ -147,6 +148,15 @@ async def _run_enhance(task_id: int) -> None:
+ # ---------------------------------------------------------------- ② 生成队列
+ async def _generate_loop() -> None:
+     while True:
++        # 长视频导演台独占整卡：队列里有待跑的 director 任务时，只跑它
++        # （同一时刻不再领取短视频任务），避免同卡两路任务穿插。
++        if settings.director_enabled and pool.has_director() and _director_pending():
++            if not _director_busy():
++                director_id = await asyncio.to_thread(_claim_director)
++                if director_id is not None:
++                    await _dispatch_director(director_id)
++            await asyncio.sleep(2)
++            continue
+         # 无空闲生成槽位时不领取，避免反复扣费/退费的流水噪声
+         if not any(n.role == "generate" and n.healthy and not n.busy for n in pool.nodes):
+             await asyncio.sleep(2)
+@@ -165,6 +175,7 @@ def _claim_generate() -> Optional[int]:
+             db.query(Task)
+             .filter(
+                 Task.worker_url == "",
++                Task.mode != "director",   # 导演台走 _claim_director（独占整卡）
+                 or_(
+                     Task.status == "generating_768p",
+                     and_(Task.status == "queued", Task.enhance.is_(False)),
+@@ -201,6 +212,180 @@ def _claim_generate() -> Optional[int]:
+         return task_id
+ 
+ 
++
++# ---------------------------------------------------------------- 长视频导演台
++# mode=director：一次提交跑完全部段（TimelineDirector 有限分段），单卡独占，
++# 与短视频生成任务互斥（有 director 待跑时生成循环不再领取短视频任务）。
++DIRECTOR_TIMEOUT_SECONDS = 3600   # 长视频单次可达数十分钟，超时放宽到 1 小时
++_DIRECTOR_RUNNING = False         # 进程内独占标记（后端单进程，天然全局）
++
++
++def _director_pending() -> bool:
++    """队列里是否还有待跑的导演台任务（queued / generating_768p 且未占位）。"""
++    with SessionLocal() as db:
++        return db.query(Task).filter(
++            Task.mode == "director",
++            Task.worker_url == "",
++            Task.status.in_(("queued", "generating_768p")),
++        ).first() is not None
++
++
++def _director_busy() -> bool:
++    return _DIRECTOR_RUNNING
++
++
++def _claim_director() -> Optional[int]:
++    """领取导演台任务（计费口径同短视频：派发即扣、失败全额退还）。"""
++    with SessionLocal() as db:
++        task = (
++            db.query(Task)
++            .filter(
++                Task.mode == "director",
++                Task.worker_url == "",
++                or_(Task.status == "generating_768p", Task.status == "queued"),
++            )
++            .order_by(Task.id)
++            .first()
++        )
++        if task is None:
++            return None
++        task_id, user_id = task.id, task.user_id
++        if task.cost > 0:  # 重投任务已在首次派发时计费
++            task.status = "generating_768p"
++            task.worker_url = "pending"
++            db.commit()
++            return task_id
++        user = db.get(User, user_id)
++        cost = compute_director_cost(task.duration)
++        if user.credits < cost:
++            task.status = "failed"
++            task.error = "积分不足"
++            task.finished_at = datetime.now()
++            db.commit()
++            return None
++        add_credits(db, user, -cost, "consume",
++                    note=f"长视频导演台 {task.duration}s/768p", task_id=task_id)
++        task.status = "generating_768p"
++        task.cost = cost
++        task.started_at = datetime.now()
++        task.worker_url = "pending"
++        db.commit()
++        return task_id
++
++
++async def _dispatch_director(task_id: int) -> None:
++    """派发导演台任务：只认 director 标签的空闲节点（独占整卡，无兜底）。"""
++    node = pool.acquire_director(task_id)
++    if node is None:
++        await asyncio.to_thread(_uncharge, task_id)  # 暂无专用空闲槽位：退积分回队
++        return
++    with SessionLocal() as db:
++        task = db.get(Task, task_id)
++        if task is None:
++            pool.release(node)
++            return
++        task.attempts += 1
++        task.worker_url = node.url
++        db.commit()
++    asyncio.get_event_loop().create_task(_run_director(task_id, node))
++
++
++async def _run_director(task_id: int, node: WorkerNode) -> None:
++    try:
++        staging = await _generate_director(task_id, node)
++        with SessionLocal() as db:
++            task = db.get(Task, task_id)
++            if task is None or task.status != "generating_768p":
++                return
++            final_path = OUTPUT_DIR / f"{task_id}.mp4"
++            shutil.move(str(staging), final_path)
++            task.video_path = str(final_path)
++            task.status = "done"
++            task.finished_at = datetime.now()
++            db.commit()
++            logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
++    except asyncio.CancelledError:
++        raise
++    except Exception as exc:
++        logger.exception("导演台任务 #%s 生成失败", task_id)
++        await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
++    finally:
++        pool.release(node)
++
++
++def _probe_image_size(path) -> tuple:
++    """用 ffprobe 取参考图真实宽高（写入 timeline_data.images，供插件按参考图尺寸构图）。"""
++    try:
++        out = subprocess.run(
++            ["ffprobe", "-v", "error", "-select_streams", "v:0",
++             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
++            capture_output=True, text=True, timeout=20,
++        ).stdout.strip().splitlines()
++        w, h = out[0].split(",")[:2]
++        return int(w), int(h)
++    except Exception:  # 探测失败不阻断：留空由插件自行判断
++        logger.warning("ffprobe 取参考图尺寸失败: %s", path)
++        return 0, 0
++
++
++async def _generate_director(task_id: int, node: WorkerNode) -> Path:
++    """长视频导演台：按段清单一次提交 director_api.json，产物落 staging。"""
++    global _DIRECTOR_RUNNING
++    out_path = STAGING_DIR / f"{task_id}_director.mp4"
++    with SessionLocal() as db:
++        task = db.get(Task, task_id)
++        aspect = task.aspect_ratio
++        try:
++            segments = json.loads(task.segments or "[]")
++        except (TypeError, ValueError):
++            segments = []
++        if not segments:
++            raise RuntimeError("导演台任务缺少段清单(segments)")
++        seed = int(segments[0].get("seed") or 0) or random.randint(0, 2 ** 63 - 1)
++        # 段清单里的参考图 → 节点 input 目录（同一 upload 只传一次）
++        upload_ids = []
++        for seg in segments:
++            for rid in seg.get("ref_image_ids") or []:
++                if rid not in upload_ids:
++                    upload_ids.append(rid)
++        uploads = {uid: db.get(Upload, uid) for uid in upload_ids}
++
++    plan = comfyui.plan_director_segments(segments, aspect_ratio=aspect)
++    client = comfyui.ComfyUIClient(node.url)
++    images, uploaded = [], {}
++    for uid, up in uploads.items():
++        if up is None:
++            continue
++        p = Path(up.path)
++        name = await client.upload_image(p)
++        w, h = await asyncio.to_thread(_probe_image_size, p)
++        uploaded[uid] = {"id": f"u{uid}", "file": name, "name": p.name, "width": w, "height": h}
++        images.append(uploaded[uid])
++
++    workflow = comfyui.load_workflow("director")
++    comfyui.inject_director(workflow, plan, images, seed, unet_name=node.unet_for("director"))
++    _DIRECTOR_RUNNING = True
++    try:
++        prompt_id = await client.submit(workflow)
++        with SessionLocal() as db:
++            db.get(Task, task_id).comfy_prompt_id = prompt_id
++            db.commit()
++        logger.info(
++            "导演台任务 #%s 已提交节点 %s：%d 段 / 总 %d 帧（%.3fs）/ 交叠 %d 帧 / seed=%s",
++            task_id, node.url, len(plan["segments"]), plan["total_frames"],
++            plan["total_frames"] / plan["fps"], plan["overlap_frames"], seed,
++        )
++        file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
++        content = await client.fetch_file(
++            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
++        )
++        out_path.write_bytes(content)
++    finally:
++        _DIRECTOR_RUNNING = False
++    logger.info("导演台任务 #%s 产物已落盘: %s", task_id, out_path)
++    return out_path
++
++
+ async def _dispatch_generate(task_id: int) -> None:
+     with SessionLocal() as db:
+         task = db.get(Task, task_id)
+@@ -556,8 +741,11 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
+         video_names=video_names, audio_names=audio_names,
+         unet_name=node.unet_for(mode),
+     )
+-    # 目标节点不支持 Sol-Attn 时按能力摘除（磁盘模板不动）
+-    workflow = await comfyui.gate_attention_nodes(workflow, node.url)
++    # 2026-09-20 路线B：51:8188 / 246:8188 两个 4090 生成节点已升级 ComfyUI 0.36.0 +
++    # comfy-kitchen 0.2.35，均注册 BlockSparseAttention(9600)；云端 8183(5090,0.34+kitchen0.2.34)
++    # 亦支持。故**不再按能力摘除 Sol-Attn 节点**，所有生成节点统一走 Sol-Attn。
++    # 回滚：取消下面一行注释，并恢复 comfyui.py 的 .bak.routeB.<ts> 备份后重启 8001。
++    # workflow = await comfyui.gate_attention_nodes(workflow, node.url)
+ 
+     prompt_id = await client.submit(workflow)
+     with SessionLocal() as db:
+diff --git a/server/workflows/director_api.json b/server/workflows/director_api.json
+new file mode 100644
+index 0000000..d50b203
+--- /dev/null
++++ b/server/workflows/director_api.json
+@@ -0,0 +1,159 @@
++{
++  "1": {
++    "class_type": "UNETLoader",
++    "inputs": {
++      "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
++      "weight_dtype": "default"
++    }
++  },
++  "2": {
++    "class_type": "CLIPLoader",
++    "inputs": {
++      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
++      "type": "minimax",
++      "device": "default"
++    }
++  },
++  "3": {
++    "class_type": "VAELoader",
++    "inputs": {
++      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
++    }
++  },
++  "4": {
++    "class_type": "VAELoader",
++    "inputs": {
++      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
++    }
++  },
++  "20": {
++    "class_type": "MiniMaxH3SigmaShift",
++    "inputs": {
++      "model": [
++        "1",
++        0
++      ],
++      "shift_video": 12.0,
++      "shift_audio": 3.0
++    }
++  },
++  "21": {
++    "class_type": "LoraLoaderModelOnly",
++    "inputs": {
++      "model": [
++        "20",
++        0
++      ],
++      "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
++      "strength_model": 1.0
++    }
++  },
++  "19": {
++    "class_type": "BlockSparseAttention",
++    "inputs": {
++      "model": [
++        "21",
++        0
++      ],
++      "selection": "sol-attn",
++      "selection.tau": 1.0,
++      "start_percent": 0.4,
++      "end_percent": 1.0,
++      "dense_blocks": "",
++      "min_tokens": 12288,
++      "extra_tokens": 256,
++      "sink_conditioning": "exact_kv_and_rows",
++      "verbose": false
++    }
++  },
++  "5": {
++    "class_type": "BasicScheduler",
++    "inputs": {
++      "model": [
++        "19",
++        0
++      ],
++      "scheduler": "simple",
++      "steps": 8,
++      "denoise": 1.0
++    }
++  },
++  "6": {
++    "class_type": "KSamplerSelect",
++    "inputs": {
++      "sampler_name": "euler"
++    }
++  },
++  "7": {
++    "class_type": "MiniMaxH3TimelinePlanner",
++    "inputs": {
++      "width": 1376,
++      "height": 768,
++      "generation_seconds": 18.625,
++      "timeline_data": "{\"version\": 9, \"fps\": 24, \"globalPrompt\": \"\", \"secondPass\": false, \"secondPassModel\": \"minimax_h3_latent_upscaler_3d_fp16.safetensors\", \"secondPassHighSteps\": 2, \"selection\": {\"start\": 8.5, \"duration\": 10.125}, \"videoAudioEnabled\": true, \"videoClips\": [], \"images\": [{\"id\": \"mucs85fr-lqgzha\", \"file\": \"1.jpg\", \"name\": \"1.jpg\", \"width\": 1920, \"height\": 1080}, {\"id\": \"mucsabfb-5x6txb\", \"file\": \"2.jpg\", \"name\": \"2.jpg\", \"width\": 1920, \"height\": 1080}], \"audios\": [], \"segmentConfig\": {\"count\": 2, \"mode\": \"timeline\", \"segments\": [{\"images\": [\"mucs85fr-lqgzha\"], \"audios\": [], \"prompt\": \"subject_definitions:\\n<Subject 1> is the woman in <Picture 1>, retaining her facial identity, long dark hair, loose pale T-shirt, and gray shorts. She reclines in a black desk chair with her cheek resting on one hand and both legs raised onto the desk.\\n<Subject 2> is the nighttime bedroom workspace in <Picture 1>: the monitor on screen left, illuminated keyboard, mug, mouse pad, foreground bottle, bed with a resting cat, curtained window, wall photographs, plants, and warm bedside lamp.\\n\\nsummary:\\n[reference generation] A 10-second continuous shot of <Subject 1> casually talking to viewers in <Subject 2>. She begins by looking at her screen, then looks into the camera, admits feeling discouraged about her video performance, and says she wants to chat. At the end, she lowers the hand supporting her cheek and begins preparing to lower her legs.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve her identity, hairstyle, clothing, and initial relaxed seated pose, with natural movement developing from it.\\n<Subject 2> (appears in [Shot 1]): fully_preserved - preserve the bedroom layout, desk objects, resting cat, nighttime atmosphere, and mixed monitor and lamplight.\\n\\ndetailed_description:\\nPhotorealistic nighttime footage with soft cool monitor light on the woman's face and warm lamplight behind her. The performance feels like an informal personal recording, with small expressions and natural conversational delivery.\\n\\n[Shot 1] A continuous 10-second medium-wide shot follows the composition of <Picture 1>. <Subject 1> reclines on screen right in the black chair, wearing her pale T-shirt and gray shorts. One hand supports her cheek, and both legs rest on the desk toward screen left. In <Subject 2>, the monitor occupies the left foreground; the keyboard, mug, and mouse pad remain on the desk. The cat rests on the bed behind her, and the bedside lamp glows warmly. Keep the camera stationary, with unchanged framing and focus throughout.\\n\\nFrom 00:00.000 to 00:02.000, <Subject 1> (S1) looks at the monitor rather than directly at the lens. Her mouth curls into a small smile, and she takes a light settling breath. In a relaxed, friendly Mandarin voice, she says: <d>[Mandarin Chinese] 嘿嘿，大伙儿好啊.</d> Let the opening words carry the soft chuckle naturally, without adding a separate prolonged laugh. Her cheek stays supported by her hand.\\n\\nFrom 00:02.000 to 00:05.000, <Subject 1> (S1) shifts her eyes from the screen toward the camera, with only a slight adjustment of her head, and says: <d>[Mandarin Chinese] 最近还是一直在做视频嘛.</d> Her delivery is casual and reflective, with a gently trailing ending. Keep her body comfortably reclined and her legs in place. Allow a natural blink and a short conversational pause.\\n\\nFrom 00:05.000 to 00:08.000, <Subject 1> (S1) slightly purses her lips and gives a small, resigned expression, saying: <d>[Mandarin Chinese] 数据效果不怎么好，有点郁闷.</d> Her tone becomes mildly disappointed without exaggerated sadness. She maintains contact with the lens, speaking as if confiding in familiar viewers. Her supporting hand remains against her cheek.\\n\\nFrom 00:08.000 to 00:10.000, <Subject 1> (S1) softens her expression and says a little more briskly: <d>[Mandarin Chinese] 就跟你们聊聊天，缓解一下.</d> Complete every word before the video ends. While finishing the sentence, she lifts her head away from her supporting hand and lowers that hand toward her lap. Her torso begins to come slightly forward, and her knees draw subtly inward as she prepares to lower both legs. End on this preparatory movement, before her feet reach the floor.\\n\\nKeep the same speaker and voice throughout, with accurate lip synchronization, continuous natural movement, and stable character appearance. No cuts, extra dialogue, subtitles, or on-screen text.\\n\\noverall_soundscape:\\nQuiet nighttime room tone with a faint computer hum, gentle breathing, and slight clothing and chair movement as she shifts at the end. Keep her voice close and clear.\\n\\nnon_diegetic_music:\\nN/A\", \"startFrame\": 0, \"endFrame\": 243}, {\"images\": [\"mucsabfb-5x6txb\"], \"audios\": [], \"prompt\": \"subject_definitions:\\n<Subject 1> is the woman in <Picture 1>, retaining her facial identity, long dark hair, and loose pale T-shirt. Her forward-leaning posture with both forearms resting on the desk guides the settled pose after her opening movement.\\n<Subject 2> is the nighttime bedroom workspace in <Picture 1>: the monitor on screen left, illuminated keyboard, mug, mouse pad, foreground bottle, black chair with a cat-patterned cover, bed with a resting cat, curtained window, wall photographs, plants, and warm bedside lamp.\\n\\nsummary:\\n[reference generation] A 10-second continuous shot of <Subject 1> in <Subject 2>. She lowers her legs, adjusts her seated position, and leans closer to the desk while explaining that she prioritizes quality. After a quiet pause and a downward glance, she explains that good work earns trust and that this makes her updates less frequent. Her movement toward the desk is the main physical action; hand gestures remain minimal.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve her identity, hair, clothing, and natural appearance. Use the reference's forward-leaning posture as the position she settles into after the opening movement.\\n<Subject 2> (appears in [Shot 1]): fully_preserved - preserve the room layout, desk objects, chair cover, resting cat, nighttime atmosphere, and lighting.\\n\\ndetailed_description:\\nPhotorealistic nighttime footage with cool monitor light across the woman's face and warm lamplight in the background. Her manner is relaxed and sincere, like continuing a personal conversation with viewers.\\n\\n[Shot 1] One continuous 10-second medium shot follows the viewpoint and room arrangement of <Picture 1>. <Subject 1> sits in the black chair behind the desk in <Subject 2>. Her long dark hair falls naturally over her pale T-shirt. The monitor occupies the left foreground; the keyboard, mug, and mouse pad remain in place. The cat rests quietly on the bed behind her. Keep the camera stationary throughout. Her body moving closer creates the change in distance, without a camera push-in or zoom.\\n\\nFrom 00:00.000 to 00:03.000, <Subject 1> (S1) finishes lowering her legs beneath the desk, shifts her weight forward in the chair, and brings her upper body closer. Keep the leg movement below the lower frame edge, suggested by a small shift of her hips and torso. She settles both forearms on the tabletop, approaching the relaxed forward-leaning pose in <Picture 1>. During this movement, she says in a natural, conversational Mandarin voice: <d>[Mandarin Chinese] 准备案例的时候呢，我会更在意质量.</d> Deliver the line fluidly, with gentle emphasis on the final word. Her hands stay close together rather than gesturing.\\n\\nFrom 00:03.000 to 00:05.000, she pauses speaking and briefly lowers her eyes toward the desktop. Her lips remain closed. One finger makes a small, absent-minded movement against her other hand, then rests again. Let a quiet breath and the stillness carry this full two-second pause. Her shoulders remain relaxed, with no additional large movement.\\n\\nFrom 00:05.000 to 00:08.000, <Subject 1> (S1) raises her gaze toward the camera and says: <d>[Mandarin Chinese] 首先得自己的作品好，别人才会信你嘛.</d> Her tone is thoughtful and matter-of-fact, with a gentle conversational ending. Keep both forearms on the desk and her hands nearly still. Use subtle expression changes and natural blinking instead of explanatory hand gestures.\\n\\nFrom 00:08.000 to 00:10.000, <Subject 1> (S1) gives one small nod and concludes: <d>[Mandarin Chinese] 所以更新就没那么快.</d> Her expression softens into quiet acceptance. Finish the sentence before the video ends, then remain leaning comfortably toward the desk with her hands resting together.\\n\\nMaintain one consistent voice and accurate Mandarin lip synchronization. Preserve her identity and the room throughout the uninterrupted movement. No cuts, extra dialogue, subtitles, or on-screen text.\\n\\noverall_soundscape:\\nQuiet nighttime room tone with a faint computer hum, natural breathing, and soft clothing and chair movement during the initial posture adjustment. Keep her speech clear and close. Preserve the silent conversational pause from 00:03.000 to 00:05.000.\\n\\nnon_diegetic_music:\\nN/A\", \"startFrame\": 204, \"endFrame\": 447}]}}"
++    }
++  },
++  "8": {
++    "class_type": "MiniMaxH3FiniteSegmentSampler",
++    "inputs": {
++      "model": [
++        "19",
++        0
++      ],
++      "clip": [
++        "2",
++        0
++      ],
++      "vae": [
++        "3",
++        0
++      ],
++      "audio_vae": [
++        "4",
++        0
++      ],
++      "finite_plan": [
++        "7",
++        2
++      ],
++      "sampler": [
++        "6",
++        0
++      ],
++      "sigmas": [
++        "5",
++        0
++      ],
++      "seed": 20260924,
++      "continue_audio_latent": true,
++      "ref_image_size": "match"
++    }
++  },
++  "9": {
++    "class_type": "CreateVideo",
++    "inputs": {
++      "images": [
++        "8",
++        1
++      ],
++      "audio": [
++        "8",
++        2
++      ],
++      "fps": 24,
++      "bit_depth": 8
++    }
++  },
++  "10": {
++    "class_type": "SaveVideo",
++    "inputs": {
++      "video": [
++        "9",
++        0
++      ],
++      "filename_prefix": "vpromot-director/case",
++      "format": "mp4",
++      "codec": "h264"
++    }
++  }
++}
+\ No newline at end of file
+diff --git a/server/workflows/flf2v_api.json b/server/workflows/flf2v_api.json
+index 4c9ae1f..4bc4033 100644
+--- a/server/workflows/flf2v_api.json
++++ b/server/workflows/flf2v_api.json
+@@ -2,7 +2,7 @@
+   "9001": {
+     "class_type": "VAELoader",
+     "inputs": {
+-      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
++      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+     },
+     "_meta": {
+       "title": "VAELoader"
+@@ -52,7 +52,7 @@
+   "9005": {
+     "class_type": "KSamplerSelect",
+     "inputs": {
+-      "sampler_name": "euler"
++      "sampler_name": "res_multistep"
+     },
+     "_meta": {
+       "title": "KSamplerSelect"
+@@ -178,6 +178,10 @@
+       "first_frame": [
+         "114",
+         0
++      ],
++      "last_frame": [
++        "116",
++        0
+       ]
+     },
+     "_meta": {
+@@ -206,26 +210,6 @@
+       "title": "Float (duration)"
+     }
+   },
+-  "9019": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 20,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "PrimitiveInt"
+-    }
+-  },
+-  "9020": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 8,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "PrimitiveInt"
+-    }
+-  },
+   "92": {
+     "class_type": "SaveVideo",
+     "inputs": {
+@@ -254,7 +238,7 @@
+     "class_type": "ResolutionSelector",
+     "inputs": {
+       "aspect_ratio": "16:9 (Widescreen)",
+-      "megapixels": 0.98,
++      "megapixels": 1.0,
+       "multiple": 32
+     },
+     "_meta": {
+@@ -291,7 +275,7 @@
+         "9009",
+         0
+       ],
+-      "shift_video": 6.0,
++      "shift_video": 12.0,
+       "shift_audio": 3.0
+     },
+     "_meta": {
+@@ -331,14 +315,14 @@
+     "class_type": "BlockSparseAttention",
+     "inputs": {
+       "selection": "sol-attn",
+-      "selection.tau": 1.3,
+-      "start_percent": 0.2,
++      "selection.tau": 1.0,
++      "start_percent": 0.4,
+       "end_percent": 1.0,
+       "dense_blocks": "",
+       "min_tokens": 12288,
+       "extra_tokens": 256,
+       "sink_conditioning": "exact_kv_and_rows",
+-      "verbose": true,
++      "verbose": false,
+       "model": [
+         "9502",
+         0
+@@ -347,5 +331,14 @@
+     "_meta": {
+       "title": "Model Sparse Attention (Sol-Attn)"
+     }
++  },
++  "116": {
++    "class_type": "LoadImage",
++    "inputs": {
++      "image": "transparent_rgb_gaming_mouse.png"
++    },
++    "_meta": {
++      "title": "LoadImage (last_frame)"
++    }
+   }
+ }
+\ No newline at end of file
+diff --git a/server/workflows/r2v_api.json b/server/workflows/r2v_api.json
+index 37e7d08..dae5173 100644
+--- a/server/workflows/r2v_api.json
++++ b/server/workflows/r2v_api.json
+@@ -18,7 +18,7 @@
+     "class_type": "ResolutionSelector",
+     "inputs": {
+       "aspect_ratio": "16:9 (Widescreen)",
+-      "megapixels": 0.98,
++      "megapixels": 1.0,
+       "multiple": 32
+     },
+     "_meta": {
+@@ -28,7 +28,7 @@
+   "119": {
+     "class_type": "VAELoader",
+     "inputs": {
+-      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
++      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+     },
+     "_meta": {
+       "title": "VAELoader"
+@@ -78,7 +78,7 @@
+   "123": {
+     "class_type": "KSamplerSelect",
+     "inputs": {
+-      "sampler_name": "euler"
++      "sampler_name": "res_multistep"
+     },
+     "_meta": {
+       "title": "KSamplerSelect"
+@@ -271,26 +271,6 @@
+       "title": "LoadImage"
+     }
+   },
+-  "143": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 20,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "Int (Full)"
+-    }
+-  },
+-  "144": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 4,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "Int (Lightning LoRA)"
+-    }
+-  },
+   "9500": {
+     "class_type": "MiniMaxH3SigmaShift",
+     "inputs": {
+@@ -338,14 +318,14 @@
+     "class_type": "BlockSparseAttention",
+     "inputs": {
+       "selection": "sol-attn",
+-      "selection.tau": 1.3,
+-      "start_percent": 0.2,
++      "selection.tau": 1.0,
++      "start_percent": 0.4,
+       "end_percent": 1.0,
+       "dense_blocks": "",
+       "min_tokens": 12288,
+       "extra_tokens": 256,
+       "sink_conditioning": "exact_kv_and_rows",
+-      "verbose": true,
++      "verbose": false,
+       "model": [
+         "9502",
+         0
+diff --git a/server/workflows/t2v_api.json b/server/workflows/t2v_api.json
+index 1793002..835caac 100644
+--- a/server/workflows/t2v_api.json
++++ b/server/workflows/t2v_api.json
+@@ -2,7 +2,7 @@
+   "9001": {
+     "class_type": "VAELoader",
+     "inputs": {
+-      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
++      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+     },
+     "_meta": {
+       "title": "VAELoader"
+@@ -52,7 +52,7 @@
+   "9005": {
+     "class_type": "KSamplerSelect",
+     "inputs": {
+-      "sampler_name": "euler"
++      "sampler_name": "res_multistep"
+     },
+     "_meta": {
+       "title": "KSamplerSelect"
+@@ -202,26 +202,6 @@
+       "title": "Float (duration)"
+     }
+   },
+-  "9019": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 20,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "PrimitiveInt"
+-    }
+-  },
+-  "9020": {
+-    "class_type": "PrimitiveInt",
+-    "inputs": {
+-      "value": 8,
+-      "fixed": "fixed"
+-    },
+-    "_meta": {
+-      "title": "PrimitiveInt"
+-    }
+-  },
+   "92": {
+     "class_type": "SaveVideo",
+     "inputs": {
+@@ -241,7 +221,7 @@
+     "class_type": "ResolutionSelector",
+     "inputs": {
+       "aspect_ratio": "16:9 (Widescreen)",
+-      "megapixels": 0.98,
++      "megapixels": 1.0,
+       "multiple": 32
+     },
+     "_meta": {
+@@ -255,7 +235,7 @@
+         "9009",
+         0
+       ],
+-      "shift_video": 6.0,
++      "shift_video": 12.0,
+       "shift_audio": 3.0
+     },
+     "_meta": {
+@@ -295,14 +275,14 @@
+     "class_type": "BlockSparseAttention",
+     "inputs": {
+       "selection": "sol-attn",
+-      "selection.tau": 1.3,
+-      "start_percent": 0.2,
++      "selection.tau": 1.0,
++      "start_percent": 0.4,
+       "end_percent": 1.0,
+       "dense_blocks": "",
+       "min_tokens": 12288,
+       "extra_tokens": 256,
+       "sink_conditioning": "exact_kv_and_rows",
+-      "verbose": true,
++      "verbose": false,
+       "model": [
+         "9502",
+         0

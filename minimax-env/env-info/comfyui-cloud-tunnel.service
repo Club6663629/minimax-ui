@@ -1,4 +1,3 @@
-# /etc/systemd/system/comfyui-cloud-tunnel.service
 [Unit]
 Description=ComfyUI Cloud Node SSH Tunnel (45:8183 -> cloud:8188)
 After=network-online.target
