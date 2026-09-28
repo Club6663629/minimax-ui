@@ -7,6 +7,7 @@ import type {
   RedeemCodeOut,
   Task,
   TokenOut,
+  UploadListItem,
   UploadOut,
   User,
   WorkerPoolOut,
@@ -119,6 +120,10 @@ export const api = {
   },
   // 兼容：仅上传图片（首尾帧等）
   uploadImage: (file: File, slot: string) => api.uploadMedia(file, slot),
+
+  // 资产管理：上传素材列表 / 删除
+  listUploads: () => request<UploadListItem[]>("/api/uploads"),
+  deleteUpload: (id: number) => request<void>(`/api/uploads/${id}`, { method: "DELETE" }),
 
   // 积分
   creditLogs: () => request<CreditLog[]>("/api/credits/logs"),

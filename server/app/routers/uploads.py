@@ -1,14 +1,15 @@
-"""媒体上传：首帧 / 尾帧 / 参考（参考区支持图片、视频、音频混传）。"""
+"""媒体上传：首帧 / 尾帧 / 参考（参考区支持图片、视频、音频混传）及资产列表。"""
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user
 from ..config import UPLOAD_DIR
 from ..database import get_db
 from ..models import Upload, User
-from ..schemas import UploadOut
+from ..schemas import UploadListItemOut, UploadOut
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -42,6 +43,16 @@ def _classify(content_type: str) -> str:
     if content_type in _AUDIO_TYPES:
         return "audio"
     return ""
+
+
+def _kind_by_path(path: str) -> str:
+    """按存储文件后缀判定媒体种类（未知按图片计）。"""
+    suffix = Path(path).suffix.lower()
+    if suffix in _VIDEO_TYPES.values():
+        return "video"
+    if suffix in _AUDIO_TYPES.values():
+        return "audio"
+    return "image"
 
 
 @router.post("", response_model=UploadOut)
@@ -78,3 +89,49 @@ async def upload_media(
     db.commit()
     db.refresh(upload)
     return UploadOut(id=upload.id, slot=upload.slot, filename=upload.filename, url=f"/files/upload/{upload.id}")
+
+
+@router.get("", response_model=list[UploadListItemOut])
+def list_uploads(
+    limit: int = Query(default=200, le=500),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """当前用户的上传素材列表（资产页数据源，按时间倒序）。"""
+    rows = (
+        db.query(Upload)
+        .filter(Upload.user_id == user.id)
+        .order_by(Upload.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        UploadListItemOut(
+            id=u.id,
+            slot=u.slot,
+            filename=u.filename,
+            url=f"/files/upload/{u.id}",
+            kind=_kind_by_path(u.path),
+            created_at=u.created_at,
+        )
+        for u in rows
+    ]
+
+
+@router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_upload(
+    upload_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除自己的上传素材（连带删除磁盘文件）。"""
+    upload = db.get(Upload, upload_id)
+    if upload is None or upload.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "素材不存在")
+    try:
+        Path(upload.path).unlink(missing_ok=True)
+    except OSError:
+        # 磁盘文件已不存在时仍允许清理记录
+        pass
+    db.delete(upload)
+    db.commit()

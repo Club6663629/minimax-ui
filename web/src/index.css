@@ -1,20 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
   }
   body {
-    @apply bg-ink-950 text-zinc-200 antialiased;
+    @apply bg-background-50 text-foreground-900 antialiased;
   }
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    @apply rounded bg-zinc-700/60;
+    @apply rounded bg-background-300;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -23,18 +24,52 @@
 
 @layer components {
   .panel {
-    @apply rounded-2xl border border-white/[0.06] bg-ink-900;
+    @apply rounded-2xl border border-background-200 bg-background-100;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-medium text-white transition hover:from-indigo-400 hover:to-violet-400 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-primary-500 px-5 py-2.5 text-sm font-medium text-background-50 transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-background-300 px-4 py-2 text-sm text-foreground-700 transition hover:bg-background-200 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .input {
-    @apply w-full rounded-xl border border-white/10 bg-ink-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition focus:border-indigo-400/60 focus:ring-1 focus:ring-indigo-400/40;
+    @apply w-full rounded-xl border border-background-300 bg-background-100 px-3.5 py-2.5 text-sm text-foreground-900 placeholder-foreground-500 outline-none transition focus:border-primary-500 focus:ring-1 focus:ring-primary-300;
   }
   .chip {
-    @apply inline-flex items-center rounded-md bg-white/[0.06] px-2 py-0.5 text-xs text-zinc-400;
+    @apply inline-flex items-center rounded-md bg-background-200 px-2 py-0.5 text-xs text-foreground-600;
   }
+}
+
+/* 分镜模式时长滑杆 */
+.range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: oklch(0.9 0.018 235);
+  outline: none;
+}
+
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: oklch(0.603 0.218 257);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.range-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 9999px;
+  background: oklch(0.603 0.218 257);
+  cursor: pointer;
 }

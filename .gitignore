@@ -24,3 +24,5 @@ workflow_templates/*
 server/clouds/*.env
 !server/clouds/example.env
 minimax-ui-patch-20260926/*
+tmp/*
+

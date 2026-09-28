@@ -1,6 +1,7 @@
-/** 页面骨架：顶部导航 + 内容区。 */
+/** 页面骨架：顶部导航（海白菜品牌）+ 内容区。 */
 import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import BrandLogo from "./BrandLogo";
 import { useAuth } from "../state/auth";
 
 function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
@@ -11,8 +12,8 @@ function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label
       className={({ isActive }) =>
         `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition ${
           isActive
-            ? "bg-white/[0.08] text-white"
-            : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-200"
+            ? "bg-primary-100 text-primary-700"
+            : "text-foreground-600 hover:bg-background-200 hover:text-foreground-900"
         }`
       }
     >
@@ -28,13 +29,10 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-20 border-b border-white/[0.06] bg-ink-950/80 backdrop-blur">
+      <header className="sticky top-0 z-20 border-b border-background-200 bg-background-50/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 text-sm font-bold text-white">
-              H3
-            </div>
-            <span className="text-sm font-semibold tracking-wide text-white">H3 Studio</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <BrandLogo size={34} />
           </div>
 
           <nav className="flex items-center gap-1">
@@ -49,16 +47,16 @@ export default function Layout() {
           <div className="ml-auto flex items-center gap-3">
             <NavLink
               to="/recharge"
-              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-sm text-indigo-300 transition hover:bg-indigo-500/20"
+              className="inline-flex items-center gap-1.5 rounded-full border border-primary-300/40 bg-primary-100 px-3 py-1 text-sm text-primary-700 transition hover:bg-primary-200"
             >
               <Coins size={14} />
               {user?.credits ?? 0}
             </NavLink>
-            <span className="hidden max-w-[160px] truncate text-sm text-zinc-400 sm:block">
+            <span className="hidden max-w-[160px] truncate text-sm text-foreground-500 sm:block">
               {user?.email}
             </span>
             <button
-              className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-white/[0.06] hover:text-zinc-200"
+              className="rounded-lg p-1.5 text-foreground-500 transition hover:bg-background-200 hover:text-foreground-900"
               title="退出登录"
               onClick={() => {
                 logout();
@@ -75,8 +73,8 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      <footer className="border-t border-white/[0.05] py-4 text-center text-xs text-zinc-600">
-        H3 Studio · Powered by MiniMax H3 + ComfyUI
+      <footer className="border-t border-background-200 py-4 text-center text-xs text-foreground-500">
+        海白菜 · Powered by MiniMax H3 + ComfyUI
       </footer>
     </div>
   );

@@ -40,6 +40,17 @@ class UploadOut(BaseModel):
     url: str
 
 
+class UploadListItemOut(BaseModel):
+    """资产管理页的上传素材列表项：附带类型与创建时间。"""
+
+    id: int
+    slot: str
+    filename: str
+    url: str
+    kind: str        # image | video | audio（按文件后缀判定）
+    created_at: datetime
+
+
 # ---- 视频任务 ----
 class VideoCreateIn(BaseModel):
     mode: Literal["t2v", "flf2v", "r2v", "director"]
@@ -64,7 +75,7 @@ class DirectorSegmentIn(BaseModel):
     """
 
     prompt: str = Field(min_length=1, max_length=8000)
-    duration: float = Field(default=10.0, gt=0, le=150)  # 秒
+    duration: float = Field(default=10.0, gt=0, le=10)  # 秒（每镜头上限 10 秒）
     # 本段参考图上限 9（与插件 MAX_REF_IMAGES=9 / r2v 参考上限一致）：
     # 段间连续性素材 = 上一段末帧 + 从上一段均匀抽取的 5 帧，共 6 张
     ref_image_ids: list[int] = Field(default_factory=list, max_length=9)

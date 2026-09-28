@@ -22,6 +22,16 @@ export interface UploadOut {
   url: string;
 }
 
+/** 资产管理页的上传素材列表项。 */
+export interface UploadListItem {
+  id: number;
+  slot: string;
+  filename: string;
+  url: string;
+  kind: "image" | "video" | "audio";
+  created_at: string;
+}
+
 export type TaskStatus =
   | "queued"
   | "enhancing"
@@ -32,7 +42,7 @@ export type TaskStatus =
 
 export interface Task {
   id: number;
-  mode: "t2v" | "flf2v" | "r2v";
+  mode: "t2v" | "flf2v" | "r2v" | "director";
   prompt: string;
   enhanced_prompt: string;
   aspect_ratio: string;
@@ -53,10 +63,24 @@ export interface Task {
   parent_task_id: number | null;
   upscale_target: string | null;
   worker_url: string;
+  // 导演台段清单（后端吸附后的 frames/start_frame/end_frame/seed 原样回传）
+  segments: DirectorSegment[];
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
   user_email?: string | null;
+}
+
+/** 导演台单段（后端 plan_director_segments 输出 + 提交时的输入字段）。 */
+export interface DirectorSegment {
+  prompt: string;
+  duration?: number;
+  ref_image_ids?: number[];
+  index?: number;
+  frames?: number;
+  start_frame?: number;
+  end_frame?: number;
+  seed?: number;
 }
 
 export interface CreditLog {
@@ -193,4 +217,5 @@ export const MODE_LABEL: Record<Task["mode"], string> = {
   t2v: "文生视频",
   flf2v: "首尾帧",
   r2v: "全能参考",
+  director: "导演台",
 };

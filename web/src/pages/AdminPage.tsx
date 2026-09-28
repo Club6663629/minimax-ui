@@ -71,10 +71,10 @@ function powerPill(
   act: "" | "on" | "off",
   fail: PowerNote | null,
 ): { text: string; cls: string; title: string } {
-  const AMBER = "bg-amber-500/15 text-amber-300 ring-amber-500/30";
-  const GREEN = "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30";
-  const GREY = "bg-zinc-500/15 text-zinc-400 ring-zinc-500/30";
-  const ROSE = "bg-rose-500/15 text-rose-300 ring-rose-500/30";
+  const AMBER = "bg-amber-500/15 text-amber-700 ring-amber-500/30";
+  const GREEN = "bg-emerald-500/15 text-emerald-700 ring-emerald-500/30";
+  const GREY = "bg-background-300/70 text-foreground-600 ring-background-400/40";
+  const ROSE = "bg-rose-500/15 text-rose-700 ring-rose-500/30";
   if (fail) {
     const reason = shortReason(fail.code, fail.msg);
     const when = new Date(fail.at).toLocaleString("zh-CN", { hour12: false });
@@ -171,7 +171,7 @@ export default function AdminPage() {
   }, [tab]);
 
   if (user?.role !== "admin") {
-    return <p className="py-20 text-center text-sm text-zinc-600">需要管理员权限</p>;
+    return <p className="py-20 text-center text-sm text-foreground-500">需要管理员权限</p>;
   }
 
   async function doAdjust() {
@@ -209,8 +209,8 @@ export default function AdminPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-lg font-semibold text-white">管理后台</h1>
-        <div className="ml-4 flex flex-wrap rounded-xl bg-ink-800 p-1 text-sm">
+        <h1 className="text-lg font-semibold text-foreground-950">管理后台</h1>
+        <div className="ml-4 flex flex-wrap rounded-xl bg-background-200 p-1 text-sm">
           {(
             [
               ["overview", "概览"],
@@ -224,7 +224,7 @@ export default function AdminPage() {
               key={t}
               onClick={() => setTab(t)}
               className={`rounded-lg px-4 py-1.5 transition ${
-                tab === t ? "bg-white/[0.08] text-white" : "text-zinc-500 hover:text-zinc-300"
+                tab === t ? "bg-background-50 text-foreground-900 shadow-sm" : "text-foreground-500 hover:text-foreground-800"
               }`}
             >
               {label}
@@ -236,7 +236,7 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {message && <p className="text-sm text-emerald-400">{message}</p>}
+      {message && <p className="text-sm text-emerald-600">{message}</p>}
 
       {/* ---- 概览 ---- */}
       {tab === "overview" && stats && (
@@ -252,8 +252,8 @@ export default function AdminPage() {
             ["已失败", stats.failed],
           ].map(([label, value]) => (
             <div key={label as string} className="panel p-5">
-              <p className="text-xs text-zinc-500">{label}</p>
-              <p className="mt-1.5 text-2xl font-semibold text-white">{value}</p>
+              <p className="text-xs text-foreground-500">{label}</p>
+              <p className="mt-1.5 text-2xl font-semibold text-foreground-950">{value}</p>
             </div>
           ))}
         </div>
@@ -262,12 +262,12 @@ export default function AdminPage() {
       {/* ---- 用户管理 ---- */}
       {tab === "users" && (
         <div className="panel overflow-x-auto p-5">
-          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-            <Users size={15} className="text-indigo-400" /> 用户列表
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground-950">
+            <Users size={15} className="text-primary-500" /> 用户列表
           </h3>
           <table className="w-full min-w-[700px] text-sm">
             <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+              <tr className="border-b border-background-200 text-left text-xs text-foreground-500">
                 <th className="pb-2 font-normal">ID</th>
                 <th className="pb-2 font-normal">邮箱</th>
                 <th className="pb-2 font-normal">昵称</th>
@@ -280,20 +280,20 @@ export default function AdminPage() {
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} className="border-b border-white/[0.04] last:border-0">
-                  <td className="py-2.5 text-zinc-500">{u.id}</td>
-                  <td className="py-2.5 text-zinc-300">{u.email}</td>
-                  <td className="py-2.5 text-zinc-400">{u.username}</td>
+                <tr key={u.id} className="border-b border-background-100 last:border-0">
+                  <td className="py-2.5 text-foreground-500">{u.id}</td>
+                  <td className="py-2.5 text-foreground-800">{u.email}</td>
+                  <td className="py-2.5 text-foreground-600">{u.username}</td>
                   <td className="py-2.5">
                     {u.role === "admin" ? (
-                      <span className="text-violet-400">管理员</span>
+                      <span className="text-accent-600">管理员</span>
                     ) : (
-                      <span className="text-zinc-500">用户</span>
+                      <span className="text-foreground-500">用户</span>
                     )}
                   </td>
-                  <td className="py-2.5 text-indigo-300">{u.credits}</td>
-                  <td className="py-2.5 text-zinc-400">{u.task_count}</td>
-                  <td className="py-2.5 text-xs text-zinc-500">{fmtTime(u.created_at)}</td>
+                  <td className="py-2.5 text-primary-600">{u.credits}</td>
+                  <td className="py-2.5 text-foreground-600">{u.task_count}</td>
+                  <td className="py-2.5 text-xs text-foreground-500">{fmtTime(u.created_at)}</td>
                   <td className="py-2.5">
                     {u.role !== "admin" && (
                       <button
@@ -315,12 +315,12 @@ export default function AdminPage() {
       {tab === "codes" && (
         <div className="space-y-4">
           <div className="panel p-5">
-            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-              <Ticket size={15} className="text-violet-400" /> 生成兑换码
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground-950">
+              <Ticket size={15} className="text-accent-600" /> 生成兑换码
             </h3>
             <div className="flex flex-wrap items-end gap-3">
               <div>
-                <p className="mb-1.5 text-xs text-zinc-500">面值（积分）</p>
+                <p className="mb-1.5 text-xs text-foreground-500">面值（积分）</p>
                 <select className="input w-32" value={codeValue} onChange={(e) => setCodeValue(e.target.value)}>
                   {[50, 100, 500, 2000].map((v) => (
                     <option key={v} value={v}>
@@ -330,7 +330,7 @@ export default function AdminPage() {
                 </select>
               </div>
               <div>
-                <p className="mb-1.5 text-xs text-zinc-500">数量</p>
+                <p className="mb-1.5 text-xs text-foreground-500">数量</p>
                 <input
                   className="input w-24"
                   type="number"
@@ -349,7 +349,7 @@ export default function AdminPage() {
           <div className="panel overflow-x-auto p-5">
             <table className="w-full min-w-[640px] text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+                <tr className="border-b border-background-200 text-left text-xs text-foreground-500">
                   <th className="pb-2 font-normal">兑换码</th>
                   <th className="pb-2 font-normal">面值</th>
                   <th className="pb-2 font-normal">状态</th>
@@ -360,25 +360,25 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {codes.map((c) => (
-                  <tr key={c.id} className="border-b border-white/[0.04] last:border-0">
-                    <td className="py-2.5 font-mono text-xs tracking-wider text-zinc-200">{c.code}</td>
-                    <td className="py-2.5 text-indigo-300">{c.value}</td>
+                  <tr key={c.id} className="border-b border-background-100 last:border-0">
+                    <td className="py-2.5 font-mono text-xs tracking-wider text-foreground-900">{c.code}</td>
+                    <td className="py-2.5 text-primary-600">{c.value}</td>
                     <td className="py-2.5">
                       {c.status === "unused" ? (
-                        <span className="text-emerald-400">未使用</span>
+                        <span className="text-emerald-600">未使用</span>
                       ) : (
-                        <span className="text-zinc-500">已使用</span>
+                        <span className="text-foreground-500">已使用</span>
                       )}
                     </td>
-                    <td className="py-2.5 text-xs text-zinc-500">
+                    <td className="py-2.5 text-xs text-foreground-500">
                       {c.used_by_email ?? "-"}
                       {c.used_at && ` (${fmtTime(c.used_at)})`}
                     </td>
-                    <td className="py-2.5 text-xs text-zinc-500">{fmtTime(c.created_at)}</td>
+                    <td className="py-2.5 text-xs text-foreground-500">{fmtTime(c.created_at)}</td>
                     <td className="py-2.5">
                       {c.status === "unused" && (
                         <button
-                          className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/5 hover:text-white"
+                          className="rounded-lg p-1.5 text-foreground-600 hover:bg-background-200 hover:text-foreground-900"
                           onClick={() => copyCode(c.code)}
                           title="复制"
                         >
@@ -390,7 +390,7 @@ export default function AdminPage() {
                 ))}
                 {codes.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-sm text-zinc-600">
+                    <td colSpan={6} className="py-8 text-center text-sm text-foreground-500">
                       暂无兑换码
                     </td>
                   </tr>
@@ -406,7 +406,7 @@ export default function AdminPage() {
         <div className="panel overflow-x-auto p-5">
           <table className="w-full min-w-[800px] text-sm">
             <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+              <tr className="border-b border-background-200 text-left text-xs text-foreground-500">
                 <th className="pb-2 font-normal">ID</th>
                 <th className="pb-2 font-normal">用户</th>
                 <th className="pb-2 font-normal">模式</th>
@@ -419,39 +419,39 @@ export default function AdminPage() {
             </thead>
             <tbody>
               {tasks.map((t) => (
-                <tr key={t.id} className="border-b border-white/[0.04] align-top last:border-0">
-                  <td className="py-2.5 text-zinc-500">#{t.id}</td>
-                  <td className="py-2.5 text-xs text-zinc-400">{t.user_email ?? "-"}</td>
-                  <td className="py-2.5 text-zinc-300">{MODE_LABEL[t.mode]}</td>
-                  <td className="max-w-[220px] truncate py-2.5 text-xs text-zinc-500" title={t.prompt}>
+                <tr key={t.id} className="border-b border-background-100 align-top last:border-0">
+                  <td className="py-2.5 text-foreground-500">#{t.id}</td>
+                  <td className="py-2.5 text-xs text-foreground-600">{t.user_email ?? "-"}</td>
+                  <td className="py-2.5 text-foreground-800">{MODE_LABEL[t.mode]}</td>
+                  <td className="max-w-[220px] truncate py-2.5 text-xs text-foreground-500" title={t.prompt}>
                     {t.prompt}
                   </td>
-                  <td className="whitespace-nowrap py-2.5 text-xs text-zinc-500">
+                  <td className="whitespace-nowrap py-2.5 text-xs text-foreground-500">
                     {t.aspect_ratio} · {t.duration}s · {t.resolution}
                   </td>
                   <td className="py-2.5">
                     <span
                       className={
                         t.status === "done"
-                          ? "text-emerald-400"
+                          ? "text-emerald-600"
                           : t.status === "failed"
-                            ? "text-rose-400"
-                            : "text-indigo-300"
+                            ? "text-rose-600"
+                            : "text-primary-600"
                       }
                       title={t.error}
                     >
                       {STATUS_LABEL[t.status]}
                     </span>
                   </td>
-                  <td className="py-2.5 text-zinc-300">{t.cost || "-"}</td>
-                  <td className="whitespace-nowrap py-2.5 text-xs text-zinc-500">
+                  <td className="py-2.5 text-foreground-800">{t.cost || "-"}</td>
+                  <td className="whitespace-nowrap py-2.5 text-xs text-foreground-500">
                     {fmtTime(t.created_at)}
                   </td>
                 </tr>
               ))}
               {tasks.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-sm text-zinc-600">
+                  <td colSpan={8} className="py-8 text-center text-sm text-foreground-500">
                     暂无任务
                   </td>
                 </tr>
@@ -471,21 +471,21 @@ export default function AdminPage() {
               ["超分阶段", workerPool.upscaling],
             ].map(([label, value]) => (
               <div key={label as string} className="panel p-5">
-                <p className="text-xs text-zinc-500">{label}</p>
-                <p className="mt-1.5 text-2xl font-semibold text-white">{value}</p>
+                <p className="text-xs text-foreground-500">{label}</p>
+                <p className="mt-1.5 text-2xl font-semibold text-foreground-950">{value}</p>
               </div>
             ))}
           </div>
 
           <div className="panel overflow-x-auto p-5">
-            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-              <Cpu size={15} className="text-indigo-400" /> ComfyUI 节点
-              {workerPool.mock && <span className="text-xs font-normal text-amber-400">Mock 模式</span>}
-              <span className="ml-auto text-xs font-normal text-zinc-600">每 5 秒自动刷新</span>
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground-950">
+              <Cpu size={15} className="text-primary-500" /> ComfyUI 节点
+              {workerPool.mock && <span className="text-xs font-normal text-amber-600">Mock 模式</span>}
+              <span className="ml-auto text-xs font-normal text-foreground-500">每 5 秒自动刷新</span>
             </h3>
             <table className="w-full min-w-[560px] text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-xs text-zinc-600">
+                <tr className="border-b border-background-200 text-left text-xs text-foreground-500">
                   <th className="pb-2 pr-3 font-normal">节点</th>
                   <th className="pb-2 pr-3 font-normal">角色</th>
                   <th className="pb-2 pr-3 font-normal">标签</th>
@@ -496,15 +496,15 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {workerPool.workers.map((w) => (
-                  <tr key={w.url} className="border-b border-white/[0.04] last:border-0">
+                  <tr key={w.url} className="border-b border-background-100 last:border-0">
                     <td className="py-2.5 pr-3">
                       <span className="flex items-center gap-1.5 whitespace-nowrap">
-                        <span className="font-mono text-xs text-zinc-300" title={w.url}>
+                        <span className="font-mono text-xs text-foreground-800" title={w.url}>
                           {w.url.replace(/^https?:\/\//, "")}
                         </span>
                         {w.platform && (
                           <span
-                            className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] leading-none text-sky-300 ring-1 ring-sky-500/30"
+                            className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] leading-none text-sky-700 ring-1 ring-sky-500/30"
                             title={w.instance_id ?? w.platform}
                           >
                             {w.platform}
@@ -513,29 +513,29 @@ export default function AdminPage() {
                       </span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <span className={w.role === "generate" ? "text-indigo-300" : "text-violet-300"}>
+                      <span className={w.role === "generate" ? "text-primary-600" : "text-accent-600"}>
                         {w.role === "generate" ? "生成" : "超分"}
                       </span>
                     </td>
-                    <td className="py-2.5 pr-3 text-xs text-zinc-500" title={w.tags.join("\n")}>
+                    <td className="py-2.5 pr-3 text-xs text-foreground-500" title={w.tags.join("\n")}>
                       {compactTags(w.tags)}
                     </td>
                     <td className="py-2.5 pr-3 text-xs whitespace-nowrap">
                       {!w.healthy ? (
-                        <span className="text-rose-400" title={`连续失败 ${w.consecutive_fails} 次，已从池中摘除`}>
+                        <span className="text-rose-600" title={`连续失败 ${w.consecutive_fails} 次，已从池中摘除`}>
                           ⊘ 离线·{w.consecutive_fails}
                         </span>
                       ) : w.busy ? (
-                        <span className="text-amber-400" title="正在执行任务">
+                        <span className="text-amber-600" title="正在执行任务">
                           ● 忙碌
                         </span>
                       ) : (
-                        <span className="text-emerald-400" title="空闲，可接单">
+                        <span className="text-emerald-600" title="空闲，可接单">
                           ● 空闲
                         </span>
                       )}
                     </td>
-                    <td className="py-2.5 pr-3 text-xs text-zinc-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
+                    <td className="py-2.5 pr-3 text-xs text-foreground-500">{w.task_id ? `#${w.task_id}` : "-"}</td>
                     <td className="py-2.5">
                       {w.power_controllable ? (
                         (() => {
@@ -568,7 +568,7 @@ export default function AdminPage() {
                           );
                         })()
                       ) : (
-                        <span className="text-xs text-zinc-600">—</span>
+                        <span className="text-xs text-foreground-500">—</span>
                       )}
                     </td>
                   </tr>
@@ -586,8 +586,8 @@ export default function AdminPage() {
           onClick={() => setConfirmPower(null)}
         >
           <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-1 text-base font-semibold text-white">确认关闭云端实例？</h3>
-            <p className="mb-4 text-xs text-zinc-500">
+            <h3 className="mb-1 text-base font-semibold text-foreground-950">确认关闭云端实例？</h3>
+            <p className="mb-4 text-xs text-foreground-500">
               {confirmPower.instance_id}（{confirmPower.url}）将关机并退出 Worker 池；
               若节点上仍有任务在执行，会被中断。
             </p>
@@ -617,8 +617,8 @@ export default function AdminPage() {
           onClick={() => setAdjustTarget(null)}
         >
           <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-1 text-base font-semibold text-white">调整积分</h3>
-            <p className="mb-4 text-xs text-zinc-500">
+            <h3 className="mb-1 text-base font-semibold text-foreground-950">调整积分</h3>
+            <p className="mb-4 text-xs text-foreground-500">
               {adjustTarget.email} · 当前余额 {adjustTarget.credits}
             </p>
             <input

@@ -183,7 +183,12 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
     task = _get_owned_task(task_id, user, db)
     if task.status != "failed":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅失败任务可重试")
-    cost = compute_cost(task.duration, task.resolution)
+    # 导演台按总时长折算计费（5s 块 × 5s 档单价），短视频按档位计费
+    cost = (
+        compute_director_cost(task.duration)
+        if task.mode == "director"
+        else compute_cost(task.duration, task.resolution)
+    )
     if user.credits < cost:
         raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, f"积分不足，重试需 {cost} 积分")
     task.status = "queued"
