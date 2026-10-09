@@ -88,10 +88,26 @@ class Settings(BaseSettings):
     advideo_prompt_enhance: bool = True        # 生图阶段增强（set 模式生效；[RAW] 前缀 = 专家模式，跳过增强）
     advideo_video_prompt_enhance: bool = True  # 生视频阶段增强（本地规则；为 True 时 advideo 不走云端 Content-IR）
     advideo_ir_single_shot: bool = True       # Content-IR 输出后处理（advpostir）：剥 [Shot n]/时间码、切镜改连续运镜、去抖、去重，并把保真主句写进正文（advideo8 实测）  # 生视频阶段增强（本地规则；为 True 时 advideo 不走云端 Content-IR）
-    # 生视频提示词增强路由（advideo9，2026-10-08 用户拍板：默认 C 臂，可切 A 臂）
-    # content_ir = C 臂（默认）：云端 Content-IR（强制电商 skill：商品保真硬约束）+ advpostir 单镜化后处理（付费）
+    # 生视频提示词增强路由（advideo9，2026-10-08；2026-10-09 默认改为 llm 主方案）
+    # llm        = 主方案（默认）：qwen3.8-flash 视频增强 agent（videollm.py，装载官方 H3 skill + 电商保真 system）；
+    #              失败 / 无 key / 空输出 / 未过守门 → 自动回退 content_ir（C 臂）
+    # content_ir = C 臂（备选）：云端 Content-IR（强制电商 skill：商品保真硬约束）+ advpostir 单镜化后处理（付费）
     # local      = A 臂：本地规则增强（advenhance.enhance_video_prompt，0 付费，行为同改造前）
-    advideo_video_prompt_mode: str = "content_ir"
+    advideo_video_prompt_mode: str = "llm"
+    # ---- 标准创作流程（general/drama/ecommerce/music）视频增强路由（2026-10-09）----
+    # llm        = 主方案（默认）：qwen3.8-flash 视频增强 agent（videollm.py）；失败自动回退 content_ir
+    # content_ir = 备选/旧行为：仅走云端 Content-IR（apply_scene + cloud.enhance_prompt）
+    # off        = 关闭增强（enhance=True 也不改写，直接用原话）
+    video_enhance_mode: str = "llm"
+    # 视频增强 agent 调参（复用 qwen provider 凭证：qwen_api_key / qwen_api_base / qwen_llm_model）
+    video_llm_temperature: float = 0.5
+    video_llm_max_tokens: int = 2400      # H3 结构化正文（三段 + [Shot n]）比生图正文长，给足预算
+    video_llm_timeout: int = 90
+    video_llm_thinking: bool = False      # 关思考（qwen: enable_thinking=false）
+    # 视觉增强：把任务的参考图（首/尾帧、参考区图片、advideo 商品图/确认广告图）一并传给 qwen3.8-flash，
+    # 让 agent「看图」再改写（拼贴/多姿态/多机位参考图据此保真、按 H3 montage 规则合成单一主体）。
+    video_llm_vision: bool = True         # 关闭则回退纯文本改写（不传图）
+    video_llm_max_images: int = 4         # 单次增强最多传入的参考图张数（超出的忽略；detail 复用 advideo_llm_vision_detail）
 
       # set 模式只喂主商品图 1 张（实测多图输入→N 格拼贴）
     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
@@ -145,6 +161,12 @@ class Settings(BaseSettings):
     def advideo_llm_enabled(self) -> bool:
         """生图 LLM 增强臂是否可用：当前 provider 配了 API Key 且生图提示词模式为 llm。"""
         return bool(self.advideo_llm_api_key) and str(self.advideo_image_prompt_mode).lower() == "llm"
+
+    @property
+    def video_llm_enabled(self) -> bool:
+        """视频 LLM 增强 agent 是否可用：当前 provider（默认 qwen3.8-flash）配了 API Key。
+        与生图 agent 共用凭证；无 key 时 _run_enhance 自动回退 Content-IR。"""
+        return bool(self.advideo_llm_api_key)
 
 
 settings = Settings()

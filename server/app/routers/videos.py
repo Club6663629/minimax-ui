@@ -328,15 +328,17 @@ def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
 def advideo_status(_user: User = Depends(get_advideo_access)):
     """广告图阶段是否就绪（前端据此禁用入口/提示原因）。
 
-    advideo9：额外下发「生视频提示词增强路由」默认值与可选项，前端据此渲染 C 臂/A 臂开关。
+    advideo9：额外下发「生视频提示词增强路由」默认值与可选项，前端据此渲染增强开关。
+    2026-10-09：默认主方案改为 llm（qwen3.8-flash），Content-IR 降为备选。
     """
     st = advimage.status()
-    default_mode = str(getattr(settings, "advideo_video_prompt_mode", "content_ir") or "content_ir").strip().lower()
-    if default_mode not in ("content_ir", "local"):
-        default_mode = "content_ir"
+    default_mode = str(getattr(settings, "advideo_video_prompt_mode", "llm") or "llm").strip().lower()
+    if default_mode not in ("llm", "content_ir", "local"):
+        default_mode = "llm"
     st.update({
         "video_prompt_default_mode": default_mode,
         "video_prompt_modes": [
+            {"value": "llm", "label": "Qwen-Flash 增强"},
             {"value": "content_ir", "label": "Content-IR 电商"},
             {"value": "local", "label": "本地规则"},
         ],
@@ -498,7 +500,7 @@ def confirm_advideo_image(
     if body.enhance is not None:
         task.enhance = body.enhance
     if body.video_prompt_mode:
-        # advideo9：生视频增强路由（前端 C 臂/A 臂开关）
+        # advideo9：生视频增强路由（前端增强开关：llm 主方案 / content_ir 备选 / local 本地）
         task.video_prompt_mode = body.video_prompt_mode
         if body.video_prompt_mode == "local":
             task.enhance = True   # A 臂也要进增强阶段（跳过云端 IR，仅本地规则，0 付费）

@@ -133,8 +133,8 @@ class AdvideoCreateIn(BaseModel):
     resolution: Literal["768p", "1k", "2k", "4k"] = "768p"
     image_count: int = Field(default=3, ge=1, le=4)          # 默认 3 张候选（用户拍板）
     enhance: bool = True                                     # Content-IR 增强（默认开启）
-    # 生视频增强路由：content_ir=C臂（Content-IR 电商，默认）/ local=A臂（本地规则，0 付费）
-    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None
+    # 生视频增强路由：llm=主方案（qwen3.8-flash，默认）/ content_ir=C臂备选 / local=A臂（0 付费）
+    video_prompt_mode: Optional[Literal["llm", "content_ir", "local"]] = None
     scene: Literal["general", "drama", "ecommerce", "music"] = "ecommerce"
 
 
@@ -144,8 +144,7 @@ class AdvideoConfirmIn(BaseModel):
     image_index: int = Field(ge=0, le=9)
     video_prompt: str = Field(default="", max_length=2000)
     enhance: Optional[bool] = None
-    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None  # 生视频增强路由：content_ir=C臂 / local=A臂
-    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None  # 生视频增强路由：content_ir=C臂 / local=A臂
+    video_prompt_mode: Optional[Literal["llm", "content_ir", "local"]] = None  # 生视频增强路由：llm=主方案 / content_ir=C臂备选 / local=A臂
 
 
 class TaskOut(BaseModel):

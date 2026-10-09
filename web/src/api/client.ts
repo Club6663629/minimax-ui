@@ -126,8 +126,8 @@ export const api = {
       template: string;
       template_exists: boolean;
       available: boolean;
-      /** 提示词增强开关默认值（content_ir=开 / local=关） */
-      video_prompt_default_mode?: "content_ir" | "local";
+      /** 提示词增强开关默认值（llm=开·主方案 / content_ir=备选 / local=关） */
+      video_prompt_default_mode?: "llm" | "content_ir" | "local";
       video_prompt_modes?: { value: string; label: string }[];
       video_prompt_enhance_enabled?: boolean;
     }>("/api/videos/advideo/status"),
@@ -137,14 +137,14 @@ export const api = {
   regenerateAdvideo: (id: number) =>
     request<Task>(`/api/videos/advideo/${id}/regenerate`, { method: "POST" }),
   /** 人工确认广告图（强制关卡）：选定后进入视频阶段（此时才开始计费）。 */
-  /** body 增加 video_prompt_mode（content_ir=增强开 / local=关） */
+  /** body 增加 video_prompt_mode（llm=主方案 / content_ir=备选 / local=关） */
   confirmAdvideoImage: (
     id: number,
     body: {
       image_index: number;
       video_prompt?: string;
       enhance?: boolean;
-      video_prompt_mode?: "content_ir" | "local";
+      video_prompt_mode?: "llm" | "content_ir" | "local";
     },
   ) =>
     request<Task>(`/api/videos/${id}/confirm-image`, { method: "POST", body: JSON.stringify(body) }),

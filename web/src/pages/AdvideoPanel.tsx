@@ -38,7 +38,7 @@ const MAX_PRODUCT = 3; // 商品图上限（第 1 张为主商品）
 const MAX_REFS = 6; // 可选参考图上限
 const IMG_EXT_RE = /\.(jpe?g|png|webp)$/i;
 
-type AdvanceMode = "content_ir" | "local";
+type AdvanceMode = "llm" | "content_ir" | "local";
 
 interface AdvideoStatus {
   enabled: boolean;
@@ -50,9 +50,9 @@ interface AdvideoStatus {
   video_prompt_enhance_enabled?: boolean;
 }
 
-/** 提示词增强开关：开 = 开启（后端 content_ir），关 = 关闭（后端 local）。
+/** 提示词增强开关：开 = 开启（后端 llm 主方案：qwen-flash，失败自动回退 Content-IR），关 = 关闭（后端 local）。
  *  对用户只呈现「开 / 关」，不暴露后端实现细节。 */
-const ENHANCE_ON: AdvanceMode = "content_ir";
+const ENHANCE_ON: AdvanceMode = "llm";
 const ENHANCE_OFF: AdvanceMode = "local";
 
 /** 提示词增强开关（与视频生成页一致的星星开关）。 */

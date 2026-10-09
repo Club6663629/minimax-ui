@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
-from . import advenhance, advpostir, advprompt, cloud, comfyui
+from . import advenhance, advpostir, advprompt, cloud, comfyui, videollm
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
@@ -42,13 +42,37 @@ ENHANCE_CONCURRENCY = 4   # 提示词增强并发上限（云端接口调用，�
 def _video_prompt_mode(task) -> str:
     """生视频提示词增强路由（advideo9）：任务级覆盖 > 全局默认。
 
-    content_ir = C 臂（默认）：Content-IR + 电商 skill（商品保真硬约束）+ advpostir 单镜化后处理；
+    llm        = 主方案（默认）：qwen3.8-flash 视频增强 agent（videollm）；失败回退 content_ir；
+    content_ir = C 臂（备选）：Content-IR + 电商 skill（商品保真硬约束）+ advpostir 单镜化后处理；
     local      = A 臂：本地规则增强（advenhance.enhance_video_prompt，0 付费）。
     """
     m = str(getattr(task, "video_prompt_mode", "") or "").strip().lower()
-    if m not in ("content_ir", "local"):
-        m = str(getattr(settings, "advideo_video_prompt_mode", "content_ir") or "content_ir").strip().lower()
-    return m if m in ("content_ir", "local") else "content_ir"
+    if m not in ("llm", "content_ir", "local"):
+        m = str(getattr(settings, "advideo_video_prompt_mode", "llm") or "llm").strip().lower()
+    return m if m in ("llm", "content_ir", "local") else "llm"
+
+
+def _h3_gen_mode(mode: str, first_id, last_id, ref_ids, is_ad: bool) -> tuple:
+    """把任务模式映射为 H3 生成模式标签 + 参考素材提示。
+
+    videollm 据此选择加载 base-en（T2VA/I2VA/FL2VA/L2VA）还是 ref-en（Ref2VA）结构指南，
+    并在正文中保持 `<Picture N>` 标签一致。
+    """
+    n_ref = len(ref_ids or [])
+    if is_ad:
+        return "Ref2VA", "商品参考图（人工确认的广告图/商品图，均以 <Picture N> 指代，商品本体不得改变）"
+    # 与 _generate_768p 的工作流选择口径对齐：只要有参考图就走 r2v（Ref2VA），
+    # 从而装载 H3 ref-en 参考/拼贴(montage)规则并用 <Picture N> 指代（人物多姿态/多机位拼贴图也能正确处理）。
+    if n_ref or mode == "r2v":
+        return "Ref2VA", (f"{n_ref} 份全能参考资料（图/视频/音频，以 <Picture N>/<Video N>/<Audio N> 指代）" if n_ref else "参考图")
+    if mode == "flf2v":
+        if first_id and last_id:
+            return "FL2VA", "首帧图 <Picture 1> + 尾帧图 <Picture 2>"
+        if first_id:
+            return "I2VA", "首帧图 <Picture 1>"
+        if last_id:
+            return "L2VA", "尾帧图 <Picture 1>"
+    return "T2VA", ""
 
 
 _bg_tasks: list = []
@@ -140,40 +164,103 @@ async def _run_enhance(task_id: int) -> None:
             prompt, duration, ratio = task.prompt, task.duration, task.aspect_ratio
             scene = task.scene
             mode = task.mode
-            vmode = _video_prompt_mode(task)   # advideo9：content_ir=C臂（默认）/ local=A臂
-        try:
-            # advideo 强制走电商 skill：通用 skill 为空、无商品保真约束，IR 会自创穿搭（advideo8 实测 → 商品一致性 FAIL）
-            compiled = apply_scene(prompt, "ecommerce" if mode == "advideo" else scene)
-            if mode == "advideo" and (
-                vmode == "local" or not bool(getattr(settings, "advideo_video_prompt_enhance", True))
-            ):
-                # A 臂（local）：advideo 的视频提示词由本地增强层处理（0 付费纯规则），
-                # 不走云端 Content-IR —— 既避免双重增强，也避免产生费用（r3）。
-                enhanced = ""
-                logger.info(
-                    "任务 #%s advideo：跳过云端 Content-IR 增强（路由=%s，0 付费）",
-                    task_id, "local(A臂·本地规则)" if vmode == "local" else "增强总开关关闭",
-                )
+            vmode = _video_prompt_mode(task)   # llm=主方案（默认）/ content_ir=C臂备选 / local=A臂
+            first_id, last_id = task.first_image_id, task.last_image_id
+            ref_ids = json.loads(task.ref_image_ids or "[]")
+            # 收集参考图本地路径，供 videollm 视觉增强（仅图片；口径对齐 _generate_768p 的 H3 参考装配）
+            _img_exts = {".jpg", ".jpeg", ".png", ".webp"}
+            img_paths: list = []
+
+            def _add_upload(uid) -> None:
+                if not uid:
+                    return
+                up = db.get(Upload, uid)
+                if up and Path(up.path).suffix.lower() in _img_exts:
+                    img_paths.append(str(up.path))
+
+            if mode == "advideo":
+                chosen = str(getattr(task, "chosen_image", "") or "")
+                if chosen and Path(chosen).suffix.lower() in _img_exts:
+                    img_paths.append(chosen)          # 人工确认的广告图（视频首帧/主参考）
+                try:
+                    ad_ids = json.loads(task.ad_input_ids or "[]")
+                except (TypeError, ValueError):
+                    ad_ids = []
+                for uid in ad_ids:                    # 商品图 + 参考图（videollm 侧再按上限截断）
+                    _add_upload(uid)
             else:
-                if mode == "advideo":
-                    logger.info("任务 #%s advideo：路由=%s（C臂·Content-IR 电商 skill + 单镜化后处理）", task_id, vmode)
-                enhanced = await cloud.enhance_prompt(compiled, duration, ratio)
-                # advideo8（2026-10-08 实测）：Content-IR 正文自带 [Shot n]/时间码/"the camera cuts to …"，
-                # ref2v 会真的执行成多次硬切（scdet 实测 2 处），尾缀 [CAMERA] no cuts 压不住正文。
-                # 故对 IR 输出做确定性单镜化后处理：切镜→连续运镜、去抖、句级去重、保真主句写进正文。
-                if enhanced and bool(getattr(settings, "advideo_ir_single_shot", True)):
+                _add_upload(first_id)
+                _add_upload(last_id)
+                for rid in ref_ids:
+                    _add_upload(rid)
+        try:
+            is_ad = mode == "advideo"
+            # advideo 强制走电商 skill：通用 skill 为空、无商品保真约束，会自创穿搭（advideo8 实测 → 商品一致性 FAIL）
+            scene_eff = "ecommerce" if is_ad else scene
+            gen_mode, ref_hint = _h3_gen_mode(mode, first_id, last_id, ref_ids, is_ad)
+            enhanced = ""
+            # ---- 路由决策：主方案（qwen-flash LLM）是否启用 ----
+            if is_ad:
+                ad_enhance_on = (vmode != "local") and bool(getattr(settings, "advideo_video_prompt_enhance", True))
+                use_llm = ad_enhance_on and vmode == "llm" and settings.video_llm_enabled
+                ir_allowed = ad_enhance_on   # local(A臂) → 既不 LLM 也不 IR（0 付费，交本地规则层）
+                if not ad_enhance_on:
+                    logger.info(
+                        "任务 #%s advideo：跳过增强（路由=%s，0 付费）",
+                        task_id, "local(A臂·本地规则)" if vmode == "local" else "增强总开关关闭",
+                    )
+            else:
+                vem = str(getattr(settings, "video_enhance_mode", "llm") or "llm").strip().lower()
+                use_llm = vem == "llm" and settings.video_llm_enabled
+                ir_allowed = vem != "off"
+                if vem == "off":
+                    logger.info("任务 #%s：video_enhance_mode=off，跳过增强", task_id)
+            # ---- 主方案：qwen3.8-flash 视频增强 agent ----
+            if use_llm:
+                try:
+                    res = await videollm.enhance_video_prompt(
+                        prompt=prompt, scene=scene_eff, gen_mode=gen_mode,
+                        ref_hint=ref_hint, duration=duration, ratio=ratio,
+                        fidelity=(is_ad or scene_eff == "ecommerce"),
+                        image_paths=img_paths,
+                    )
+                    enhanced = str(res.get("text") or "")
+                    logger.info(
+                        "任务 #%s LLM 视频增强成功（scene=%s，mode=%s，参考图=%d，%d 字符）",
+                        task_id, scene_eff, gen_mode, int(res.get("images") or 0), len(enhanced),
+                    )
+                except videollm.VideoLLMError as exc:
+                    enhanced = ""
+                    logger.warning("任务 #%s LLM 视频增强失败，回退 Content-IR: %s", task_id, exc)
+            # ---- 备选：云端 Content-IR（LLM 未启用/失败且允许时）----
+            if (not enhanced) and ir_allowed:
+                if settings.cloud_enabled:
+                    compiled = apply_scene(prompt, scene_eff)
+                    if is_ad:
+                        logger.info("任务 #%s advideo：Content-IR（C臂·电商 skill + 单镜化后处理）", task_id)
                     try:
-                        _pp = advpostir.post_process(enhanced)
-                        logger.info(
-                            "任务 #%s Content-IR 单镜化后处理：切镜改写 %s 处 / 去抖 %s 处 / 保留 %s 句 / 剩余 [Shot] %s / %s->%s 字符",
-                            task_id, _pp["stats"]["cuts_rewritten"], _pp["stats"]["shake_rewritten"],
-                            _pp["stats"]["sentences_out"], _pp["text"].count("[Shot"),
-                            _pp["raw_len"], _pp["text_len"],
-                        )
-                        enhanced = _pp["text"]
+                        enhanced = await cloud.enhance_prompt(compiled, duration, ratio)
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning("任务 #%s Content-IR 后处理失败，沿用 IR 原文: %s", task_id, exc)
-            if mode == "advideo" and enhanced and not advprompt.enhanced_ok(enhanced):
+                        logger.warning("任务 #%s Content-IR 增强失败，使用原始提示词: %s", task_id, exc)
+                        enhanced = ""
+                else:
+                    logger.info("任务 #%s：Content-IR 未启用（无 MINIMAX_API_KEY），沿用原始提示词", task_id)
+            # ---- advideo：单镜化后处理（对 LLM 或 IR 输出同样适用）----
+            # Content-IR/H3 正文自带 [Shot n]/时间码/"the camera cuts to …"，ref2v 会执行成多次硬切；
+            # 故做确定性单镜化后处理：切镜→连续运镜、去抖、句级去重、保真主句写进正文。
+            if is_ad and enhanced and bool(getattr(settings, "advideo_ir_single_shot", True)):
+                try:
+                    _pp = advpostir.post_process(enhanced)
+                    logger.info(
+                        "任务 #%s 单镜化后处理：切镜改写 %s 处 / 去抖 %s 处 / 保留 %s 句 / 剩余 [Shot] %s / %s->%s 字符",
+                        task_id, _pp["stats"]["cuts_rewritten"], _pp["stats"]["shake_rewritten"],
+                        _pp["stats"]["sentences_out"], _pp["text"].count("[Shot"),
+                        _pp["raw_len"], _pp["text_len"],
+                    )
+                    enhanced = _pp["text"]
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("任务 #%s 单镜化后处理失败，沿用原文: %s", task_id, exc)
+            if is_ad and enhanced and not advprompt.enhanced_ok(enhanced):
                 # B2：增强结果丢了「指参考图 / 无画面文字」约束 → 弃用，回退用户原始视频提示词
                 logger.warning(
                     "任务 #%s 增强结果不满足一致性约束（需同时指代参考图且禁用画面文字），已回退用户原话: %s",
@@ -753,7 +840,7 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         task = db.get(Task, task_id)
         final_prompt = task.enhanced_prompt or task.prompt
         mode, ratio, duration = task.mode, task.aspect_ratio, task.duration
-        vmode = _video_prompt_mode(task)   # advideo9：C臂=直接用 Content-IR 结果（不再叠本地层）/ A臂=本地规则
+        vmode = _video_prompt_mode(task)   # llm/content_ir=直接用增强结果（不再叠本地层）/ local=本地规则
         # B1 提示词拼装移到下面 image_paths 装配完成后（[SET] 段需要知道参考图张数）
         try:
             ref_ids = json.loads(task.ref_image_ids or "[]")
@@ -838,7 +925,7 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
                 )
             if not _use_local:
                 logger.info(
-                    "任务 #%s 视频增强路由=%s：直接采用 Content-IR 增强结果（%d 字符，不再叠本地规则层）",
+                    "任务 #%s 视频增强路由=%s：直接采用云端增强结果（LLM/Content-IR，%d 字符，不再叠本地规则层）",
                     task_id, vmode, len(final_prompt or ""),
                 )
             # B1：[FIDELITY] + [SET] + 正文 + [CAMERA] + [AUDIO]，SET 段按实际参考图张数生成
