@@ -1,6 +1,6 @@
-"""电商广告片「LLM 提示词增强 agent」（DeepSeek，2026-10-09）。
+"""电商广告片「LLM 提示词增强 agent」（2026-10-09；默认 qwen3.8-flash，可切 deepseek-flash）。
 
-advideo_image_prompt_mode=="llm" 时启用：由 deepseek-flash（关闭思考、支持图像理解）扮演
+advideo_image_prompt_mode=="llm" 时启用：由多模态 flash 模型（关闭思考、支持图像理解）扮演
 qwen-image-2.1 提示词改写 agent，**看着商品参考图** + 用户一句大白话 + 商品结构清单，改写成
 qwen-image 可直接执行的**图像编辑指令的「镜头语言正文」**（场景/机位/景别/光线/构图/氛围/道具）。
 
@@ -11,11 +11,12 @@ qwen-image 可直接执行的**图像编辑指令的「镜头语言正文」**�
 3. 生图提示词只喂 qwen21 图像模型，绝不回灌视频增强（提示词隔离硬规则）；
 4. 失败 / 无 key / 空输出 → 抛 AdvLLMError，由调用方（advimage）静默回退本地规则增强（0 付费）。
 
-DeepSeek 接口事实（官方文档 api-docs.deepseek.com/zh-cn/guides/vision 核对）：
-- OpenAI 兼容 POST {base}/chat/completions；model=deepseek-flash；
-- 关思考：请求体顶层 "thinking": {"type": "disabled"}；
+接口事实（provider 均 OpenAI 兼容 POST {base}/chat/completions，图片以 base64 image_url 放 user 消息）：
+- qwen（默认，qwen3.8-flash，千问平台）：base=maas.qianwenaiapi.com/compatible-mode/v1；
+  关思考用请求体顶层 "enable_thinking": false（DashScope/千问 约定）；
+- deepseek（deepseek-flash）：base=api.deepseek.com；关思考用请求体顶层 "thinking": {"type": "disabled"}；
 - vision：图片以 {"type":"image_url","image_url":{"url":"data:<mime>;base64,...","detail":...}} 内容块传入，
-  **图片仅允许出现在 user 消息**（system/assistant 带图会 400）；单图 token 上限约 1024。
+  **图片仅允许出现在 user 消息**（system/assistant 带图会 400）。
 """
 import json
 import logging
@@ -45,41 +46,41 @@ class AdvLLMError(Exception):
 
 
 # ------------------------------------------------------------------ 系统级保真约束
-# 置于 system prompt 最前，声明优先级高于 skill；措辞对齐 advprompt.PE_FIDELITY_SYSTEM 铁律 1/3/7。
-FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fidelity Rewriter，最高优先级）
+# 置于 system prompt 最前，声明优先级高于 skill；措辞对齐 advprompt.PE_FIDELITY_SYSTEM 铁律 1/3/7，
+# 写法规范对齐 Qwen-Image-2.1 官方（图像编辑/保真、<image1> 指代、祈使式指令、结构顺序、避免空泛形容词）。
+FIDELITY_SYSTEM = """# 电商商品保真增强器 v2（Product-Fidelity Rewriter for Qwen-Image-2.1，最高优先级）
 
-你是一名电商广告图的提示词改写专家。下面附带的「Qwen-Image-2.1 Prompt Optimizer」skill 是通用改写规范；
-**当 skill 与本节冲突时，一律以本节为准**。本次任务**不是自由创作，而是「把指定商品放进指定场景」**，
-是**图像编辑**任务，绝不是从零文生图。
+你是「把指定商品放进指定场景」的电商广告图提示词改写专家，服务下游图像模型 **Qwen-Image-2.1（qwen21）**。
+本次任务是**图像编辑（image editing / 图生图）**：user 消息附带的那张图是**商品参考图**，你要基于它写一条
+qwen21 能直接执行的编辑指令正文——**不是从零自由创作**。下面附带的 skill 是通用改写规范；
+**当 skill 与本节冲突时，一律以本节为准**。
 
-【铁律 1｜商品唯一真源（最重要）】
-- user 消息里附带的那张图，就是**商品参考图**，是商品的**唯一真源**。请先「看图」再写。
-- 商品的全部属性（形状、轮廓、材质与纹理、颜色、件数、标签排版、logo 位置与形状、既有文字）必须与参考图
-  完全一致，任何一项**不得增删改**：不得改款、改色、加印花、加图案、加 logo、加文字、改件数、改比例。
-- 只描述图中**可见**的属性；看不清或不确定的一律**省略**（写「未见」也不要臆造）。禁止编造参考图里没有的细节。
-- **禁止用形容词重新描述商品外观**：文字重述会让下游模型按文字重绘商品，一致性立刻崩。指代商品时用
-  「the product from the reference image」这类**指图**措辞，而不是罗列它的颜色/材质/款式。
+【最高优先级 · 商品系统级保真铁律】
+1. 商品参考图是唯一真源。请先「看图」再写。商品的形状/轮廓/材质与纹理/颜色/件数/标签排版/logo 位置与形状/
+   既有文字，必须与参考图完全一致，任何一项**不得增删改**：不得改款、改色、加印花、加图案、加 logo、加文字、
+   改件数、改比例。
+2. 只描述图中**可见**的属性；看不清或不确定的一律省略（宁可写「未见」也不臆造），禁止编造参考图里没有的细节。
+3. **不要用形容词重新描述商品外观**——文字重述会让 qwen21 按文字重绘商品，一致性立刻崩。指代商品时用
+   **`<image1>`**（qwen21 图像编辑对参考图的官方指代），或「the product from `<image1>`」这类**指图**措辞，
+   而不是罗列它的颜色/材质/款式。
+4. 你只负责「镜头语言」：可自由创作的只有场景、机位、景别、光线、氛围、构图、留白、道具；商品本体与件数保持不变。
+5. 人物：若 user 说明附带了人物/模特参考，保持其脸型、发型、发色与配饰不变，不得新增珠宝/帽子/包/手机等物，
+   手部不得遮挡商品关键结构；若没有人物参考，可自行设计模特与姿态，但不得改变商品。
 
-【铁律 2｜你只负责「镜头语言」】
-你可以自由创作的只有：场景、机位、景别、光线、氛围、构图、留白、道具。
-商品本体、商品件数保持不变。**不要输出保真前缀、不要输出负向词、不要输出机位编号收尾条款**——
-这些由后端用代码统一拼装，你写了也会被丢弃。
-
-【铁律 3｜默认不生成任何文字】
-除非 user 消息给出了**确切文案**（引号内原文），否则画面内不得出现任何文字/字母/字幕/水印/logo/标语；
-若给了确切文案，只允许**逐字引用**（不改写、不翻译、不追加），同一画面文案单语。
-
-【铁律 4｜单张画面】
-最终只描述**一张完整照片**（one single full-frame photograph）。禁止拼贴、多格、分屏、多视角并置、画中画。
-
-【铁律 5｜人物】
-若 user 消息说明附带了人物/模特参考：保持其脸型、发型、发色与配饰不变；不得新增珠宝、帽子、包、手机等物；
-手部不得遮挡商品关键结构。若没有人物参考：可自行设计模特与姿态，但不得改变商品。
+【Qwen-Image-2.1 官方用法要点（保真铁律之外的写法规范）】
+- 用**祈使式编辑指令**组织正文：先说「保留/放入商品」（如 Keep the product from `<image1>` exactly as-is /
+  Place the product from `<image1>` into …），再说场景与光线，最后说构图与氛围。
+- 结构顺序：**主体 → 场景/环境 → 风格/质感**，重点前置，一段自然语言讲清；避免过长复合句。
+- 只写**画面可见**的具体信息；避免空泛形容词（beautiful / amazing / best quality / masterpiece / 8k 之类），
+  qwen21 已内置这类倾向，堆砌反而干扰出图。
+- **不要写负向词**：qwen21 默认不生成文字与水印，正文里不要出现 no text / no watermark / no logo 之类；
+  负向约束由后端统一拼装。除非 user 给了**引号内确切文案**，此时只允许逐字引用（不改写/不翻译/不追加），同一画面单语。
+- **只描述一张完整照片**（one single full-frame photograph）：禁止拼贴、多格、分屏、多视角并置、画中画。
 
 【输出格式（严格遵守）】
-只输出**一段连续的英文描述**（决策 A：描述性正文），聚焦场景/机位/景别/光线/构图/氛围/道具。
-不要 JSON、不要 Markdown、不要标题、不要分点、不要解释、不要前言后语、不要画幅比例或像素数字、
-不要引号包裹整段。就一段纯英文正文。"""
+只输出**一段连续的英文正文**，聚焦：如何保留 `<image1>` 中的商品 + 场景/机位/景别/光线/构图/氛围/道具。
+不要 JSON、不要 Markdown、不要标题、不要分点、不要解释、不要前言后语、不要画幅比例或像素数字、不要引号包裹整段。
+不要输出保真前缀、负向词、机位编号收尾条款——那三段由后端用代码统一拼装，你写了也会被丢弃。"""
 
 
 def _load_skill() -> str:
@@ -108,7 +109,7 @@ def _load_skill() -> str:
 
 
 def _build_system_prompt() -> str:
-    """system = 保真约束（最高优先级） + vendored skill（Edit 轨）。system 消息不含图片（DeepSeek 限制）。"""
+    """system = 保真约束（最高优先级） + vendored skill（Edit 轨）。system 消息不含图片（provider 限制）。"""
     skill = _load_skill()
     if skill:
         return FIDELITY_SYSTEM + "\n\n---\n\n# 附：Qwen-Image-2.1 提示词改写 skill（Edit 轨，从属规则）\n\n" + skill
@@ -163,14 +164,16 @@ async def enhance_scene_body(
     aspect_ratio: str = "",
     mime: str = "image/png",
 ) -> Dict[str, object]:
-    """调 DeepSeek deepseek-flash（关思考 + vision）产出「镜头语言正文」。
+    """调 LLM 增强 agent（默认 qwen3.8-flash，可切 deepseek-flash；关思考 + vision）产出「镜头语言正文」。
 
     每任务只应调用 1 次（正文供 N 张候选共用，保证「一套图」一致性并把调用成本从 N 降到 1）。
     失败/无 key/空输出 → 抛 AdvLLMError，由调用方回退本地规则增强。
     返回：{"body": <英文正文>, "category": category, "source": "llm", "usage": {...}}。
     """
-    if not settings.deepseek_api_key:
-        raise AdvLLMError("未配置 DEEPSEEK_API_KEY，LLM 增强臂不可用")
+    provider = settings.llm_provider                      # qwen | deepseek
+    api_key = settings.advideo_llm_api_key                # 当前 provider 的 key
+    if not api_key:
+        raise AdvLLMError(f"未配置 {provider} API Key，LLM 增强臂不可用")
     if not product_image_b64:
         raise AdvLLMError("缺少商品参考图 base64，无法做图像理解")
 
@@ -190,19 +193,24 @@ async def enhance_scene_body(
             ],
         },
     ]
+    model = str(settings.advideo_llm_model or ("qwen3.8-flash" if provider == "qwen" else "deepseek-flash"))
     body: Dict[str, object] = {
-        "model": str(getattr(settings, "advideo_llm_model", "deepseek-flash") or "deepseek-flash"),
+        "model": model,
         "messages": messages,
         "temperature": float(getattr(settings, "advideo_llm_temperature", 0.4)),
         "max_tokens": int(getattr(settings, "advideo_llm_max_tokens", 1200)),
         "stream": False,
     }
-    if not bool(getattr(settings, "advideo_llm_thinking", False)):
-        body["thinking"] = {"type": "disabled"}   # 关闭思考模式（请求体顶层，等价 SDK extra_body）
+    # 关思考：qwen/千问 用 enable_thinking=false；deepseek 用 thinking.type=disabled（均请求体顶层，等价 SDK extra_body）
+    thinking_on = bool(getattr(settings, "advideo_llm_thinking", False))
+    if provider == "qwen":
+        body["enable_thinking"] = thinking_on
+    elif not thinking_on:
+        body["thinking"] = {"type": "disabled"}
 
-    base = str(settings.deepseek_api_base or "https://api.deepseek.com").rstrip("/")
+    base = str(settings.advideo_llm_api_base or "").rstrip("/")
     url = f"{base}/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.deepseek_api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     timeout = float(getattr(settings, "advideo_llm_timeout", 60) or 60)
 
     try:
@@ -211,20 +219,20 @@ async def enhance_scene_body(
             r.raise_for_status()
             data = r.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise AdvLLMError(f"DeepSeek 请求失败: {exc}") from exc
+        raise AdvLLMError(f"LLM({provider}) 请求失败: {exc}") from exc
 
     try:
         content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
     except (AttributeError, IndexError, TypeError) as exc:
-        raise AdvLLMError(f"DeepSeek 响应结构异常: {exc}") from exc
+        raise AdvLLMError(f"LLM({provider}) 响应结构异常: {exc}") from exc
     text = _extract_body(content if isinstance(content, str) else "")
     if not text:
-        raise AdvLLMError("DeepSeek 输出为空或无法解析出正文")
+        raise AdvLLMError(f"LLM({provider}) 输出为空或无法解析出正文")
 
     usage = data.get("usage") or {}
     logger.info(
-        "LLM 增强 agent 产出正文 %d 字符（model=%s，thinking=%s，tokens=%s）",
-        len(text), body["model"], "on" if "thinking" not in body else "off",
+        "LLM 增强 agent 产出正文 %d 字符（provider=%s，model=%s，thinking=%s，tokens=%s）",
+        len(text), provider, model, "on" if thinking_on else "off",
         usage.get("total_tokens", "?"),
     )
     return {"body": text, "category": category, "source": "llm", "usage": usage}

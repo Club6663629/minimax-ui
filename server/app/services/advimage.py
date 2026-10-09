@@ -106,7 +106,7 @@ _MIME_BY_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jp
 
 
 def _image_mime(path) -> str:
-    """按扩展名猜 MIME（DeepSeek vision 支持 JPEG/PNG/GIF/WebP，格式实际由文件内容判断）。"""
+    """按扩展名猜 MIME（LLM vision 支持 JPEG/PNG/GIF/WebP，格式实际由文件内容判断）。"""
     return _MIME_BY_SUFFIX.get(Path(path).suffix.lower(), "image/png")
 
 
@@ -393,7 +393,7 @@ async def generate_candidates(
         bool(getattr(settings, "advideo_fidelity_pe", True)),
     )
 
-    # ---- LLM 增强臂（DeepSeek deepseek-flash，关思考 + vision）：每任务只调 1 次，正文供 N 张共用 ----
+    # ---- LLM 增强臂（默认 qwen3.8-flash，可切 deepseek-flash；关思考 + vision）：每任务只调 1 次，正文供 N 张共用 ----
     llm_scene: Optional[dict] = None
     llm_category = advenhance.detect_category(scenario, specs=specs)
     if pmode == "llm":

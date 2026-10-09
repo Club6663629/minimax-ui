@@ -62,19 +62,27 @@ class Settings(BaseSettings):
     advideo_max_product_images: int = 3      # 商品图上限（主图 + 细节图）
     advideo_max_ref_images: int = 2          # 参考图（人物/场景）上限
     advideo_pe_retries: int = 1              # PE 空输出重试次数（每次约 +54s；1=不重试，直接回退配方）
-    advideo_image_prompt_mode: str = "llm"     # 生图提示词来源：llm=DeepSeek 提示词增强 agent（默认，见 advllm.py）/ set=一套图（SAI 直写，锁同一模特/商品/场景只换机位）/ recipe=10-07 配方 / pe=PE 改写
+    advideo_image_prompt_mode: str = "llm"     # 生图提示词来源：llm=提示词增强 agent（默认，qwen3.8-flash，见 advllm.py）/ set=一套图（SAI 直写，锁同一模特/商品/场景只换机位）/ recipe=10-07 配方 / pe=PE 改写
     advideo_set_single_image: bool = True
-    # ---- LLM 提示词增强 agent（DeepSeek，2026-10-09）：advideo_image_prompt_mode=="llm" 时启用 ----
-    # 由 deepseek-flash（关闭思考、支持图像理解）扮演 qwen-image-2.1 提示词改写 agent，
+    # ---- LLM 提示词增强 agent（2026-10-09）：advideo_image_prompt_mode=="llm" 时启用 ----
+    # 由多模态 flash 模型（关闭思考、支持图像理解）扮演 qwen-image-2.1 提示词改写 agent，
     # 看着商品参考图把用户大白话改写成图像编辑指令；失败/无 key/空输出/未过守门 → 回退本地规则（0 付费）。
-    deepseek_api_key: str = ""                 # 空 = LLM 臂不可用，自动回退本地规则
-    deepseek_api_base: str = "https://api.deepseek.com"
-    advideo_llm_model: str = "deepseek-flash"  # 支持 vision 的官方模型名
-    advideo_llm_thinking: bool = False         # False → 请求体加 "thinking": {"type": "disabled"} 关闭思考
-    advideo_llm_vision_detail: str = "high"    # image_url.detail：low/high/original/auto（主商品图用 high 读清材质/五金/标签）
+    # provider：qwen=千问 qwen3.8-flash（默认）/ deepseek=DeepSeek deepseek-flash；
+    #   两者均 OpenAI 兼容 /chat/completions，图片以 base64 image_url 放 user 消息。
+    #   对应 provider 的 *_api_key 为空 = 该臂不可用，自动回退本地规则。
+    advideo_llm_provider: str = "qwen"           # qwen | deepseek
+    advideo_llm_thinking: bool = False           # False → 关思考（qwen: enable_thinking=false / deepseek: thinking.type=disabled）
+    advideo_llm_vision_detail: str = "high"      # image_url.detail：low/high/original/auto（主商品图用 high 读清材质/五金/标签）
     advideo_llm_timeout: int = 60
     advideo_llm_temperature: float = 0.4
     advideo_llm_max_tokens: int = 1200
+    # provider 专属：key + base + model
+    qwen_api_key: str = ""                        # 千问平台/百炼 API Key（QWEN_API_KEY）
+    qwen_api_base: str = "https://maas.qianwenaiapi.com/compatible-mode/v1"
+    qwen_llm_model: str = "qwen3.8-flash"         # 多模态，可看图（图像理解）
+    deepseek_api_key: str = ""                    # DeepSeek API Key（DEEPSEEK_API_KEY）
+    deepseek_api_base: str = "https://api.deepseek.com"
+    deepseek_llm_model: str = "deepseek-flash"    # 多模态，可看图（图像理解）
     # ---- 提示词增强层（P4，2026-10-08）：用户短句/【场景】【光线】… → 结构化增强提示词；
     # 商品一致性做成「不可被用户文本覆盖」的硬前缀；纯规则实现，0 付费（不调 Content-IR / 任何 LLM）。
     advideo_prompt_enhance: bool = True        # 生图阶段增强（set 模式生效；[RAW] 前缀 = 专家模式，跳过增强）
@@ -114,9 +122,29 @@ class Settings(BaseSettings):
         return bool(self.minimax_api_key)
 
     @property
+    def llm_provider(self) -> str:
+        """归一化后的 LLM provider（qwen | deepseek）。"""
+        return (str(self.advideo_llm_provider or "qwen").strip().lower() or "qwen")
+
+    @property
+    def advideo_llm_api_key(self) -> str:
+        """当前 provider 的 API Key（空则该臂不可用）。"""
+        return self.qwen_api_key if self.llm_provider == "qwen" else self.deepseek_api_key
+
+    @property
+    def advideo_llm_api_base(self) -> str:
+        """当前 provider 的 OpenAI 兼容 base（不含 /chat/completions）。"""
+        return self.qwen_api_base if self.llm_provider == "qwen" else self.deepseek_api_base
+
+    @property
+    def advideo_llm_model(self) -> str:
+        """当前 provider 的模型名。"""
+        return self.qwen_llm_model if self.llm_provider == "qwen" else self.deepseek_llm_model
+
+    @property
     def advideo_llm_enabled(self) -> bool:
-        """生图 LLM 增强臂是否可用：配置了 DEEPSEEK_API_KEY 且生图提示词模式为 llm。"""
-        return bool(self.deepseek_api_key) and str(self.advideo_image_prompt_mode).lower() == "llm"
+        """生图 LLM 增强臂是否可用：当前 provider 配了 API Key 且生图提示词模式为 llm。"""
+        return bool(self.advideo_llm_api_key) and str(self.advideo_image_prompt_mode).lower() == "llm"
 
 
 settings = Settings()
