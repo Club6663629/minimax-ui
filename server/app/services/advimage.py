@@ -22,9 +22,11 @@ Content-IR（镜头语言）。两者严格隔离，禁止互相回灌。
   R5 画幅不随前端 → 468 switch=true，latent 走 456（尺寸由 worker 按前端比例/档位查表传入）。
 """
 import asyncio
+import base64
 import copy
 import json
 import logging
+import math
 import random
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -32,7 +34,7 @@ from typing import List, Optional, Sequence
 import httpx
 
 from ..config import ADVIDEO_DIR, WORKFLOW_DIR, advideo_size_for, settings
-from . import advenhance, advprompt, comfyui
+from . import advenhance, advllm, advprompt, comfyui
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,57 @@ def _gap_sec() -> float:
 def image_size_for(aspect_ratio: str) -> tuple:
     """按前端选择的比例返回广告图画布 (width, height)（P1；worker.py 调用入口）。"""
     return advideo_size_for(aspect_ratio)
+
+
+_MIME_BY_SUFFIX = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                   ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _image_mime(path) -> str:
+    """按扩展名猜 MIME（DeepSeek vision 支持 JPEG/PNG/GIF/WebP，格式实际由文件内容判断）。"""
+    return _MIME_BY_SUFFIX.get(Path(path).suffix.lower(), "image/png")
+
+
+def _ratio_label(width: int, height: int) -> str:
+    """把画布 (w,h) 回推为前端比例标签（如 1920x1088 → 16:9），仅供 agent 理解构图；
+    未命中配置表时退回最简整数比。正文里不写比例/像素。"""
+    w, h = int(width), int(height)
+    if w <= 0 or h <= 0:
+        return ""
+    from ..config import ADVIDEO_ASPECT_SIZES
+    for label, (cw, ch) in ADVIDEO_ASPECT_SIZES.items():
+        if (cw, ch) == (w, h):
+            return label
+    g = math.gcd(w, h) or 1
+    return "%d:%d" % (w // g, h // g)
+
+
+def _llm_variant_prompt(*, scene, scenario, specs, category, variant_index, total):
+    """LLM 增强臂：代码拼「保真硬前缀 + LLM 镜头语言正文 + 本张机位 + 收尾条款」。
+
+    保真前缀/机位/收尾全部由代码写死（不可被 LLM 覆盖）；正文过 enhance_ok 守门，
+    未过或 LLM 不可用则回退本地规则增强（0 付费）。返回 (最终提示词, 来源 llm|local, 保真前缀)。
+    """
+    tag = "<image1>"
+    body = str((scene or {}).get("body", "")).strip() if scene else ""
+    if category == "服装":
+        head = advenhance.ENH_GARMENT_LOCK.format(tag=tag) + advenhance.ENH_SET_LOCK
+        cameras = list(advprompt.RECIPE_SET_KEEP_CAMERA)
+        tail = advenhance.ENH_TAIL.format(tag=tag)
+    else:
+        head = (advenhance.CATEGORY_LOCK.get(category, advenhance.NEUTRAL_LOCK_GENERIC).format(tag=tag)
+                + advenhance.ENH_SET_LOCK_NEUTRAL.format(tag=tag))
+        cameras = list(advenhance.NEUTRAL_CAMERA_VARIANTS)
+        tail = advenhance.ENH_TAIL_NEUTRAL.format(tag=tag)
+    if body:
+        camera = cameras[int(variant_index) % len(cameras)]
+        cand = head + body + " " + camera + tail
+        if advenhance.enhance_ok(cand, stage="image", product_tag=tag):
+            return cand, "llm", head
+        logger.warning("LLM 正文未过保真守门，回退本地规则（第 %d 张）", int(variant_index) + 1)
+    enh = advenhance.enhance_image_prompt(scenario, specs=specs, variant_index=variant_index,
+                                          total=total, product_tag=tag, category=category)
+    return str(enh["text"]), "local", head
 
 
 def _lock() -> asyncio.Lock:
@@ -312,12 +365,12 @@ async def generate_candidates(
 
     # set 模式（用户口径 10-08：一套图 + PE 非必须、提示词由 SAI 直写）：
     # 实测单图输入 = 单张干净成图；多图输入 = N 格拼贴。故 set 模式只喂主商品图 1 张。
-    pmode = str(getattr(settings, "advideo_image_prompt_mode", "set") or "set").lower()
-    if pmode == "set" and bool(getattr(settings, "advideo_set_single_image", True)):
+    pmode = str(getattr(settings, "advideo_image_prompt_mode", "llm") or "llm").lower()
+    if pmode in ("set", "llm") and bool(getattr(settings, "advideo_set_single_image", True)):
         dropped = (len(products) - 1) + len(refs)
         products, refs = products[:1], []
         if dropped > 0:
-            logger.info("set 模式：为保证「一套图」为单张干净成图，仅喂主商品图 1 张（丢弃 %d 张附属图）", dropped)
+            logger.info("%s 模式：为保证「一套图」为单张干净成图，仅喂主商品图 1 张（丢弃 %d 张附属图）", pmode, dropped)
 
     # 前端可选「商品结构清单」：随 image_prompt 以 [商品结构清单] 分隔符带下来（P2）
     specs = ""
@@ -339,6 +392,25 @@ async def generate_candidates(
         task_id, len(product_names), len(ref_names), width, height,
         bool(getattr(settings, "advideo_fidelity_pe", True)),
     )
+
+    # ---- LLM 增强臂（DeepSeek deepseek-flash，关思考 + vision）：每任务只调 1 次，正文供 N 张共用 ----
+    llm_scene: Optional[dict] = None
+    llm_category = advenhance.detect_category(scenario, specs=specs)
+    if pmode == "llm":
+        if settings.advideo_llm_enabled and products:
+            try:
+                b64 = base64.b64encode(Path(products[0]).read_bytes()).decode("ascii")
+                llm_scene = await advllm.enhance_scene_body(
+                    scenario=scenario, product_image_b64=b64, specs=specs, category=llm_category,
+                    aspect_ratio=_ratio_label(width, height), mime=_image_mime(products[0]),
+                )
+                logger.info("广告图任务 #%s：LLM 增强 agent 产出正文 %d 字符（品类=%s）",
+                            task_id, len(str(llm_scene.get("body", ""))), llm_category)
+            except Exception as exc:  # noqa: BLE001 —— LLM 失败绝不能挡住出图
+                llm_scene = None
+                logger.warning("广告图任务 #%s：LLM 增强失败，回退本地规则（%s）", task_id, exc)
+        else:
+            logger.info("广告图任务 #%s：LLM 增强臂不可用（无 key 或无商品图），走本地规则", task_id)
 
     results: List[str] = []
     async with _lock():
@@ -371,6 +443,20 @@ async def generate_candidates(
                 prompt_text = await _pe_text(client, wf, retries=retries)
             if not prompt_text and raw:
                 prompt_text = advprompt.raw_prompt(scenario=scenario, variant_index=i)
+            if not prompt_text and pmode == "llm":
+                prompt_text, llm_source, llm_head = _llm_variant_prompt(
+                    scene=llm_scene, scenario=scenario, specs=specs, category=llm_category,
+                    variant_index=i, total=max(1, int(count)),
+                )
+                try:
+                    (out_dir / f"{task_id}_{i}.enhance.json").write_text(json.dumps({
+                        "stage": "image", "mode": "llm", "source": llm_source, "category": llm_category,
+                        "llm_body": str((llm_scene or {}).get("body", "")) if llm_source == "llm" else "",
+                        "llm_usage": (llm_scene or {}).get("usage", {}) if llm_source == "llm" else {},
+                        "fidelity_head": llm_head[:240], "variant_index": i, "text": prompt_text,
+                    }, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:  # noqa: BLE001
+                    logger.warning("增强层记录落盘失败（不影响出图）")
             if not prompt_text and pmode == "set" and bool(getattr(settings, "advideo_prompt_enhance", True)):
                 # ---- P4 提示词增强层（2026-10-08，0 付费纯规则）----
                 # 用户常只给一句大白话/若干【】标签：解析成结构化字段、补默认值、剔除与商品保真冲突的要求，
@@ -410,7 +496,7 @@ async def generate_candidates(
                 (out_dir / f"{task_id}_{i}.prompt.txt").write_text(prompt_text, encoding="utf-8")
                 logger.info("广告图任务 #%s 第 %d/%d 张：提示词 %d 字符（来源=%s）",
                             task_id, i + 1, count, len(prompt_text),
-                            "PE 改写" if pmode == "pe" else ("增强层(P4)" if (pmode == "set" and bool(getattr(settings, "advideo_prompt_enhance", True))) else "SAI 直写 set/配方"))
+                            "PE 改写" if pmode == "pe" else ("LLM 增强 agent" if pmode == "llm" else ("增强层(P4)" if (pmode == "set" and bool(getattr(settings, "advideo_prompt_enhance", True))) else "SAI 直写 set/配方")))
             # ---- 阶段 2：把最终提示词写死进 474，只提交采样子图（PE 分支自动剪掉）----
             wf[NODE_ENCODE]["inputs"]["prompt"] = prompt_text
             prompt_id = await client.submit(_prune(wf, NODE_SAVE))
