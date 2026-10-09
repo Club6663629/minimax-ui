@@ -168,6 +168,7 @@ class TaskOut(BaseModel):
     image_prompt: str = ""               # 图像阶段提示词（与视频 prompt 隔离）
     chosen_index: int = -1               # 人工确认选中的序号（-1=未确认）
     chosen_image_url: Optional[str] = None
+    ad_image_cost: int = 0               # 广告图阶段已扣积分（独立于 cost）
     first_image_url: Optional[str]
     last_image_url: Optional[str]
     ref_image_urls: list[str]
@@ -213,6 +214,7 @@ class PackageOut(BaseModel):
 
 class PricingOut(BaseModel):
     signup_bonus: int
+    cost_ad_image: int
     cost_768p_5s: int
     cost_768p_8s: int
     cost_768p_10s: int

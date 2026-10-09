@@ -132,15 +132,9 @@ def _llm_variant_prompt(*, scene, scenario, specs, category, variant_index, tota
     """
     tag = "<image1>"
     body = str((scene or {}).get("body", "")).strip() if scene else ""
-    if category == "服装":
-        head = advenhance.ENH_GARMENT_LOCK.format(tag=tag) + advenhance.ENH_SET_LOCK
-        cameras = list(advprompt.RECIPE_SET_KEEP_CAMERA)
-        tail = advenhance.ENH_TAIL.format(tag=tag)
-    else:
-        head = (advenhance.CATEGORY_LOCK.get(category, advenhance.NEUTRAL_LOCK_GENERIC).format(tag=tag)
-                + advenhance.ENH_SET_LOCK_NEUTRAL.format(tag=tag))
-        cameras = list(advenhance.NEUTRAL_CAMERA_VARIANTS)
-        tail = advenhance.ENH_TAIL_NEUTRAL.format(tag=tag)
+    # B2：品类逻辑集中在 advenhance.IMAGE_STYLE 注册表，此处只查表拼装（不写 if category == "服装" 之类分支）；
+    # 保真前缀/机位/收尾全部由注册表写死（不可被 LLM 覆盖），新增品类只改 advenhance 一处。
+    head, cameras, tail = advenhance.image_lock_parts(category, tag)
     if body:
         camera = cameras[int(variant_index) % len(cameras)]
         cand = head + body + " " + camera + tail
@@ -363,14 +357,10 @@ async def generate_candidates(
     if not products and refs:
         products, refs = refs[:1], []
 
-    # set 模式（用户口径 10-08：一套图 + PE 非必须、提示词由 SAI 直写）：
-    # 实测单图输入 = 单张干净成图；多图输入 = N 格拼贴。故 set 模式只喂主商品图 1 张。
+    # 生图提示词来源：llm=增强 agent（默认）/ set=一套图（SAI 直写）/ recipe=配方 / pe=PE 改写。
+    # 商品图（主图+细节图）与参考图全部上传给 qwen21；拼接图/多视图由视频阶段兼容处理（见 videollm.py），
+    # 故不再强制「只喂主图」（原 advideo_set_single_image 护栏已取消）。
     pmode = str(getattr(settings, "advideo_image_prompt_mode", "llm") or "llm").lower()
-    if pmode in ("set", "llm") and bool(getattr(settings, "advideo_set_single_image", True)):
-        dropped = (len(products) - 1) + len(refs)
-        products, refs = products[:1], []
-        if dropped > 0:
-            logger.info("%s 模式：为保证「一套图」为单张干净成图，仅喂主商品图 1 张（丢弃 %d 张附属图）", pmode, dropped)
 
     # 前端可选「商品结构清单」：随 image_prompt 以 [商品结构清单] 分隔符带下来（P2）
     specs = ""
@@ -399,10 +389,13 @@ async def generate_candidates(
     if pmode == "llm":
         if settings.advideo_llm_enabled and products:
             try:
-                b64 = base64.b64encode(Path(products[0]).read_bytes()).decode("ascii")
+                product_images = [
+                    {"b64": base64.b64encode(Path(p).read_bytes()).decode("ascii"), "mime": _image_mime(p)}
+                    for p in products
+                ]
                 llm_scene = await advllm.enhance_scene_body(
-                    scenario=scenario, product_image_b64=b64, specs=specs, category=llm_category,
-                    aspect_ratio=_ratio_label(width, height), mime=_image_mime(products[0]),
+                    scenario=scenario, product_images=product_images, specs=specs, category=llm_category,
+                    aspect_ratio=_ratio_label(width, height),
                 )
                 logger.info("广告图任务 #%s：LLM 增强 agent 产出正文 %d 字符（品类=%s）",
                             task_id, len(str(llm_scene.get("body", ""))), llm_category)

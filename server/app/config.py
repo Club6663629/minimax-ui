@@ -63,7 +63,6 @@ class Settings(BaseSettings):
     advideo_max_ref_images: int = 2          # 参考图（人物/场景）上限
     advideo_pe_retries: int = 1              # PE 空输出重试次数（每次约 +54s；1=不重试，直接回退配方）
     advideo_image_prompt_mode: str = "llm"     # 生图提示词来源：llm=提示词增强 agent（默认，qwen3.8-flash，见 advllm.py）/ set=一套图（SAI 直写，锁同一模特/商品/场景只换机位）/ recipe=10-07 配方 / pe=PE 改写
-    advideo_set_single_image: bool = True
     # ---- LLM 提示词增强 agent（2026-10-09）：advideo_image_prompt_mode=="llm" 时启用 ----
     # 由多模态 flash 模型（关闭思考、支持图像理解）扮演 qwen-image-2.1 提示词改写 agent，
     # 看着商品参考图把用户大白话改写成图像编辑指令；失败/无 key/空输出/未过守门 → 回退本地规则（0 付费）。
@@ -123,6 +122,7 @@ class Settings(BaseSettings):
 
     # ---- 计费（积分），均可通过环境变量覆盖 ----
     signup_bonus: int = 50        # 注册赠送
+    cost_ad_image: int = 2        # 电商广告片：每张候选广告图消耗积分（提交生成时按张数一次性扣除，出图阶段系统失败全额退还）
     cost_768p_5s: int = 10        # 768p · 5 秒
     cost_768p_8s: int = 15        # 768p · 8 秒
     cost_768p_10s: int = 20       # 768p · 10 秒

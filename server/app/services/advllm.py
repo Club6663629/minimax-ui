@@ -22,7 +22,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import httpx
 
@@ -46,7 +46,7 @@ class AdvLLMError(Exception):
 
 
 # ------------------------------------------------------------------ 系统级保真约束
-# 置于 system prompt 最前，声明优先级高于 skill；措辞对齐 advprompt.PE_FIDELITY_SYSTEM 铁律 1/3/7，
+# 置于 system prompt 最前，声明优先级高于 skill；措辞对齐 advprompt.PE_FIDELITY_SYSTEM 铁律 1/3，
 # 写法规范对齐 Qwen-Image-2.1 官方（图像编辑/保真、<image1> 指代、祈使式指令、结构顺序、避免空泛形容词）。
 FIDELITY_SYSTEM = """# 电商商品保真增强器 v2（Product-Fidelity Rewriter for Qwen-Image-2.1，最高优先级）
 
@@ -56,16 +56,20 @@ qwen21 能直接执行的编辑指令正文——**不是从零自由创作**。
 **当 skill 与本节冲突时，一律以本节为准**。
 
 【最高优先级 · 商品系统级保真铁律】
-1. 商品参考图是唯一真源。请先「看图」再写。商品的形状/轮廓/材质与纹理/颜色/件数/标签排版/logo 位置与形状/
+1. 商品参考图是唯一真源。请先「看图」再写。商品的形状/轮廓/材质与纹理/颜色/标签排版/logo 位置与形状/
    既有文字，必须与参考图完全一致，任何一项**不得增删改**：不得改款、改色、加印花、加图案、加 logo、加文字、
-   改件数、改比例。
+   改比例。
 2. 只描述图中**可见**的属性；看不清或不确定的一律省略（宁可写「未见」也不臆造），禁止编造参考图里没有的细节。
 3. **不要用形容词重新描述商品外观**——文字重述会让 qwen21 按文字重绘商品，一致性立刻崩。指代商品时用
    **`<image1>`**（qwen21 图像编辑对参考图的官方指代），或「the product from `<image1>`」这类**指图**措辞，
    而不是罗列它的颜色/材质/款式。
-4. 你只负责「镜头语言」：可自由创作的只有场景、机位、景别、光线、氛围、构图、留白、道具；商品本体与件数保持不变。
+4. 你只负责「镜头语言」：可自由创作的只有场景、机位、景别、光线、氛围、构图、留白、道具；商品本体保持不变。
 5. 人物：若 user 说明附带了人物/模特参考，保持其脸型、发型、发色与配饰不变，不得新增珠宝/帽子/包/手机等物，
    手部不得遮挡商品关键结构；若没有人物参考，可自行设计模特与姿态，但不得改变商品。
+6. 你可能收到**多张商品图**（第 1 张为主商品图，其余为细节图，全部会作为参考一并传给下游 qwen21）。
+   细节图用于帮你认清商品本体（材质/五金/标签/结构/配色）：请**只对商品本体保真**，忽略细节图里可能带的
+   环境背景、道具、模特、营销文字或价格牌等**与商品无关的信息**，切勿把这些环境噪声画进成品。正文里指代
+   商品以主图 **`<image1>`** 为准。
 
 【Qwen-Image-2.1 官方用法要点（保真铁律之外的写法规范）】
 - 用**祈使式编辑指令**组织正文：先说「保留/放入商品」（如 Keep the product from `<image1>` exactly as-is /
@@ -75,10 +79,6 @@ qwen21 能直接执行的编辑指令正文——**不是从零自由创作**。
   qwen21 已内置这类倾向，堆砌反而干扰出图。
 - **不要写负向词**：qwen21 默认不生成文字与水印，正文里不要出现 no text / no watermark / no logo 之类；
   负向约束由后端统一拼装。除非 user 给了**引号内确切文案**，此时只允许逐字引用（不改写/不翻译/不追加），同一画面单语。
-- **只描述一张完整照片**（one single full-frame photograph）：禁止拼贴、多格、分屏、多视角并置、画中画、组图、故事板。
-  正文只写**一个机位、一个景别、一个瞬间**；**绝不要**写 "Shot 1/Shot 2"、"this set"、"a series of"、"multiple views"、
-  "before-and-after"、"from different angles" 这类暗示多张/系列的措辞（下游 qwen21 会据此渲染成多格拼接图）。
-  画面中**只允许一个人物、一件商品**：不要写 two models / several people / duplicated person，也不要把同一人或同一商品并排复刻多份。
 
 【输出格式（严格遵守）】
 只输出**一段连续的英文正文**，聚焦：如何保留 `<image1>` 中的商品 + 场景/机位/景别/光线/构图/氛围/道具。
@@ -119,9 +119,22 @@ def _build_system_prompt() -> str:
     return FIDELITY_SYSTEM
 
 
-def _build_user_text(*, scenario: str, specs: str, category: str, aspect_ratio: str) -> str:
-    """user 文本块：输入图角色行 + 商品结构清单 + 场景需求 + 画幅（图片另以 image_url 块传入）。"""
-    seg: List[str] = [advprompt.image_role_line(images=["商品图（唯一真源：形状/材质/颜色/件数/标签/logo 均不得改变）"])]
+def _build_user_text(*, scenario: str, specs: str, category: str, aspect_ratio: str, n_images: int = 1) -> str:
+    """user 文本块：输入图角色行 + 商品结构清单 + 场景需求 + 画幅（图片另以 image_url 块传入）。
+
+    n_images>1 时明确区分主图与细节图：细节图帮助理解商品本体、一并传下游、可能含环境噪声。
+    """
+    n = max(1, int(n_images or 1))
+    seg: List[str] = []
+    if n > 1:
+        seg.append(
+            "[输入图] 共 %d 张：第 1 张=主商品图（唯一真源，正文里以 <image1> 指代商品）；"
+            "第 2..%d 张=商品细节图（同一商品的另一视角/局部特写，帮助你认清材质、五金、标签、结构等本体特征，一并作为参考传给下游）。"
+            "细节图可能带环境背景、道具、模特或营销文字等无关信息，"
+            "请只对商品本体保真，忽略这些环境噪声，不要把细节图里的背景/道具/文字画进成品。" % (n, n)
+        )
+    else:
+        seg.append(advprompt.image_role_line(images=["商品图（唯一真源：形状/材质/颜色/件数/标签/logo 均不得改变）"]))
     if specs:
         seg.append("[商品结构清单] %s" % specs.strip())
     if category:
@@ -161,15 +174,16 @@ def _extract_body(raw: str) -> str:
 async def enhance_scene_body(
     *,
     scenario: str,
-    product_image_b64: str,
+    product_images: Sequence[Dict[str, str]],
     specs: str = "",
     category: str = "",
     aspect_ratio: str = "",
-    mime: str = "image/png",
 ) -> Dict[str, object]:
     """调 LLM 增强 agent（默认 qwen3.8-flash，可切 deepseek-flash；关思考 + vision）产出「镜头语言正文」。
 
-    每任务只应调用 1 次（正文供 N 张候选共用，保证「一套图」一致性并把调用成本从 N 降到 1）。
+    product_images: 商品图列表，每项 {"b64": <base64>, "mime": <mime>}；第 1 项=主商品图（下游唯一真源），
+      其余=细节图（帮助 LLM 理解商品本体）。全部商品图会一并作为参考传给下游 qwen21，正文以 <image1> 指代商品。
+    每任务只应调用 1 次（正文供 N 张候选共用，保证一致性并把调用成本从 N 降到 1）。
     失败/无 key/空输出 → 抛 AdvLLMError，由调用方回退本地规则增强。
     返回：{"body": <英文正文>, "category": category, "source": "llm", "usage": {...}}。
     """
@@ -177,24 +191,24 @@ async def enhance_scene_body(
     api_key = settings.advideo_llm_api_key                # 当前 provider 的 key
     if not api_key:
         raise AdvLLMError(f"未配置 {provider} API Key，LLM 增强臂不可用")
-    if not product_image_b64:
+    imgs = [im for im in (product_images or []) if isinstance(im, dict) and im.get("b64")]
+    if not imgs:
         raise AdvLLMError("缺少商品参考图 base64，无法做图像理解")
 
     system_prompt = _build_system_prompt()
-    user_text = _build_user_text(scenario=scenario, specs=specs, category=category, aspect_ratio=aspect_ratio)
+    user_text = _build_user_text(scenario=scenario, specs=specs, category=category,
+                                 aspect_ratio=aspect_ratio, n_images=len(imgs))
     detail = str(getattr(settings, "advideo_llm_vision_detail", "high") or "high")
+    content: List[dict] = [{"type": "text", "text": user_text}]
+    for im in imgs:
+        mime = str(im.get("mime") or "image/png")
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{im['b64']}", "detail": detail},
+        })
     messages = [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_text},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{product_image_b64}", "detail": detail},
-                },
-            ],
-        },
+        {"role": "user", "content": content},
     ]
     model = str(settings.advideo_llm_model or ("qwen3.8-flash" if provider == "qwen" else "deepseek-flash"))
     body: Dict[str, object] = {

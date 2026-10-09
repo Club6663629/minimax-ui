@@ -47,6 +47,15 @@ def compute_upgrade_cost(resolution: str) -> int:
     return 0
 
 
+def compute_ad_image_cost(image_count: int) -> int:
+    """电商广告片：候选广告图阶段费用 = 每张单价 × 张数（提交生成时一次性扣）。
+
+    与视频阶段费用（task.cost）完全独立：图片一旦生成即消耗，删除/重生成不退；
+    仅整个出图阶段系统失败时全额退还。
+    """
+    return max(0, int(image_count or 0)) * int(settings.cost_ad_image or 0)
+
+
 def add_credits(
     db: Session,
     user: User,

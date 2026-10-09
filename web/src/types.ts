@@ -120,6 +120,8 @@ export interface Task {
   /** 人工确认选中的候选序号（-1 = 未确认） */
   chosen_index: number;
   chosen_image_url: string | null;
+  /** 本次任务已扣的广告图积分（cost_ad_image × 张数）；与视频费 task.cost 独立计。0/缺省 = 未扣或已退 */
+  ad_image_cost?: number;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -157,6 +159,8 @@ export interface Package {
 
 export interface Pricing {
   signup_bonus: number;
+  /** 每张候选广告图的积分单价（提交生成时按张数预扣；出图阶段系统失败全额退还） */
+  cost_ad_image: number;
   cost_768p_5s: number;
   cost_768p_8s: number;
   cost_768p_10s: number;

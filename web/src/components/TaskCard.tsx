@@ -4,6 +4,7 @@ import {
   ArrowUpCircle,
   Check,
   Download,
+  Image as ImageIcon,
   Loader2,
   RotateCcw,
   Trash2,
@@ -44,11 +45,14 @@ export default function TaskCard({
   onChanged,
   pricing,
   onRefreshUser,
+  onResume,
 }: {
   task: Task;
   onChanged: () => void;
   pricing: Pricing | null;
   onRefreshUser?: () => void;
+  /** 广告片专用：从历史回到「待确认广告图」任务（B5 进入入口）。传入后 image_ready 卡片显示「去确认」按钮。 */
+  onResume?: (task: Task) => void;
 }) {
   const [retrying, setRetrying] = useState(false);
   const [upgrading, setUpgrading] = useState<"1k" | "2k" | "4k" | null>(null);
@@ -257,6 +261,20 @@ export default function TaskCard({
         </div>
       )}
 
+      {task.mode === "advideo" && task.status === "image_ready" && (
+        <div className="flex items-center gap-3 rounded-xl bg-amber-500/[0.08] px-3 py-2.5">
+          <ImageIcon size={15} className="shrink-0 text-amber-600" />
+          <p className="min-w-0 flex-1 text-xs text-foreground-700">
+            候选广告图已生成，确认后即可合成广告片。
+          </p>
+          {onResume && (
+            <button onClick={() => onResume(task)} className="btn-primary !py-1.5 text-xs">
+              <Check size={13} /> 去确认广告图
+            </button>
+          )}
+        </div>
+      )}
+
       {ACTIVE_STATUSES.includes(task.status) && (
         <div className="flex items-center gap-2 text-xs text-foreground-500">
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-background-200">
@@ -265,12 +283,18 @@ export default function TaskCard({
           {isUpgradeTask
             ? task.status === "upscaling"
               ? task.worker_url
-                ? "高清升级中，请耐心等待…"
+                ? "高清升级处理中"
                 : "高清升级排队中"
-              : "处理中，请耐心等待"
+              : "处理中"
             : isDirector
-              ? "导演台独占整卡生成中（长视频耗时较长，请耐心等待）"
-              : "多卡并行处理中，请耐心等待"}
+              ? "导演台长视频生成中（独占整卡，耗时较长）"
+              : task.mode === "advideo"
+                ? task.status === "queued_images"
+                  ? "候选广告图排队中"
+                  : "候选广告图生成中"
+                : task.status === "queued"
+                  ? "排队中，等待分配算力"
+                  : "视频生成中"}
         </div>
       )}
     </div>

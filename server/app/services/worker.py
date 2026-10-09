@@ -1136,6 +1136,14 @@ async def _run_advideo_images(task_id: int) -> None:
                 task.error = f"广告图阶段失败: {str(exc)[:400]}"
                 task.worker_url = ""
                 task.finished_at = datetime.now()
+                # 出图阶段系统失败：全额退还已扣的广告图积分（仅此一处退款；删除/重生成不退）
+                refund = int(getattr(task, "ad_image_cost", 0) or 0)
+                if refund > 0:
+                    user = db.get(User, task.user_id)
+                    if user is not None:
+                        add_credits(db, user, refund, "refund",
+                                    note="广告图生成失败退款", task_id=task.id)
+                    task.ad_image_cost = 0
                 db.commit()
 
 

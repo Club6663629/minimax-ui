@@ -89,6 +89,7 @@ def _migrate_advideo() -> None:
         "ad_product_count": "INTEGER DEFAULT 0",
         "chosen_image": "VARCHAR(512) DEFAULT ''",
         "chosen_index": "INTEGER DEFAULT -1",
+        "ad_image_cost": "INTEGER DEFAULT 0",
         "video_prompt_mode": "VARCHAR(16) DEFAULT ''",
     }
     with engine.begin() as conn:

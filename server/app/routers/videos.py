@@ -22,6 +22,8 @@ from ..schemas import (
 from ..services import advimage, comfyui
 from ..services.billing import (
     PACKAGES,
+    add_credits,
+    compute_ad_image_cost,
     compute_cost,
     compute_director_cost,
     compute_upgrade_cost,
@@ -53,6 +55,7 @@ def _ref_counts(db: Session, ref_ids: list[int]) -> tuple[int, int, int]:
 def pricing():
     return PricingOut(
         signup_bonus=settings.signup_bonus,
+        cost_ad_image=settings.cost_ad_image,
         cost_768p_5s=settings.cost_768p_5s,
         cost_768p_8s=settings.cost_768p_8s,
         cost_768p_10s=settings.cost_768p_10s,
@@ -191,6 +194,31 @@ def retry_video(task_id: int, user: User = Depends(get_current_user), db: Sessio
     task = _get_owned_task(task_id, user, db)
     if task.status != "failed":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅失败任务可重试")
+    # 广告图阶段失败（从未确认过图）：重跑出图并重新扣广告图积分（与视频阶段计费独立）
+    if task.mode == "advideo" and (task.chosen_index or -1) < 0:
+        image_cost = compute_ad_image_cost(task.ad_image_count)
+        if user.credits < image_cost:
+            raise HTTPException(
+                status.HTTP_402_PAYMENT_REQUIRED,
+                f"积分不足：重新生成 {task.ad_image_count} 张候选广告图需 {image_cost} 积分",
+            )
+        task.status = "queued_images"
+        task.error = ""
+        task.ad_image_paths = ""
+        task.chosen_image = ""
+        task.chosen_index = -1
+        task.ad_image_cost = image_cost
+        task.worker_url = ""
+        task.attempts = 0
+        task.started_at = None
+        task.finished_at = None
+        add_credits(
+            db, user, -image_cost, "consume",
+            note=f"广告图 {task.ad_image_count} 张（重试）", task_id=task.id,
+        )
+        db.commit()
+        db.refresh(task)
+        return serialize_task(task, db=db)
     # 导演台按总时长折算计费（5s 块 × 5s 档单价），短视频按档位计费
     cost = (
         compute_director_cost(task.duration)
@@ -293,11 +321,12 @@ def delete_video(task_id: int, user: User = Depends(get_current_user), db: Sessi
 
     targets = db.query(Task).filter(Task.id.in_(ids)).all()
 
-    running = [t.id for t in targets if t.status in ("enhancing", "generating_768p", "upscaling")]
+    running = [t.id for t in targets if t.status in (
+        "queued_images", "generating_images", "enhancing", "generating_768p", "upscaling")]
     if running:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "任务执行中，暂不可删除（#" + "、#".join(str(i) for i in running) + "）",
+            "任务生成中，暂不可删除或取消（#" + "、#".join(str(i) for i in running) + "）",
         )
 
     try:
@@ -355,8 +384,10 @@ def create_advideo(
 ):
     """电商广告片：商品图(+可选参考图) + 一句话场景 → N 张候选广告图（待人工确认）。
 
-    计费口径与 r2v 视频一致，**在人工确认广告图后、视频阶段领取时扣**（复用生成循环的
-    领取计费）；用户只看不确认时不扣积分。
+    计费（两笔独立）：
+    - 广告图：**提交生成时按张数一次性扣** cost_ad_image × N（图片一旦生成即消耗；
+      仅整个出图阶段系统失败时全额退还；删除/重生成不退）；
+    - 视频：人工确认广告图后、视频阶段领取时按时长×分辨率扣（与 r2v 一致）。
     """
     if not settings.advideo_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "电商广告片未启用")
@@ -372,11 +403,12 @@ def create_advideo(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"素材 {rid} 不存在")
     if body.resolution in ("1k", "2k", "4k") and not settings.upscale_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
-    cost = compute_cost(body.duration, body.resolution)
-    if user.credits < cost:
+    # 广告图阶段计费：提交生成时按张数一次性扣（图片一旦生成即消耗；出图阶段系统失败全额退还）
+    image_cost = compute_ad_image_cost(body.image_count)
+    if user.credits < image_cost:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
-            f"积分不足：确认广告图后将生成 {body.duration}s/{body.resolution} 视频，需 {cost} 积分",
+            f"积分不足：生成 {body.image_count} 张候选广告图需 {image_cost} 积分，请先充值",
         )
     task = Task(
         user_id=user.id,
@@ -392,10 +424,16 @@ def create_advideo(
         ad_input_ids=json.dumps(input_ids),
         ad_image_count=body.image_count,
         ad_product_count=len(body.product_image_ids),
+        ad_image_cost=image_cost,                 # 提交即扣（与视频 cost 独立）
         video_prompt_mode=(body.video_prompt_mode or ""),   # advideo9 生视频增强路由（空=跟随全局默认）
         status="queued_images",
     )
     db.add(task)
+    db.flush()   # 取得 task.id 供积分流水引用
+    add_credits(
+        db, user, -image_cost, "consume",
+        note=f"广告图 {body.image_count} 张", task_id=task.id,
+    )
     db.commit()
     db.refresh(task)
     return serialize_task(task, db=db)
@@ -407,24 +445,33 @@ def regenerate_advideo(
     user: User = Depends(get_advideo_access),
     db: Session = Depends(get_db),
 ):
-    """重新生成候选广告图：以既有任务参数为源新建一条任务。
+    """重新生成候选广告图：以既有任务参数为源**新建**一条任务并重新扣广告图积分。
 
-    - 图像阶段不计费，因此旧任务（尚未进入视频阶段）连记录一并丢弃，避免页面上遗留「待确认」任务；
+    - 旧任务保留进历史（已付费，可手动删除但不退分）；新任务重新按张数扣 cost_ad_image × N；
     - 参数（商品图/参考图/场景/比例/片长/清晰度/增强路由/张数）全部取自服务端任务，
       前端不需要回填任何内存状态（修复「重新生成却提示上传商品图」）。
     """
     task = _get_owned_task(task_id, user, db)
     if task.mode != "advideo":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "非电商广告片任务")
-    if task.status not in ("queued_images", "generating_images", "image_ready"):
+    if task.status == "generating_images":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "广告图正在生成中，请稍候")
+    if task.status not in ("queued_images", "image_ready"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "广告片已进入生成阶段（已计费），如需重做请新建广告片",
+            "广告片已进入视频阶段，如需重做请新建广告片",
         )
     if not settings.advideo_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "电商广告片未启用")
     if not advimage.available():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "广告图节点未就绪，请稍后再试")
+
+    image_cost = compute_ad_image_cost(task.ad_image_count)
+    if user.credits < image_cost:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"积分不足：重新生成 {task.ad_image_count} 张候选广告图需 {image_cost} 积分，请先充值",
+        )
 
     clone = Task(
         user_id=user.id,
@@ -440,34 +487,17 @@ def regenerate_advideo(
         ad_input_ids=task.ad_input_ids,
         ad_image_count=task.ad_image_count,
         ad_product_count=task.ad_product_count,
+        ad_image_cost=image_cost,
         video_prompt_mode=task.video_prompt_mode,
         status="queued_images",
     )
-
-    # 旧任务树（自身 + 高清子任务）一并清理；credit_logs.task_id 外键先解除引用
-    ids = [task.id]
-    frontier = [task.id]
-    while frontier:
-        rows = db.query(Task.id).filter(Task.parent_task_id.in_(frontier)).all()
-        kids = [r[0] for r in rows if r[0] not in ids]
-        ids.extend(kids)
-        frontier = kids
-    targets = db.query(Task).filter(Task.id.in_(ids)).all()
-
     db.add(clone)
-    try:
-        db.query(CreditLog).filter(CreditLog.task_id.in_(ids)).update(
-            {CreditLog.task_id: None}, synchronize_session=False
-        )
-        for t in targets:
-            db.delete(t)
-        db.commit()
-    except Exception as exc:  # noqa: BLE001
-        db.rollback()
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "重新生成失败：" + type(exc).__name__ + ": " + str(exc),
-        ) from exc
+    db.flush()
+    add_credits(
+        db, user, -image_cost, "consume",
+        note=f"广告图 {task.ad_image_count} 张（重新生成）", task_id=clone.id,
+    )
+    db.commit()
     db.refresh(clone)
     return serialize_task(clone, db=db)
 
@@ -493,6 +523,13 @@ def confirm_advideo_image(
         paths = []
     if not (0 <= body.image_index < len(paths)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "选择的广告图不存在")
+    # 视频阶段计费预检：确认后按时长×分辨率扣（实际扣款在 _claim_generate 领取时）
+    video_cost = compute_cost(task.duration, task.resolution)
+    if user.credits < video_cost:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"积分不足：合成 {task.duration}s/{task.resolution} 广告片需 {video_cost} 积分，请先充值",
+        )
     task.chosen_image = paths[body.image_index]
     task.chosen_index = body.image_index
     if body.video_prompt and body.video_prompt.strip():

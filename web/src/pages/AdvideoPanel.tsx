@@ -1,13 +1,14 @@
 /** 电商广告片：商品图 + 场景描述 → N 张候选广告图 → 确认后用于生成广告片 → 下载成片。
  *
  * 业务闭环（一律以服务端任务为准，前端不靠内存状态续跑）：
- *   ① 表单：商品图(≤3) + 参考图(可选) + 场景描述 + 片长/比例/分辨率 → 生成候选广告图（不计费）
- *   ② 出图中：可「放弃本次」（删除任务，回表单）
- *   ③ 候选图已生成：确认后这 N 张候选图一起用于生成广告片（此时才计费）／「重新生成候选图」／「放弃本组」
+ *   ① 表单：商品图(≤3) + 参考图(可选) + 场景描述 + 片长/比例/分辨率 → 提交即扣广告图积分并生成候选广告图
+ *   ② 出图中：任务不可取消（已扣分）；可「转入后台」离开，任务保留在历史里继续生成
+ *   ③ 候选图已生成：确认后整组用于合成广告片（此时再扣视频积分）／「重新生成候选图」（新建任务、重新扣广告图积分）／「放弃本组」（删除、不退分）
  *   ④ 视频阶段：进度 → 播放/下载；可「新建广告片」（原任务保留在历史里）
  *
  * 提示词隔离：场景描述（图像）与视频提示词是两个独立输入框，互不回灌；视频提示词留空 = 沿用场景描述。
- * 计费口径：只在「确认并生成广告片」时扣一次（与单片视频一致），候选图阶段不消耗积分。
+ * 计费口径（两笔独立）：广告图 = 提交生成时按张数扣 cost_ad_image × N（图片一经生成即消耗，仅系统出图失败全额退还，删除/重生成不退）；
+ *   视频 = 人工确认广告图后按时长×分辨率扣（与单片视频一致）。
  */
 import {
   AlertCircle,
@@ -243,6 +244,10 @@ export default function AdvideoPanel({
   const taskDuration = activeTask?.duration ?? duration;
   const taskResolution = activeTask?.resolution ?? resolution;
   const taskCost = costFor(taskDuration, taskResolution);
+  // 广告图计费（与视频费独立）：单价 × 张数。表单用当前选择；任务阶段以服务端已扣的 ad_image_cost 为准。
+  const imageUnit = pricing?.cost_ad_image ?? 0;
+  const imageCost = imageUnit * imageCount;
+  const taskImageCost = activeTask?.ad_image_cost ?? 0;
 
   async function submit() {
     setError("");
@@ -279,7 +284,7 @@ export default function AdvideoPanel({
     }
   }
 
-  /** 重新生成候选图：以服务端任务参数为准重建一条任务，并放弃当前这组（候选图阶段不计费）。 */
+  /** 重新生成候选图：以服务端任务参数为准**新建**一组并重新扣广告图积分；本组保留在历史（已付费，不退）。 */
   async function reroll() {
     if (!activeTask) return;
     setError("");
@@ -288,7 +293,7 @@ export default function AdvideoPanel({
       const t = await api.regenerateAdvideo(activeTask.id);
       dismiss(activeTask.id);
       setActiveId(t.id);
-      showToast("正在重新生成候选广告图…");
+      showToast("已新建一组，正在重新生成候选广告图…");
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "重新生成失败");
@@ -297,7 +302,7 @@ export default function AdvideoPanel({
     }
   }
 
-  /** 放弃本组：删除当前任务（候选图阶段未计费，可直接删除），回到表单。 */
+  /** 放弃本组：删除当前任务（广告图已生成并扣分，删除不退分），回到表单。仅在候选图已生成（image_ready）时可用。 */
   async function abandon() {
     if (!activeTask) return;
     setError("");
@@ -306,7 +311,7 @@ export default function AdvideoPanel({
       await api.deleteVideo(activeTask.id);
       dismiss(activeTask.id);
       setVideoPrompt("");
-      showToast("已放弃本组，可以重新开始");
+      showToast("已删除本组候选广告图（广告图积分不退）");
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "放弃失败");
@@ -340,6 +345,13 @@ export default function AdvideoPanel({
   function startNew() {
     dismiss(activeTask?.id);
     setVideoPrompt("");
+    setError("");
+  }
+
+  /** 从历史回到某个任务（B5：待确认广告图的进入入口）：取消「已离开」标记并设为当前任务。 */
+  function resumeTask(t: Task) {
+    setDismissed((prev) => prev.filter((id) => id !== t.id));
+    setActiveId(t.id);
     setError("");
   }
 
@@ -531,10 +543,10 @@ export default function AdvideoPanel({
             />
 
             <div className="ml-auto flex items-center gap-3">
-              <span className="flex items-center gap-1.5 text-xs text-foreground-500" title="生成广告片将消耗的积分">
-                生成广告片 <Coins size={13} className="text-amber-500" /> {cost} 积分
+              <span className="flex items-center gap-1.5 text-xs text-foreground-500" title="提交生成即按张数扣除广告图积分">
+                候选广告图 {imageCount}×{imageUnit} = <Coins size={13} className="text-amber-500" /> {imageCost} 积分
               </span>
-              {(user?.credits ?? 0) < cost && (
+              {(user?.credits ?? 0) < imageCost && (
                 <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
                   去充值
                 </Link>
@@ -557,7 +569,9 @@ export default function AdvideoPanel({
               </button>
             </div>
           </div>
-          <p className="mt-2 text-[11px] text-foreground-500">生成候选广告图不消耗积分；确认合成为广告片时才按上面的片长/清晰度计费一次。</p>
+          <p className="mt-2 text-[11px] text-foreground-500">
+            计费分两步：提交生成即扣候选广告图 {imageCost} 积分（{imageCount} 张 × {imageUnit}，图片一经生成即消耗，仅系统出图失败全额退还）；确认合成广告片时再按片长/清晰度扣 {cost} 积分。
+          </p>
           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
         </div>
       )}
@@ -566,16 +580,17 @@ export default function AdvideoPanel({
       {step === "images" && activeTask && (
         <div className="panel p-6 text-center">
           <Loader2 size={22} className="mx-auto animate-spin text-primary-600" />
-          <p className="mt-3 text-sm text-foreground-800">正在生成候选广告图…</p>
-          <p className="mt-1 text-xs text-foreground-500">任务 #{activeTask.id} · 首次运行整组约需 3–8 分钟，请稍候</p>
+          <p className="mt-3 text-sm text-foreground-800">候选广告图生成中</p>
+          <p className="mt-1 text-xs text-foreground-500">
+            本次已扣 {taskImageCost} 积分。生成期间任务不可取消，完成后将自动进入确认环节。
+          </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-            <span className="text-xs text-foreground-500">生成完会自动展示，可先去做别的事</span>
-            <button type="button" onClick={abandon} disabled={busy} className="btn-ghost !px-3 !py-1.5 text-xs">
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} 放弃本次
+            <button type="button" onClick={() => dismiss(activeTask.id)} className="btn-ghost !px-3 !py-1.5 text-xs">
+              转入后台，稍后在历史查看
             </button>
           </div>
           <p className="mx-auto mt-2 max-w-md text-[11px] text-foreground-500">
-            放弃只丢弃本次候选广告图，不消耗积分。
+            离开此页不会中断生成；任务会保留在下方「历史广告片任务」中，完成后可随时回来确认。
           </p>
           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
         </div>
@@ -591,7 +606,7 @@ export default function AdvideoPanel({
             <div className="flex-1">
               <h3 className="text-sm font-medium text-foreground-900">候选广告图已生成</h3>
               <p className="mt-0.5 text-xs text-foreground-500">
-                任务 #{activeTask.id} · 确认后这 {usedImages} 张候选图将一起用于生成广告片（多角度参考，成片更贴近商品）；不满意可重新生成。
+                共 {usedImages} 张候选图（本组广告图积分已扣除）。确认后整组用于合成广告片，多角度参考使成片更贴近商品；如需重做可重新生成。
               </p>
             </div>
             <span className={chipCls}>
@@ -645,10 +660,10 @@ export default function AdvideoPanel({
                 </Link>
               )}
               <div className="ml-auto flex items-center gap-2">
-                <button type="button" onClick={abandon} disabled={busy || confirming} className="btn-ghost !px-3 !py-1.5 text-xs">
+                <button type="button" onClick={abandon} disabled={busy || confirming} title="删除本组候选广告图（广告图积分不退）" className="btn-ghost !px-3 !py-1.5 text-xs">
                   {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} 放弃本组
                 </button>
-                <button type="button" onClick={reroll} disabled={busy || confirming} className="btn-ghost !px-3 !py-1.5 text-xs">
+                <button type="button" onClick={reroll} disabled={busy || confirming} title={`重新生成将新建一组并再扣 ${taskImageCost} 广告图积分（本组保留在历史，不退分）`} className="btn-ghost !px-3 !py-1.5 text-xs">
                   {busy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} 重新生成候选图
                 </button>
                 <button type="button" onClick={confirm} disabled={confirming || busy || usedImages === 0} className="btn-primary !py-2 text-xs">
@@ -673,9 +688,9 @@ export default function AdvideoPanel({
       {step === "video" && activeTask && (
         <div className="space-y-2">
           <p className="text-xs text-foreground-500">
-            已用 {usedImages || "-"} 张候选广告图合成广告片 · 任务 #{activeTask.id}
+            已选用 {usedImages || "-"} 张候选广告图合成广告片，下方为生成进度与成片。
           </p>
-          <TaskCard task={activeTask} onChanged={onChanged} pricing={pricing} onRefreshUser={onRefreshUser} />
+          <TaskCard task={activeTask} onChanged={onChanged} pricing={pricing} onRefreshUser={onRefreshUser} onResume={resumeTask} />
         </div>
       )}
 
@@ -686,7 +701,7 @@ export default function AdvideoPanel({
           {advideoTasks
             .filter((t) => t.id !== activeTask?.id)
             .map((t) => (
-              <TaskCard key={t.id} task={t} onChanged={onChanged} pricing={pricing} onRefreshUser={onRefreshUser} />
+              <TaskCard key={t.id} task={t} onChanged={onChanged} pricing={pricing} onRefreshUser={onRefreshUser} onResume={resumeTask} />
             ))}
         </div>
       )}

@@ -21,16 +21,16 @@ PE_FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fi
 - 每张输入图的角色，以用户消息开头的「[输入图]」行为准；严格按该行理解 <image1>/<image2>/… 的指代。
 - 被标为「商品图」的那张输入图是商品的**唯一真源**。商品一律用**指向该图**的措辞指代，例如「图2(<image2>)中的商品」。
 - **禁止用形容词重新描述商品**：不要写 "a light-yellow halter-neck chiffon dress with ruffles" 这类重新描述商品的句子——文字重述会让下游模型按文字重绘商品，一致性立刻崩。
-- 商品的全部属性（版型、颜色、材质与纹理、领型、袖、下摆层次、开合方式、五金、印花、件数、logo 有无）必须与真源图完全一致，任何一项不得增删改。
+- 商品的全部属性（版型、颜色、材质与纹理、领型、袖、下摆层次、开合方式、五金、印花、logo 有无）必须与真源图完全一致，任何一项不得增删改。
 
 【铁律 2｜保真条款必须写在输出的第一句】
 第一句用英文写死：
-"Use the exact product shown in <image2>: identical silhouette, colour, material, construction, pattern, print, trims and proportions; realistic fabric drape and natural folds; do NOT redesign, recolour, restyle, lengthen, shorten or crop it; keep the product count unchanged."
+"Use the exact product shown in <image2>: identical silhouette, colour, material, construction, pattern, print, trims and proportions; realistic fabric drape and natural folds; do NOT redesign, recolour, restyle, lengthen, shorten or crop it."
 （若「[输入图]」行标明商品图是 <image1>，则把这句话里的 <image2> 换成 <image1>，其余照抄。）
 
 【铁律 3｜只允许改动镜头语言】
 你可以自由创作的只有：场景、机位、景别、光线、氛围、构图、留白、道具。
-商品本体、商品件数保持不变。
+商品本体保持不变。
 
 【铁律 4｜默认不生成任何文字】
 除非用户消息中给出了**确切文案**（引号内的原文），否则输出结尾必须写：
@@ -41,30 +41,21 @@ PE_FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fi
 若「[输入图]」行含「人物/模特参考」图：保持其脸型、发型、发色与配饰不变；不得新增珠宝、帽子、包、手机等物；手部不得遮挡商品关键结构。
 若没有人物参考图：可自行设计模特与姿态，但不得改变商品。
 
-【铁律 7｜单张画面】
-无论输入几张图（商品图 / 商品细节图 / 人物参考图），最终只输出**一张完整照片**（one single full-frame photograph）。禁止拼贴、多格、分屏、多视角并置、画中画、组图、故事板、把输入图原样并排复刻；多张输入图只用于「理解商品」，绝不是要求把它们画进同一张画布。
-正文只写**一个机位、一个景别、一个瞬间**；绝不要写 "Shot 1/Shot 2"、"this set"、"a series of"、"multiple views"、"from different angles" 这类暗示多张/系列的措辞（下游 qwen21 会据此渲染成多格拼接图）。画面中**只允许一个人物、一件商品**，不得写 two models / several people / duplicated person，也不得把同一人或同一商品并排复刻多份。
-
 【铁律 6｜输出格式】
 只输出**一段连续指令**，顺序固定：
 (1) 保真条款（英文，指向商品图）；
-(2) 商品结构清单逐字复述（形如「<image2> 的 版型 / 颜色 / 材质 / 领型 / 下摆 / 印花 / 五金 / 件数 保持不变」，逐项核对输入图后写出，看不到的项写「未见」而不要臆造）；
+(2) 商品结构清单逐字复述（形如「<image2> 的 版型 / 颜色 / 材质 / 领型 / 下摆 / 印花 / 五金 保持不变」，逐项核对输入图后写出，看不到的项写「未见」而不要臆造）；
 (3) 场景 / 机位 / 光线 / 构图（你的创作部分）；
-(4) 收尾条款（英文）："Keep the product in <image2> unchanged; no text, no logo, no watermark, no extra items. Output a single unified photograph \u2014 not a collage, not a grid, not a split-screen, not multiple panels."
+(4) 收尾条款（英文）："Keep the product in <image2> unchanged; no text, no logo, no watermark, no extra items."
 不要输出解释、标题、分点符号或任何前言后语，只输出这条指令。"""
 
 # A2｜负向提示词（写入模板 474.negative_prompt）
 NEGATIVE_PROMPT = (
     "redesigned product, different colour, recoloured product, different silhouette, "
     "added print, added pattern, logo, lettering, watermark, caption, on-screen text, "
-    "garbled text, gibberish characters, extra items, extra product copies, "
+    "garbled text, gibberish characters, extra items, "
     "wrong material, changed proportions, deformed hands, fused fingers, extra limbs, "
-    "cropped product, product cut off by frame, blurry product, low detail, "
-    "collage, photo collage, image grid, multiple panels, split screen, diptych, triptych, "
-    "side-by-side duplicate views, contact sheet, picture-in-picture, repeated scene, "
-    "multiple views, series of shots, storyboard, film strip, comic panels, before-and-after split, "
-    "grid layout, multiple people, duplicated person, cloned person, two models, several copies of the product, "
-    "重复人物, 拼贴, 多格, 分屏, 多视角并置, 分镜, 多视图, 故事板, 人物克隆, 多个模特"
+    "cropped product, product cut off by frame, blurry product, low detail"
 )
 
 
@@ -121,14 +112,11 @@ RECIPE_CAMERA_VARIANTS = [
 ]
 RECIPE_TAIL = (
     " Keep the garment's exact colour, print and material identical to {tag}. "
-    "Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split-screen, "
-    "not multiple panels, not a series of shots, not multiple camera angles in one image; only one person and only "
-    "one instance of the garment in the frame. "
     "no text, no lettering, no logo, no watermark anywhere in the image."
 )
 RECIPE_EXTRA_IMAGES = (
-    " Additional image(s) {rng} are further views of the SAME single garment "
-    "(use them only to calibrate material, colour and hardware; do not paste them into the frame)."
+    " Additional image(s) {rng} are further views of the SAME garment "
+    "(use them to calibrate material, colour and hardware)."
 )
 
 
@@ -138,7 +126,7 @@ RECIPE_EXTRA_IMAGES = (
 # 喂 2 张以上 → 模型把输入并排复刻成 N 格拼贴。故 set 模式只喂 1 张图。
 # 先例：2026-10-07 手动成功配方（gen.py，衣着广告图）同法——同一人物/场景，只换机位 = 一套图。
 RECIPE_SET_KEEP_HEAD = (
-    "Edit the photograph in <image1>: keep the SAME single woman and the SAME single garment exactly as they are. "
+    "Edit the photograph in <image1>: keep the SAME woman and the SAME garment exactly as they are. "
     "Identical face, hairstyle, hair colour, makeup, earrings, skin tone and body proportions; identical garment "
     "colour, fabric, sheen, construction, neckline pleating, hemline layers and length. Change ONLY the camera angle "
     "and the pose as described below. Do not redesign, recolour, restyle, lengthen, shorten, crop or re-cut the "
@@ -153,10 +141,7 @@ RECIPE_SET_KEEP_CAMERA = [
     "Camera: full-body candid walking shot moving towards the camera, natural motion, slight wind.",
 ]
 RECIPE_SET_KEEP_TAIL = (
-    " Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split screen, "
-    "not multiple panels, not a contact sheet, not a diptych or triptych, not a series of shots, not multiple camera "
-    "angles in one image. There must be only one person and only one instance of the garment in the frame. "
-    "No text, no lettering, no logo, no watermark anywhere in the image."
+    " No text, no lettering, no logo, no watermark anywhere in the image."
 )
 
 
@@ -173,7 +158,7 @@ def set_keep_prompt(*, scenario: str = "", variant_index: int = 0, specs: str = 
 
 
 def raw_prompt(*, scenario: str, variant_index: int = 0) -> str:
-    """SAI 直写（[RAW]）：scenario 原文即正文，只追加机位行与「单张画面/无文字」收尾条款。"""
+    """SAI 直写（[RAW]）：scenario 原文即正文，只追加机位行与「无文字」收尾条款。"""
     return (scenario.strip() + " "
             + RECIPE_SET_KEEP_CAMERA[int(variant_index) % len(RECIPE_SET_KEEP_CAMERA)]
             + RECIPE_SET_KEEP_TAIL)
@@ -268,12 +253,9 @@ def truncate(text: str, n: int = 400) -> str:
 SET_PERSONA_SCENE = (
     "[固定人物｜逐字复用，不得改动] A 23-year-old American white female fashion model, 178 cm, slim model "
     "figure, brown hair; keep the identical face, hairstyle, hair colour, skin tone, makeup and body proportions.\n"
-    "[固定场景｜逐字复用，不得改动] Keep one single consistent scene, with the same "
+    "[固定场景｜逐字复用，不得改动] Keep one consistent scene, with the same "
     "location, background, lighting, colour grading and depth of field; overcast soft light, "
-    "cinematic film-like cool grading.\n"
-    "[单张画面] This is ONE single standalone photograph, not a set, not a series and not multiple views: the SAME one "
-    "model wearing the SAME single product in the SAME scene, shown from one camera angle in one frame. Do not place "
-    "two or more panels, frames or copies of the model or product in the same image."
+    "cinematic film-like cool grading."
 )
 
 SHOT_VARIANTS = list(RECIPE_SHOT_VARIANTS)

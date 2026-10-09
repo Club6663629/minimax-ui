@@ -77,6 +77,9 @@ class Task(Base):
     # 用户人工确认选中的广告图（本地路径；非空才允许进入视频阶段）
     chosen_image: Mapped[str] = mapped_column(String(512), default="")
     chosen_index: Mapped[int] = mapped_column(Integer, default=-1)
+    # 广告图阶段已扣积分（= cost_ad_image × 张数；独立于 cost，避免与视频阶段 cost>0 跳过逻辑冲突）
+    # 提交生成时一次性扣除；出图阶段系统失败全额退还并置 0；删除/重生成不退。
+    ad_image_cost: Mapped[int] = mapped_column(Integer, default=0)
     # 生视频提示词增强路由（任务级覆盖）：content_ir=C臂（默认）| local=A臂；空=跟随全局默认
     video_prompt_mode: Mapped[str] = mapped_column(String(16), default="")
 

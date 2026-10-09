@@ -14,7 +14,7 @@
 
 import logging
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, NamedTuple, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -131,30 +131,21 @@ def _clean_fields(fields: Dict[str, str]) -> Tuple[Dict[str, str], List[Dict[str
 # ------------------------------------------------------------------ 生图（图像编辑）增强
 ENH_GARMENT_LOCK = (
     "Use the exact garment from {tag} and keep it identical: same silhouette, colour, material, sheen, "
-    "construction, neckline, hem layers, trims, pattern, hardware, length and proportions; keep the garment "
-    "count unchanged; realistic fabric drape and natural folds. Do not redesign, recolour, restyle, lengthen, "
+    "construction, neckline, hem layers, trims, pattern, hardware, length and proportions; "
+    "realistic fabric drape and natural folds. Do not redesign, recolour, restyle, lengthen, "
     "shorten or crop it, never swap it for another garment, and do not add any print, logo or lettering that "
     "is not present in {tag}. "
 )
 ENH_PERSON_LOCK = (
-    "Keep the SAME single person as {tag}: identical face, hairstyle, hair colour, makeup, skin tone and body "
+    "Keep the SAME person as {tag}: identical face, hairstyle, hair colour, makeup, skin tone and body "
     "proportions. "
 )
 ENH_PERSON_RECAST = (
-    "Cast ONE single model and lock her identity (face, hairstyle, hair colour, skin tone, "
-    "body proportions): {subject}, dressed in the garment from {tag}. There must be exactly one person in the frame. "
-)
-ENH_SET_LOCK = (
-    "This is ONE single standalone photograph, not part of a set, not a series, not a storyboard and not "
-    "multiple views: show exactly one model wearing one garment in one scene, one camera angle, one frame. "
-    "Never place two or more panels, frames, tiles or copies of the model or garment in the same image. "
+    "Cast a model and lock her identity (face, hairstyle, hair colour, skin tone, "
+    "body proportions): {subject}, dressed in the garment from {tag}. "
 )
 ENH_TAIL = (
     " Keep the garment's exact colour, print and material identical to {tag}. "
-    "Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split "
-    "screen, not multiple panels, not a contact sheet, not a diptych or triptych, not a series of shots, not "
-    "multiple camera angles in one image, not a before-and-after, and not a side-by-side duplicate of the input. "
-    "There must be only one person and only one instance of the garment in the frame. "
     "No text, no lettering, no logo, no watermark anywhere in the image."
 )
 
@@ -220,7 +211,7 @@ def _enhance_image_garment(raw: str, *, specs: str = "", variant_index: int = 0,
         person = ENH_PERSON_RECAST.format(subject=subject, tag=product_tag)
     else:
         person = ENH_PERSON_LOCK.format(tag=product_tag)
-    head = ENH_GARMENT_LOCK.format(tag=product_tag) + person + ENH_SET_LOCK
+    head = ENH_GARMENT_LOCK.format(tag=product_tag) + person
 
     scene_block = _scene_block(scene=scene, light=light, mood=mood, style=fields.get("style", ""),
                                extra=fields.get("extra", ""), quality=quality, tag=product_tag,
@@ -333,29 +324,20 @@ def _concept_line(subject: str, selling: List[str]) -> str:
 
 
 # 中性保真锁（非服装品类；禁用 garment/neckline/hem/model/dressed in/wearing/she/her/one model）
-ENH_SET_LOCK_NEUTRAL = (
-    "This is ONE single standalone photograph, not part of a set, not a series, not a storyboard and not "
-    "multiple views: show exactly one product in one scene, one camera angle, one frame. "
-    "Never place two or more panels, frames, tiles or copies of the product in the same image. "
-)
 ENH_TAIL_NEUTRAL = (
     " Keep the product's exact colour, label text layout and material identical to {tag}. "
-    "Output exactly one single full-frame photograph of one product - not a collage, not a grid, not a split "
-    "screen, not multiple panels, not a contact sheet, not a series of shots, not multiple camera angles in one "
-    "image, not a before-and-after, and not a side-by-side duplicate of the input. There must be only one "
-    "instance of the product in the frame. "
     "No text, no lettering, no logo, no watermark anywhere in the image that is not already present in {tag}."
 )
 NEUTRAL_LOCK_DRINK = (
     "Use the exact product from {tag} and keep it identical: the same bottle shape and silhouette, the same "
     "label position and text layout, the same liquid colour and liquid level, the same cap shape and colour, "
-    "and the same logo position and shape as {tag}. Keep the product count unchanged; do not change the "
-    "bottle shape or volume; do not add a second bottle; do not redesign, recolour or restyle the product. "
+    "and the same logo position and shape as {tag}. Do not change the "
+    "bottle shape or volume; do not redesign, recolour or restyle the product. "
 )
 NEUTRAL_LOCK_GENERIC = (
     "Use the exact product from {tag} and keep it identical: same shape, silhouette, colour, material, "
-    "surface finish, proportions, label and pattern placement, logo position and shape, and the same product "
-    "count as {tag}. Do not redesign, recolour, restyle, resize or replace it, and do not add any pattern, "
+    "surface finish, proportions, label and pattern placement, logo position and shape as {tag}. "
+    "Do not redesign, recolour, restyle, resize or replace it, and do not add any pattern, "
     "logo or lettering that is not present in {tag}. "
 )
 CATEGORY_LOCK: Dict[str, str] = {
@@ -398,6 +380,44 @@ NEUTRAL_CAMERA_VARIANTS = [
 ]
 
 
+# ------------------------------------------------------------------ 生图品类样式注册表（B2）
+# category → 生图提示词的样式（保真锁 / 收尾条款，均含 {tag} 占位）+ 机位库标识。
+# 调用方（advimage._llm_variant_prompt）只按 category 查表拼装，不再写 if category == "服装" 之类分支；
+# 新增品类（饮料/服装/音响…）只需在此登记一行，锁文本复用已有常量，调用方零改动。
+class ImageStyle(NamedTuple):
+    lock: str       # 保真锁模板（含 {tag}）
+    tail: str       # 收尾条款模板（含 {tag}）
+    cameras: str    # 机位库标识："garment"=模特上身（advprompt）| "neutral"=产品特写
+
+
+# 服装走模特上身机位；其余品类（饮品/食品/鞋包/美妆/3C/家居/其他/未识别）走中性产品特写机位。
+# 锁文本全部复用上方常量（NEUTRAL_LOCK_DRINK / NEUTRAL_LOCK_GENERIC 等），不重复定义字符串。
+IMAGE_STYLE: Dict[str, ImageStyle] = {
+    "服装": ImageStyle(ENH_GARMENT_LOCK, ENH_TAIL, "garment"),
+    "饮品": ImageStyle(NEUTRAL_LOCK_DRINK, ENH_TAIL_NEUTRAL, "neutral"),
+}
+# 未登记品类的回退样式：通用中性产品锁（等价旧 CATEGORY_LOCK.get(category, NEUTRAL_LOCK_GENERIC)）。
+IMAGE_STYLE_FALLBACK = ImageStyle(NEUTRAL_LOCK_GENERIC, ENH_TAIL_NEUTRAL, "neutral")
+
+
+def image_lock_parts(category: str, tag: str) -> Tuple[str, List[str], str]:
+    """按品类查注册表，返回生图提示词的 (保真硬前缀, 机位变体列表, 收尾条款)。
+
+    B2：集中品类逻辑，去 advimage 里的 if category == "…" 硬编码。模板中的 {tag} 用商品指代符
+    （如 <image1>）填充。
+    机位库按 style.cameras 取用：garment 迟到导入 advprompt（避免循环依赖），neutral 用本模块常量。
+    """
+    style = IMAGE_STYLE.get(category, IMAGE_STYLE_FALLBACK)
+    head = style.lock.format(tag=tag)
+    tail = style.tail.format(tag=tag)
+    if style.cameras == "garment":
+        from app.services.advprompt import RECIPE_SET_KEEP_CAMERA  # 迟到导入，避免循环依赖
+        cameras = list(RECIPE_SET_KEEP_CAMERA)
+    else:
+        cameras = list(NEUTRAL_CAMERA_VARIANTS)
+    return head, cameras, tail
+
+
 def _enhance_image_neutral(raw, *, category, specs, variant_index, total, product_tag, shots, defaults):
     """非服装品类的生图增强：中性保真锁（不出现服装/模特措辞）+ 品种适配默认值。
 
@@ -416,14 +436,13 @@ def _enhance_image_neutral(raw, *, category, specs, variant_index, total, produc
     extra_f = fields.get("extra", "").strip()
 
     if category == CATEGORY_UNKNOWN:
-        head = NEUTRAL_LOCK_GENERIC.format(tag=product_tag) + ENH_SET_LOCK_NEUTRAL.format(tag=product_tag)
+        head = NEUTRAL_LOCK_GENERIC.format(tag=product_tag)
         scene_block = ""
         if scene or light or mood or quality or style or extra_f:
             scene_block = _scene_block(scene=scene, light=light, mood=mood, style=style, extra=extra_f,
                                        quality=quality, tag=product_tag, kept_defaults=defaults_used)
     else:
-        head = CATEGORY_LOCK.get(category, NEUTRAL_LOCK_GENERIC).format(tag=product_tag) \
-            + ENH_SET_LOCK_NEUTRAL.format(tag=product_tag)
+        head = CATEGORY_LOCK.get(category, NEUTRAL_LOCK_GENERIC).format(tag=product_tag)
         if not scene and defaults:
             scene = CATEGORY_SCENE.get(category, CATEGORY_SCENE_DEFAULT)
             defaults_used.append("scene")
