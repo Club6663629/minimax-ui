@@ -42,7 +42,8 @@ PE_FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fi
 若没有人物参考图：可自行设计模特与姿态，但不得改变商品。
 
 【铁律 7｜单张画面】
-无论输入几张图（商品图 / 商品细节图 / 人物参考图），最终只输出**一张完整照片**（one single full-frame photograph）。禁止拼贴、多格、分屏、多视角并置、画中画、把输入图原样并排复刻；多张输入图只用于「理解商品」，绝不是要求把它们画进同一张画布。
+无论输入几张图（商品图 / 商品细节图 / 人物参考图），最终只输出**一张完整照片**（one single full-frame photograph）。禁止拼贴、多格、分屏、多视角并置、画中画、组图、故事板、把输入图原样并排复刻；多张输入图只用于「理解商品」，绝不是要求把它们画进同一张画布。
+正文只写**一个机位、一个景别、一个瞬间**；绝不要写 "Shot 1/Shot 2"、"this set"、"a series of"、"multiple views"、"from different angles" 这类暗示多张/系列的措辞（下游 qwen21 会据此渲染成多格拼接图）。画面中**只允许一个人物、一件商品**，不得写 two models / several people / duplicated person，也不得把同一人或同一商品并排复刻多份。
 
 【铁律 6｜输出格式】
 只输出**一段连续指令**，顺序固定：
@@ -61,7 +62,9 @@ NEGATIVE_PROMPT = (
     "cropped product, product cut off by frame, blurry product, low detail, "
     "collage, photo collage, image grid, multiple panels, split screen, diptych, triptych, "
     "side-by-side duplicate views, contact sheet, picture-in-picture, repeated scene, "
-    "重复人物, 拼贴, 多格, 分屏, 多视角并置"
+    "multiple views, series of shots, storyboard, film strip, comic panels, before-and-after split, "
+    "grid layout, multiple people, duplicated person, cloned person, two models, several copies of the product, "
+    "重复人物, 拼贴, 多格, 分屏, 多视角并置, 分镜, 多视图, 故事板, 人物克隆, 多个模特"
 )
 
 
@@ -102,23 +105,25 @@ RECIPE_SCENE = (
 )
 # 5 机位（逐字照抄 gen.py VARIANTS —— 只换机位/姿态，商品/角色/场景不变 = 一套图）
 RECIPE_SHOT_VARIANTS = [
-    "Shot 1 - full-body front street-style photo, standing straight facing the camera, eye contact, hands relaxed at sides.",
-    "Shot 2 - full-body side view walking mid-stride along the sidewalk, looking back over her shoulder at the camera.",
-    "Shot 3 - candid motion shot walking towards the camera, slight wind, one hand lifting her hair, natural laugh.",
-    "Shot 4 - medium half-body shot, three-quarter turn, one hand on hip, confident chin-up expression.",
-    "Shot 5 - full-body shot leaning against the dark wood window frame, one leg crossed over the other, slight low camera angle.",
+    "Camera: full-body front street-style photo, standing straight facing the camera, eye contact, hands relaxed at sides.",
+    "Camera: full-body side view walking mid-stride along the sidewalk, looking back over her shoulder at the camera.",
+    "Camera: candid motion shot walking towards the camera, slight wind, one hand lifting her hair, natural laugh.",
+    "Camera: medium half-body shot, three-quarter turn, one hand on hip, confident chin-up expression.",
+    "Camera: full-body shot leaning against the dark wood window frame, one leg crossed over the other, slight low camera angle.",
 ]
 # 用户自带场景时用的中性机位（去掉街道/橱窗字样，避免与用户场景自相矛盾）
 RECIPE_CAMERA_VARIANTS = [
-    "Shot 1 - full-body front view, standing straight facing the camera, eye contact, hands relaxed at sides.",
-    "Shot 2 - full-body three-quarter/side view, slight turn, looking towards the camera.",
-    "Shot 3 - candid walking shot moving towards the camera, natural motion, slight wind, one hand lifting her hair.",
-    "Shot 4 - medium half-body shot, three-quarter turn, one hand on hip, confident chin-up expression.",
-    "Shot 5 - full-body shot at a slight low camera angle, one leg crossed over the other, relaxed pose.",
+    "Camera: full-body front view, standing straight facing the camera, eye contact, hands relaxed at sides.",
+    "Camera: full-body three-quarter/side view, slight turn, looking towards the camera.",
+    "Camera: candid walking shot moving towards the camera, natural motion, slight wind, one hand lifting her hair.",
+    "Camera: medium half-body shot, three-quarter turn, one hand on hip, confident chin-up expression.",
+    "Camera: full-body shot at a slight low camera angle, one leg crossed over the other, relaxed pose.",
 ]
 RECIPE_TAIL = (
     " Keep the garment's exact colour, print and material identical to {tag}. "
-    "Output one single full-frame photograph - not a collage, not a grid, not a split-screen, not multiple panels. "
+    "Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split-screen, "
+    "not multiple panels, not a series of shots, not multiple camera angles in one image; only one person and only "
+    "one instance of the garment in the frame. "
     "no text, no lettering, no logo, no watermark anywhere in the image."
 )
 RECIPE_EXTRA_IMAGES = (
@@ -141,15 +146,17 @@ RECIPE_SET_KEEP_HEAD = (
     "as <image1>. "
 )
 RECIPE_SET_KEEP_CAMERA = [
-    "Shot 1 - full-body front view, standing straight facing the camera, eye contact, hands relaxed at her sides, full length visible from head to shoes.",
-    "Shot 2 - full-body three-quarter view, body slightly turned away then looking back towards the camera, one hand lightly lifting her hair, full length visible.",
-    "Shot 3 - medium shot framed from the waist up, slight low camera angle, confident relaxed expression, looking straight at the camera.",
-    "Shot 4 - full-body side view, standing in profile, chin slightly raised, full length visible.",
-    "Shot 5 - full-body candid walking shot moving towards the camera, natural motion, slight wind.",
+    "Camera: full-body front view, standing straight facing the camera, eye contact, hands relaxed at her sides, full length visible from head to shoes.",
+    "Camera: full-body three-quarter view, body slightly turned away then looking back towards the camera, one hand lightly lifting her hair, full length visible.",
+    "Camera: medium shot framed from the waist up, slight low camera angle, confident relaxed expression, looking straight at the camera.",
+    "Camera: full-body side view, standing in profile, chin slightly raised, full length visible.",
+    "Camera: full-body candid walking shot moving towards the camera, natural motion, slight wind.",
 ]
 RECIPE_SET_KEEP_TAIL = (
-    " Output one single full-frame photograph - not a collage, not a grid, not a split screen, not multiple panels, "
-    "not a contact sheet, not a diptych or triptych. No text, no lettering, no logo, no watermark anywhere in the image."
+    " Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split screen, "
+    "not multiple panels, not a contact sheet, not a diptych or triptych, not a series of shots, not multiple camera "
+    "angles in one image. There must be only one person and only one instance of the garment in the frame. "
+    "No text, no lettering, no logo, no watermark anywhere in the image."
 )
 
 
@@ -160,7 +167,7 @@ def set_keep_prompt(*, scenario: str = "", variant_index: int = 0, specs: str = 
         p += "The garment is %s. " % specs
     sc = (scenario or "").strip()
     if sc:
-        p += "Mood / art direction for this set: %s. " % sc
+        p += "Mood / art direction for this photograph: %s. " % sc
     p += RECIPE_SET_KEEP_CAMERA[int(variant_index) % len(RECIPE_SET_KEEP_CAMERA)]
     return p + RECIPE_SET_KEEP_TAIL
 
@@ -259,22 +266,21 @@ def truncate(text: str, n: int = 400) -> str:
 # ---------------------------------------------------------------- P2.5「一套图」（复刻 2026-10-07 手动成功配方）
 # 10-07 成功要点：固定人物 + 固定场景 + 固定商品，只换机位 → 一批图即「一套图」。
 SET_PERSONA_SCENE = (
-    "[固定人物｜这一套图逐字复用，不得改动] A 23-year-old American white female fashion model, 178 cm, slim model "
-    "figure, brown hair; keep the identical face, hairstyle, hair colour, skin tone, makeup and body proportions in "
-    "every shot of this set.\n"
-    "[固定场景｜这一套图逐字复用，不得改动] Keep one single consistent scene for the whole set, with the same "
-    "location, background, lighting, colour grading and depth of field in every shot; overcast soft light, "
+    "[固定人物｜逐字复用，不得改动] A 23-year-old American white female fashion model, 178 cm, slim model "
+    "figure, brown hair; keep the identical face, hairstyle, hair colour, skin tone, makeup and body proportions.\n"
+    "[固定场景｜逐字复用，不得改动] Keep one single consistent scene, with the same "
+    "location, background, lighting, colour grading and depth of field; overcast soft light, "
     "cinematic film-like cool grading.\n"
-    "[整套一致] Every image of this set is one frame from the SAME single photo shoot: the SAME one model wearing the "
-    "SAME single product in the SAME scene. Only the camera angle, framing and pose may change; do not change the model, "
-    "the outfit, the scene, the lighting or the grading between shots."
+    "[单张画面] This is ONE single standalone photograph, not a set, not a series and not multiple views: the SAME one "
+    "model wearing the SAME single product in the SAME scene, shown from one camera angle in one frame. Do not place "
+    "two or more panels, frames or copies of the model or product in the same image."
 )
 
 SHOT_VARIANTS = list(RECIPE_SHOT_VARIANTS)
 
 
 def set_directive(scenario: str, index: int, total: int) -> str:
-    """把用户一句话场景扩成「同一套图」指令：固定人物/场景 + 本张机位（第 index/total 张）。"""
+    """把用户一句话场景扩成单图指令：固定人物/场景 + 本张机位（第 index/total 张，各自独立成图）。"""
     shot = SHOT_VARIANTS[int(index) % len(SHOT_VARIANTS)]
     head = (scenario or "").strip()
-    return ("%s\n\n%s\n\n[本张机位｜第 %d/%d 张] %s" % (head, SET_PERSONA_SCENE, index + 1, total, shot)).strip()
+    return ("%s\n\n%s\n\n[本张机位] %s" % (head, SET_PERSONA_SCENE, shot)).strip()

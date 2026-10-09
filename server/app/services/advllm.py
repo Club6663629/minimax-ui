@@ -75,7 +75,10 @@ qwen21 能直接执行的编辑指令正文——**不是从零自由创作**。
   qwen21 已内置这类倾向，堆砌反而干扰出图。
 - **不要写负向词**：qwen21 默认不生成文字与水印，正文里不要出现 no text / no watermark / no logo 之类；
   负向约束由后端统一拼装。除非 user 给了**引号内确切文案**，此时只允许逐字引用（不改写/不翻译/不追加），同一画面单语。
-- **只描述一张完整照片**（one single full-frame photograph）：禁止拼贴、多格、分屏、多视角并置、画中画。
+- **只描述一张完整照片**（one single full-frame photograph）：禁止拼贴、多格、分屏、多视角并置、画中画、组图、故事板。
+  正文只写**一个机位、一个景别、一个瞬间**；**绝不要**写 "Shot 1/Shot 2"、"this set"、"a series of"、"multiple views"、
+  "before-and-after"、"from different angles" 这类暗示多张/系列的措辞（下游 qwen21 会据此渲染成多格拼接图）。
+  画面中**只允许一个人物、一件商品**：不要写 two models / several people / duplicated person，也不要把同一人或同一商品并排复刻多份。
 
 【输出格式（严格遵守）】
 只输出**一段连续的英文正文**，聚焦：如何保留 `<image1>` 中的商品 + 场景/机位/景别/光线/构图/氛围/道具。

@@ -141,18 +141,20 @@ ENH_PERSON_LOCK = (
     "proportions. "
 )
 ENH_PERSON_RECAST = (
-    "Cast ONE single model for the whole set and lock her identity (face, hairstyle, hair colour, skin tone, "
-    "body proportions) across every shot: {subject}, dressed in the garment from {tag}. "
+    "Cast ONE single model and lock her identity (face, hairstyle, hair colour, skin tone, "
+    "body proportions): {subject}, dressed in the garment from {tag}. There must be exactly one person in the frame. "
 )
 ENH_SET_LOCK = (
-    "Every image of this set must look like one frame from the SAME single photo shoot: the same one model "
-    "wearing the same single garment, in the same scene, lighting and colour grading; only the camera angle, "
-    "framing and pose change between shots. "
+    "This is ONE single standalone photograph, not part of a set, not a series, not a storyboard and not "
+    "multiple views: show exactly one model wearing one garment in one scene, one camera angle, one frame. "
+    "Never place two or more panels, frames, tiles or copies of the model or garment in the same image. "
 )
 ENH_TAIL = (
     " Keep the garment's exact colour, print and material identical to {tag}. "
-    "Output one single full-frame photograph - not a collage, not a grid, not a split screen, not multiple "
-    "panels, not a contact sheet, not a diptych or triptych, not a side-by-side duplicate of the input. "
+    "Output exactly one single full-frame photograph of one person - not a collage, not a grid, not a split "
+    "screen, not multiple panels, not a contact sheet, not a diptych or triptych, not a series of shots, not "
+    "multiple camera angles in one image, not a before-and-after, and not a side-by-side duplicate of the input. "
+    "There must be only one person and only one instance of the garment in the frame. "
     "No text, no lettering, no logo, no watermark anywhere in the image."
 )
 
@@ -332,14 +334,16 @@ def _concept_line(subject: str, selling: List[str]) -> str:
 
 # 中性保真锁（非服装品类；禁用 garment/neckline/hem/model/dressed in/wearing/she/her/one model）
 ENH_SET_LOCK_NEUTRAL = (
-    "Every image of this set must look like one frame from the SAME single shoot: the same single product, "
-    "in the same scene, lighting and colour grading; only the camera angle, framing and composition change "
-    "between shots. "
+    "This is ONE single standalone photograph, not part of a set, not a series, not a storyboard and not "
+    "multiple views: show exactly one product in one scene, one camera angle, one frame. "
+    "Never place two or more panels, frames, tiles or copies of the product in the same image. "
 )
 ENH_TAIL_NEUTRAL = (
     " Keep the product's exact colour, label text layout and material identical to {tag}. "
-    "Output one single full-frame photograph - not a collage, not a grid, not a split screen, not multiple "
-    "panels, not a contact sheet, not a side-by-side duplicate of the input. "
+    "Output exactly one single full-frame photograph of one product - not a collage, not a grid, not a split "
+    "screen, not multiple panels, not a contact sheet, not a series of shots, not multiple camera angles in one "
+    "image, not a before-and-after, and not a side-by-side duplicate of the input. There must be only one "
+    "instance of the product in the frame. "
     "No text, no lettering, no logo, no watermark anywhere in the image that is not already present in {tag}."
 )
 NEUTRAL_LOCK_DRINK = (
@@ -386,11 +390,11 @@ CATEGORY_QUALITY_DEFAULT = "high resolution, sharp focus, clean commercial produ
 
 # 非服装品类机位（产品特写，无模特/无全身站位）
 NEUTRAL_CAMERA_VARIANTS = [
-    "Shot 1 - centered hero product shot, straight-on front view, the product fully in frame with generous clean empty space around it.",
-    "Shot 2 - three-quarter angled product shot from a slightly high camera angle, the label clearly readable.",
-    "Shot 3 - close-up product shot on the label and cap, shallow depth of field.",
-    "Shot 4 - slightly low hero camera angle, the product standing upright with a soft reflection beneath it.",
-    "Shot 5 - top-down flat-lay product shot on the tabletop with a few simple props around it.",
+    "Camera: centered hero product shot, straight-on front view, the product fully in frame with generous clean empty space around it.",
+    "Camera: three-quarter angled product shot from a slightly high camera angle, the label clearly readable.",
+    "Camera: close-up product shot on the label and cap, shallow depth of field.",
+    "Camera: slightly low hero camera angle, the product standing upright with a soft reflection beneath it.",
+    "Camera: top-down flat-lay product shot on the tabletop with a few simple props around it.",
 ]
 
 
