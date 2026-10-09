@@ -125,9 +125,9 @@ def _ratio_label(width: int, height: int) -> str:
 
 
 def _llm_variant_prompt(*, scene, scenario, specs, category, variant_index, total):
-    """LLM 增强臂：代码拼「保真硬前缀 + LLM 镜头语言正文 + 多角度引导 + 收尾条款」。
+    """LLM 增强臂：代码拼「保真硬前缀 + LLM 镜头语言正文 + 单帧约束 + 收尾条款」。
 
-    保真前缀/多角度引导/收尾全部由代码写死（不可被 LLM 覆盖）；正文过 enhance_ok 守门，
+    保真前缀/单帧约束/收尾全部由代码写死（不可被 LLM 覆盖）；正文过 enhance_ok 守门，
     未过或 LLM 不可用则回退本地规则增强（0 付费）。返回 (最终提示词, 来源 llm|local, 保真前缀)。
     """
     tag = "<image1>"
@@ -135,9 +135,9 @@ def _llm_variant_prompt(*, scene, scenario, specs, category, variant_index, tota
     # B2：品类保真锁/收尾集中在 advenhance.IMAGE_STYLE 注册表，此处只查表拼装（不写 if category == "服装" 之类分支）。
     head, _cameras, tail = advenhance.image_lock_parts(category, tag)
     if body:
-        # 批量出图：N 张共用这一段提示词，用「多角度」引导替代固定单机位——同一批渲染自然落在不同角度，
-        # 既有镜头变化又组内一致（不再用 _cameras[variant_index] 把角度写死）。
-        cand = head + body + " " + advenhance.ENH_MULTI_ANGLE + tail
+        # 批量出图：N 张共用这一段提示词。ENH_SINGLE_FRAME 强制「单主体/单机位/单张全画幅」，
+        # 修复多角度措辞导致的单帧多人并列（克隆）缺陷；组内一致仍由同提示词+同 seed+批量保证。
+        cand = head + body + " " + advenhance.ENH_SINGLE_FRAME + tail
         if advenhance.enhance_ok(cand, stage="image", product_tag=tag):
             return cand, "llm", head
         logger.warning("LLM 正文未过保真守门，回退本地规则（第 %d 张）", int(variant_index) + 1)

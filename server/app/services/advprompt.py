@@ -31,6 +31,9 @@ PE_FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fi
 【铁律 3｜只允许改动镜头语言】
 你可以自由创作的只有：场景、机位、景别、光线、氛围、构图、留白、道具。
 商品本体保持不变。
+输出必须描述**单张全画幅的单一画面**（one single full-frame photograph filling the whole canvas）；
+**绝不能是拼图/多图排版**：不得出现 collage / contact sheet / 九宫格 / 网格 / 分屏 / 多联画（diptych/triptych）/ 画中画，
+也不得把同一主体的多个角度或多个副本并排塞进一张图。
 
 【铁律 4｜默认不生成任何文字】
 除非用户消息中给出了**确切文案**（引号内的原文），否则输出结尾必须写：
@@ -46,7 +49,7 @@ PE_FIDELITY_SYSTEM = """# 电商商品保真增强器 v1（E-commerce Product-Fi
 (1) 保真条款（英文，指向商品图）；
 (2) 商品结构清单逐字复述（形如「<image2> 的 版型 / 颜色 / 材质 / 领型 / 下摆 / 印花 / 五金 保持不变」，逐项核对输入图后写出，看不到的项写「未见」而不要臆造）；
 (3) 场景 / 机位 / 光线 / 构图（你的创作部分）；
-(4) 收尾条款（英文）："Keep the product in <image2> unchanged; no text, no logo, no watermark, no extra items."
+(4) 收尾条款（英文）："Keep the product in <image2> unchanged; render it as one single full-frame photo, not a collage, grid, contact sheet, split-view or multi-panel layout; no text, no logo, no watermark, no extra items."
 不要输出解释、标题、分点符号或任何前言后语，只输出这条指令。"""
 
 # A2｜负向提示词（写入模板 474.negative_prompt）
@@ -55,7 +58,12 @@ NEGATIVE_PROMPT = (
     "added print, added pattern, logo, lettering, watermark, caption, on-screen text, "
     "garbled text, gibberish characters, extra items, "
     "wrong material, changed proportions, deformed hands, fused fingers, extra limbs, "
-    "cropped product, product cut off by frame, blurry product, low detail"
+    "cropped product, product cut off by frame, blurry product, low detail, "
+    "collage, contact sheet, split screen, split frame, multi-view layout, image grid, "
+    "2x2 grid, nine-grid, side-by-side panels, multiple panels, picture-in-picture, diptych, triptych, "
+    "duplicated subject, repeated subject, cloned person, two views, three views, several photos in one image, "
+    "two identical women, three identical women, multiple copies of the same person, tripled subject, mirrored twins, "
+    "head cropped, head cut off, face cut off, cropped head, no headroom"
 )
 
 

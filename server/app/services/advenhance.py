@@ -150,14 +150,19 @@ ENH_TAIL = (
 )
 
 
-# 批量出图（用户口径 A）：N 张候选共用同一段提示词、同一 seed、同一组参考图，靠这段「多角度」引导
-# 让同一批渲染自然落在不同机位/景别/构图上——既有镜头变化，又因同源而组内高度一致。
-# 措辞强调「单张全画幅、只取其中一个角度」，避免被理解成九宫格/拼贴。
-ENH_MULTI_ANGLE = (
-    " Shoot it from a natural, engaging camera angle as one frame of an advertising campaign whose shots span "
-    "varied angles, framings and compositions of the same subject in the same scene; this single full-frame "
-    "image captures just one such angle, while the subject, the product and every visible detail stay identical "
-    "across the whole campaign."
+# 批量出图（用户口径 A）：N 张候选共用同一段提示词、同一 seed、同一组参考图。
+# 【缺陷修复 20261009】原「多角度」措辞（…shots span varied angles…of the same subject）被 qwen21 误读成
+# 「一张图里要展示多个机位」，导致单帧内画出同一人物的 2~3 个并列副本（ad60030_1/2.png 三联人）。
+# 故改为「单帧完整性」硬约束：只渲染一个主体、一个机位、一张全画幅照片，并显式禁止复制/并列/拼贴；
+# 同时要求主体完整入画、头顶与边缘留余量（修复 0 号头顶被裁）。组内一致仍由「同提示词+同 seed+批量」保证，
+# 张与张之间的细微差别交给批量噪声自然分化，不再用文字索要「多角度」。
+ENH_SINGLE_FRAME = (
+    " Render exactly ONE single full-frame photograph of ONE single subject: one person only (or one product only), "
+    "captured from one camera angle at one moment, filling the whole canvas. Never duplicate, clone, mirror or repeat "
+    "the subject — no two or three copies of the same person standing side by side, no collage, contact sheet, grid, "
+    "split-screen, diptych, triptych or any multi-panel / multi-view layout. Keep the whole subject fully inside the "
+    "frame with a little breathing room above the head and at the sides; do not crop the head, face or feet, and do "
+    "not cut the product off."
 )
 
 
