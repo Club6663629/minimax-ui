@@ -125,19 +125,19 @@ def _ratio_label(width: int, height: int) -> str:
 
 
 def _llm_variant_prompt(*, scene, scenario, specs, category, variant_index, total):
-    """LLM 增强臂：代码拼「保真硬前缀 + LLM 镜头语言正文 + 本张机位 + 收尾条款」。
+    """LLM 增强臂：代码拼「保真硬前缀 + LLM 镜头语言正文 + 多角度引导 + 收尾条款」。
 
-    保真前缀/机位/收尾全部由代码写死（不可被 LLM 覆盖）；正文过 enhance_ok 守门，
+    保真前缀/多角度引导/收尾全部由代码写死（不可被 LLM 覆盖）；正文过 enhance_ok 守门，
     未过或 LLM 不可用则回退本地规则增强（0 付费）。返回 (最终提示词, 来源 llm|local, 保真前缀)。
     """
     tag = "<image1>"
     body = str((scene or {}).get("body", "")).strip() if scene else ""
-    # B2：品类逻辑集中在 advenhance.IMAGE_STYLE 注册表，此处只查表拼装（不写 if category == "服装" 之类分支）；
-    # 保真前缀/机位/收尾全部由注册表写死（不可被 LLM 覆盖），新增品类只改 advenhance 一处。
-    head, cameras, tail = advenhance.image_lock_parts(category, tag)
+    # B2：品类保真锁/收尾集中在 advenhance.IMAGE_STYLE 注册表，此处只查表拼装（不写 if category == "服装" 之类分支）。
+    head, _cameras, tail = advenhance.image_lock_parts(category, tag)
     if body:
-        camera = cameras[int(variant_index) % len(cameras)]
-        cand = head + body + " " + camera + tail
+        # 批量出图：N 张共用这一段提示词，用「多角度」引导替代固定单机位——同一批渲染自然落在不同角度，
+        # 既有镜头变化又组内一致（不再用 _cameras[variant_index] 把角度写死）。
+        cand = head + body + " " + advenhance.ENH_MULTI_ANGLE + tail
         if advenhance.enhance_ok(cand, stage="image", product_tag=tag):
             return cand, "llm", head
         logger.warning("LLM 正文未过保真守门，回退本地规则（第 %d 张）", int(variant_index) + 1)
@@ -192,6 +192,7 @@ def inject_image_job(
     height: int,
     product_names: Optional[Sequence[str]] = None,
     ref_names: Optional[Sequence[str]] = None,
+    batch_size: int = 1,
     resolution: int = 0,
     fidelity_pe: bool = True,
     canvas_follow_ratio: bool = True,
@@ -199,6 +200,7 @@ def inject_image_job(
     """注入一次出图任务（就地修改并返回）。scenario 为用户一句话场景（中文可）。
 
     product_names: 商品图（第 1 张为主商品真源，其余为细节图）；缺省退化为 product_name。
+    batch_size: >1 时一次提交批量出 N 张（共用同一提示词与 seed，组内一致性最强）。
     """
     ensure_fidelity_nodes(wf)
 
@@ -208,7 +210,7 @@ def inject_image_job(
 
     wf[NODE_LATENT]["inputs"]["width"] = int(width)
     wf[NODE_LATENT]["inputs"]["height"] = int(height)
-    wf[NODE_LATENT]["inputs"]["batch_size"] = 1
+    wf[NODE_LATENT]["inputs"]["batch_size"] = max(1, int(batch_size))
     wf[NODE_SAMPLER]["inputs"]["seed"] = int(seed)
     wf[NODE_SAVE]["inputs"]["filename_prefix"] = prefix
     refs = [str(r) for r in (list(ref_names) if ref_names else ([ref_name] if ref_name else [])) if r]
@@ -406,10 +408,100 @@ async def generate_candidates(
             logger.info("广告图任务 #%s：LLM 增强臂不可用（无 key 或无商品图），走本地规则", task_id)
 
     results: List[str] = []
+    n = max(1, int(count))
+    pe_on = bool(getattr(settings, "advideo_fidelity_pe", True))
+    enhance_on = bool(getattr(settings, "advideo_prompt_enhance", True))
+
     async with _lock():
-        for i in range(max(1, int(count))):
-            seed = random.randint(0, 2 ** 63 - 1)
-            wf = inject_image_job(
+        # ---- 批量出图（用户口径 A）：一次提交、N 张共用同一提示词与 seed → 组内一致性最强、最快最省。
+        # 与旧「逐张不同机位」相比：候选变成同一主镜头的多个高度一致版本，代价是失去刻意的多角度差异。
+        seed = random.randint(0, 2 ** 63 - 1)
+        wf = inject_image_job(
+            load_template(),
+            scenario=scenario,
+            product_name=product_names[0],
+            product_names=product_names,
+            ref_name=(ref_names[0] if ref_names else ""),
+            ref_names=ref_names,
+            prefix=f"advideo_{task_id}_batch",
+            seed=seed,
+            width=width,
+            height=height,
+            batch_size=n,
+            resolution=int(getattr(settings, "advideo_pe_resolution", 0) or 0),
+            fidelity_pe=bool(getattr(settings, "advideo_fidelity_pe", True)),
+            canvas_follow_ratio=bool(getattr(settings, "advideo_canvas_follow_ratio", True)),
+        )
+
+        # ---- 生图提示词：批量共用「主镜头」一份（variant_index=0），只构建一次 ----
+        # 默认走 LLM 增强 agent；pmode=pe 走 PE 改写；raw 走 SAI 直写；set/recipe 走本地规则。
+        prompt_text = ""
+        if pmode == "pe" and pe_on:
+            retries = max(1, int(getattr(settings, "advideo_pe_retries", 1) or 1))
+            prompt_text = await _pe_text(client, wf, retries=retries)
+        if not prompt_text and raw:
+            prompt_text = advprompt.raw_prompt(scenario=scenario, variant_index=0)
+        if not prompt_text and pmode == "llm":
+            prompt_text, llm_source, llm_head = _llm_variant_prompt(
+                scene=llm_scene, scenario=scenario, specs=specs, category=llm_category,
+                variant_index=0, total=n,
+            )
+            try:
+                (out_dir / f"{task_id}_0.enhance.json").write_text(json.dumps({
+                    "stage": "image", "mode": "llm", "source": llm_source, "category": llm_category,
+                    "batch_size": n,
+                    "llm_body": str((llm_scene or {}).get("body", "")) if llm_source == "llm" else "",
+                    "llm_usage": (llm_scene or {}).get("usage", {}) if llm_source == "llm" else {},
+                    "fidelity_head": llm_head[:240], "variant_index": 0, "text": prompt_text,
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                logger.warning("增强层记录落盘失败（不影响出图）")
+        if not prompt_text and pmode == "set" and enhance_on:
+            enh_i = advenhance.enhance_image_prompt(
+                scenario, specs=specs, variant_index=0, total=n, product_tag="<image1>",
+            )
+            prompt_text = str(enh_i["text"])
+            try:
+                (out_dir / f"{task_id}_0.enhance.json").write_text(
+                    json.dumps(enh_i, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                logger.warning("增强层记录落盘失败（不影响出图）")
+        if not prompt_text and pmode == "set":
+            prompt_text = advprompt.set_keep_prompt(scenario=scenario, variant_index=0, specs=specs)
+        if not prompt_text:
+            prompt_text = advprompt.recipe_prompt(
+                garment_tag=("<image1>" if not ref_names else "<image2>"),
+                scenario=scenario,
+                variant_index=0,
+                specs=specs,
+                n_images=len(product_names) + len(ref_names),
+            )
+        (out_dir / f"{task_id}_0.prompt.txt").write_text(prompt_text, encoding="utf-8")
+        logger.info(
+            "广告图任务 #%s：批量出图 %d 张（batch_size=%d，共用主镜头提示词 %d 字符，pmode=%s pe=%s 图数=%d）",
+            task_id, n, n, len(prompt_text), pmode, pe_on, len(product_names) + len(ref_names),
+        )
+
+        # ---- 提交批量采样，一次收回全部产物 ----
+        wf[NODE_ENCODE]["inputs"]["prompt"] = prompt_text
+        files: List[dict] = []
+        try:
+            prompt_id = await client.submit(_prune(wf, NODE_SAVE))
+            files = await client.wait_image_results(prompt_id)
+        except Exception:  # noqa: BLE001 —— 批量失败（OOM/节点异常）绝不丢任务，下面逐张补齐
+            logger.warning("广告图任务 #%s：批量出图失败，回退逐张出图补齐", task_id, exc_info=True)
+            files = []
+        for i, f in enumerate(files[:n]):
+            content = await client.fetch_file(f["filename"], f.get("subfolder", ""), f.get("type", "output"))
+            path = out_dir / f"{task_id}_{i}.png"
+            path.write_bytes(content)
+            results.append(str(path))
+            logger.info("广告图任务 #%s 第 %d/%d 张已落盘（批量）: %s", task_id, i + 1, n, path)
+
+        # ---- 批量产物不足 n 张：用同一主镜头提示词逐张补齐（新 seed、batch_size=1，保持一致）----
+        while len(results) < n:
+            i = len(results)
+            wfi = inject_image_job(
                 load_template(),
                 scenario=scenario,
                 product_name=product_names[0],
@@ -417,82 +509,16 @@ async def generate_candidates(
                 ref_name=(ref_names[0] if ref_names else ""),
                 ref_names=ref_names,
                 prefix=f"advideo_{task_id}_{i}",
-                seed=seed,
+                seed=random.randint(0, 2 ** 63 - 1),
                 width=width,
                 height=height,
+                batch_size=1,
                 resolution=int(getattr(settings, "advideo_pe_resolution", 0) or 0),
                 fidelity_pe=bool(getattr(settings, "advideo_fidelity_pe", True)),
                 canvas_follow_ratio=bool(getattr(settings, "advideo_canvas_follow_ratio", True)),
             )
-            # ---- 阶段 1：生图提示词 ----
-            # 默认走「10-07 手动成功配方」（同角色/同场景/同商品，只换机位 = 一套图）；
-            # 想要 PE 改写把 settings.advideo_image_prompt_mode 设成 "pe"。
-            # 2026-10-08 实测：PE(节点500) 多图输入时 3/3 返回空串，空串会经 484 原样喂给
-            # 474.prompt → 编辑指令为空 → 模型把 N 张输入并排复刻成 N 格拼贴。故空输出必须回退。
-            prompt_text = ""
-            pe_on = bool(getattr(settings, "advideo_fidelity_pe", True))
-            if pmode == "pe" and pe_on:
-                retries = max(1, int(getattr(settings, "advideo_pe_retries", 1) or 1))
-                prompt_text = await _pe_text(client, wf, retries=retries)
-            if not prompt_text and raw:
-                prompt_text = advprompt.raw_prompt(scenario=scenario, variant_index=i)
-            if not prompt_text and pmode == "llm":
-                prompt_text, llm_source, llm_head = _llm_variant_prompt(
-                    scene=llm_scene, scenario=scenario, specs=specs, category=llm_category,
-                    variant_index=i, total=max(1, int(count)),
-                )
-                try:
-                    (out_dir / f"{task_id}_{i}.enhance.json").write_text(json.dumps({
-                        "stage": "image", "mode": "llm", "source": llm_source, "category": llm_category,
-                        "llm_body": str((llm_scene or {}).get("body", "")) if llm_source == "llm" else "",
-                        "llm_usage": (llm_scene or {}).get("usage", {}) if llm_source == "llm" else {},
-                        "fidelity_head": llm_head[:240], "variant_index": i, "text": prompt_text,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:  # noqa: BLE001
-                    logger.warning("增强层记录落盘失败（不影响出图）")
-            if not prompt_text and pmode == "set" and bool(getattr(settings, "advideo_prompt_enhance", True)):
-                # ---- P4 提示词增强层（2026-10-08，0 付费纯规则）----
-                # 用户常只给一句大白话/若干【】标签：解析成结构化字段、补默认值、剔除与商品保真冲突的要求，
-                # 拼成「保真硬前缀 + 场景/光线/氛围/画质 + 本张机位 + 收尾条款」。同一任务各机位共用同一套字段文本。
-                enh_i = advenhance.enhance_image_prompt(
-                    scenario, specs=specs, variant_index=i, total=max(1, int(count)), product_tag="<image1>",
-                )
-                prompt_text = str(enh_i["text"])
-                try:
-                    (out_dir / f"{task_id}_{i}.enhance.json").write_text(
-                        json.dumps(enh_i, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:  # noqa: BLE001
-                    logger.warning("增强层记录落盘失败（不影响出图）")
-                logger.info(
-                    "广告图任务 #%s 第 %d/%d 张：增强层提示词 %d 字符（字段=%s；补默认=%s；剔除冲突 %d 条）",
-                    task_id, i + 1, count, len(prompt_text), sorted(enh_i["fields"].keys()),
-                    enh_i["defaults_used"], len(enh_i["conflicts"]),
-                )
-            if not prompt_text and pmode == "set":
-                prompt_text = advprompt.set_keep_prompt(scenario=scenario, variant_index=i, specs=specs)
-            if not prompt_text:
-                prompt_text = advprompt.recipe_prompt(
-                    garment_tag=("<image1>" if not ref_names else "<image2>"),
-                    scenario=scenario,
-                    variant_index=i,
-                    specs=specs,
-                    n_images=len(product_names) + len(ref_names),
-                )
-                # 供目视核对：配方提示词原文落盘（每张一份，避免「改了没说清」）
-                (out_dir / f"{task_id}_{i}.prompt.txt").write_text(prompt_text, encoding="utf-8")
-                logger.info(
-                    "广告图任务 #%s 第 %d/%d 张：配方提示词 %d 字符（机位 %d/%d，mode=%s pe=%s 图数=%d）",
-                    task_id, i + 1, count, len(prompt_text), (i % 5) + 1, 5, pmode, pe_on,
-                    len(product_names) + len(ref_names),
-                )
-            else:
-                (out_dir / f"{task_id}_{i}.prompt.txt").write_text(prompt_text, encoding="utf-8")
-                logger.info("广告图任务 #%s 第 %d/%d 张：提示词 %d 字符（来源=%s）",
-                            task_id, i + 1, count, len(prompt_text),
-                            "PE 改写" if pmode == "pe" else ("LLM 增强 agent" if pmode == "llm" else ("增强层(P4)" if (pmode == "set" and bool(getattr(settings, "advideo_prompt_enhance", True))) else "SAI 直写 set/配方")))
-            # ---- 阶段 2：把最终提示词写死进 474，只提交采样子图（PE 分支自动剪掉）----
-            wf[NODE_ENCODE]["inputs"]["prompt"] = prompt_text
-            prompt_id = await client.submit(_prune(wf, NODE_SAVE))
+            wfi[NODE_ENCODE]["inputs"]["prompt"] = prompt_text
+            prompt_id = await client.submit(_prune(wfi, NODE_SAVE))
             info = await client.wait_image_result(prompt_id)
             content = await client.fetch_file(
                 info["filename"], info.get("subfolder", ""), info.get("type", "output")
@@ -500,10 +526,8 @@ async def generate_candidates(
             path = out_dir / f"{task_id}_{i}.png"
             path.write_bytes(content)
             results.append(str(path))
-            logger.info("广告图任务 #%s 第 %d/%d 张已落盘: %s", task_id, i + 1, count, path)
-            # 间隙跑（A100 专属可配）：每张之间歇 gap 秒，避免连续满载触发 84C 热降频
-            gap = _gap_sec()  # 节点自身 gap 标签优先（A100=5s），否则回退全局配置
-            if gap > 0 and i < max(1, int(count)) - 1:
-                logger.info("间隙跑：等待 %.1fs 后出下一张", gap)
+            logger.info("广告图任务 #%s 第 %d/%d 张已落盘（补齐）: %s", task_id, i + 1, n, path)
+            gap = _gap_sec()  # 节点自身 gap 标签优先（A100=5s），避免连续满载触发 84C 热降频
+            if gap > 0 and len(results) < n:
                 await asyncio.sleep(gap)
     return results

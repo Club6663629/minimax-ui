@@ -769,6 +769,41 @@ class ComfyUIClient:
                 raise ComfyUIError("任务完成但未找到图片产物，请检查 SaveImageAdvanced 输出节点")
         raise ComfyUIError(f"ComfyUI 出图超时（{timeout_min} 分钟）")
 
+    async def wait_image_results(self, prompt_id: str) -> List[dict]:
+        """等待出图任务完成，返回**全部**图片产物文件信息（按 SaveImageAdvanced 输出顺序）。
+
+        与 wait_image_result（只取首张）的区别：批量出图（EmptyLatentImage.batch_size=N）时一次
+        提交即产出 N 张，需全部收回。用于广告图「批量单提示词」组内一致性路径。
+        """
+        timeout_min = settings.advideo_image_timeout_minutes
+        poll = max(1.0, float(settings.comfyui_poll_interval))
+        max_polls = max(1, int(timeout_min * 60 / poll))
+        async with httpx.AsyncClient(timeout=30) as client:
+            for _ in range(max_polls):
+                await asyncio.sleep(poll)
+                r = await client.get(f"{self.base}/history/{prompt_id}")
+                if r.status_code != 200:
+                    continue
+                entry = (r.json() or {}).get(prompt_id)
+                if not entry:
+                    continue
+                status_info = entry.get("status") or {}
+                if status_info.get("status_str") == "error":
+                    raise ComfyUIError(f"ComfyUI 执行出错: {status_info.get('messages', [])}")
+                if not status_info.get("completed"):
+                    continue
+                out: List[dict] = []
+                for outputs in entry.get("outputs", {}).values():
+                    for f in outputs.get("images") or []:
+                        if isinstance(f, dict) and f.get("filename", "").lower().endswith(
+                            (".png", ".jpg", ".jpeg", ".webp")
+                        ):
+                            out.append(f)
+                if out:
+                    return out
+                raise ComfyUIError("任务完成但未找到图片产物，请检查 SaveImageAdvanced 输出节点")
+        raise ComfyUIError(f"ComfyUI 出图超时（{timeout_min} 分钟）")
+
     async def fetch_file(self, filename: str, subfolder: str = "", folder_type: str = "output") -> bytes:
         async with httpx.AsyncClient(timeout=300) as client:
             r = await client.get(

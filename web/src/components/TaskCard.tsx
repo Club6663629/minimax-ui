@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 import { api, fileUrl } from "../api/client";
 import { humanizeError } from "../lib/humanize";
+import ImageLightbox from "./ImageLightbox";
 import {
   ACTIVE_STATUSES,
   MODE_LABEL,
@@ -56,6 +57,8 @@ export default function TaskCard({
 }) {
   const [retrying, setRetrying] = useState(false);
   const [upgrading, setUpgrading] = useState<"1k" | "2k" | "4k" | null>(null);
+  // 已完成广告片：查看当组候选广告图的大图预览（null=未打开，number=点开的第几张）
+  const [preview, setPreview] = useState<number | null>(null);
 
   async function retry() {
     setRetrying(true);
@@ -241,6 +244,31 @@ export default function TaskCard({
         </div>
       )}
 
+      {/* 已完成广告片：给一个方便回看当组候选广告图的入口（点击看大图） */}
+      {task.mode === "advideo" && task.status === "done" && task.ad_image_urls.length > 0 && (
+        <div className="mb-3">
+          <p className="mb-1.5 flex items-center gap-1.5 text-xs text-foreground-500">
+            <ImageIcon size={12} /> 候选广告图（{task.ad_image_urls.length} 张，点击查看大图）
+          </p>
+          <div className="flex gap-2 overflow-x-auto">
+            {task.ad_image_urls.map((u, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setPreview(i)}
+                className="relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-background-300 transition hover:border-primary-400"
+                title="点击查看大图"
+              >
+                <img src={fileUrl(u)} alt={`候选广告图 ${i + 1}`} className="h-full w-full object-cover" />
+                <span className="absolute left-1 top-1 rounded bg-foreground-950/60 px-1 text-[9px] text-background-50">
+                  {i + 1}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {task.status === "failed" && (
         <div className="flex items-start gap-3 rounded-xl bg-rose-500/[0.07] px-3 py-2.5">
           <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600" />
@@ -296,6 +324,17 @@ export default function TaskCard({
                   ? "排队中，等待分配算力"
                   : "视频生成中"}
         </div>
+      )}
+
+      {/* 候选广告图大图预览（可左右切换/下载） */}
+      {preview != null && task.ad_image_urls.length > 0 && (
+        <ImageLightbox
+          urls={task.ad_image_urls}
+          initialIndex={preview}
+          downloadBase={`advideo_${task.id}`}
+          title="候选广告图"
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   );

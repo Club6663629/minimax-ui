@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import ImageLightbox from "../components/ImageLightbox";
 import TaskCard from "../components/TaskCard";
 import { api, fileUrl } from "../api/client";
 import { humanizeError } from "../lib/humanize";
@@ -142,6 +143,8 @@ export default function AdvideoPanel({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState<number[]>([]); // 用户已主动离开的任务（不再自动弹回）
   const [node, setNode] = useState<AdvideoStatus | null>(null);
+  // 候选广告图大图预览：点击缩略图打开（urls=整组，index=点开的第几张）
+  const [preview, setPreview] = useState<{ urls: string[]; index: number } | null>(null);
 
   const productInput = useRef<HTMLInputElement>(null);
   const refInput = useRef<HTMLInputElement>(null);
@@ -582,7 +585,7 @@ export default function AdvideoPanel({
           <Loader2 size={22} className="mx-auto animate-spin text-primary-600" />
           <p className="mt-3 text-sm text-foreground-800">候选广告图生成中</p>
           <p className="mt-1 text-xs text-foreground-500">
-            本次已扣 {taskImageCost} 积分。生成期间任务不可取消，完成后将自动进入确认环节。
+            生成期间任务不可取消，完成后将自动进入确认环节。
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
             <button type="button" onClick={() => dismiss(activeTask.id)} className="btn-ghost !px-3 !py-1.5 text-xs">
@@ -606,7 +609,7 @@ export default function AdvideoPanel({
             <div className="flex-1">
               <h3 className="text-sm font-medium text-foreground-900">候选广告图已生成</h3>
               <p className="mt-0.5 text-xs text-foreground-500">
-                共 {usedImages} 张候选图（本组广告图积分已扣除）。确认后整组用于合成广告片，多角度参考使成片更贴近商品；如需重做可重新生成。
+                共 {usedImages} 张候选图（本组广告图积分已扣除）。同组候选同源生成、高度一致，确认后整组用于合成广告片，成片更稳定连贯；如需重做可重新生成。
               </p>
             </div>
             <span className={chipCls}>
@@ -616,12 +619,12 @@ export default function AdvideoPanel({
 
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
             {activeTask.ad_image_urls.map((u, i) => (
-              <a
+              <button
                 key={i}
-                href={fileUrl(u)}
-                download={`advideo_${activeTask.id}_${i + 1}.png`}
+                type="button"
+                onClick={() => setPreview({ urls: activeTask.ad_image_urls, index: i })}
                 className="group relative block overflow-hidden rounded-xl border border-background-300 transition hover:border-primary-400"
-                title="点击下载这张图"
+                title="点击查看大图"
               >
                 <img
                   src={fileUrl(u)}
@@ -633,9 +636,9 @@ export default function AdvideoPanel({
                   {i === 0 ? " · 主参考" : ""}
                 </span>
                 <span className="absolute bottom-2 right-2 hidden rounded-md bg-foreground-950/60 px-1.5 py-0.5 text-[10px] text-background-50 group-hover:block">
-                  下载
+                  查看大图
                 </span>
-              </a>
+              </button>
             ))}
           </div>
 
@@ -704,6 +707,17 @@ export default function AdvideoPanel({
               <TaskCard key={t.id} task={t} onChanged={onChanged} pricing={pricing} onRefreshUser={onRefreshUser} onResume={resumeTask} />
             ))}
         </div>
+      )}
+
+      {/* ---- 候选广告图大图预览（点击缩略图打开，可左右切换/下载）---- */}
+      {preview && (
+        <ImageLightbox
+          urls={preview.urls}
+          initialIndex={preview.index}
+          downloadBase={activeTask ? `advideo_${activeTask.id}` : "advideo"}
+          title="候选广告图"
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   );

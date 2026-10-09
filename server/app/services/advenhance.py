@@ -150,6 +150,17 @@ ENH_TAIL = (
 )
 
 
+# 批量出图（用户口径 A）：N 张候选共用同一段提示词、同一 seed、同一组参考图，靠这段「多角度」引导
+# 让同一批渲染自然落在不同机位/景别/构图上——既有镜头变化，又因同源而组内高度一致。
+# 措辞强调「单张全画幅、只取其中一个角度」，避免被理解成九宫格/拼贴。
+ENH_MULTI_ANGLE = (
+    " Shoot it from a natural, engaging camera angle as one frame of an advertising campaign whose shots span "
+    "varied angles, framings and compositions of the same subject in the same scene; this single full-frame "
+    "image captures just one such angle, while the subject, the product and every visible detail stay identical "
+    "across the whole campaign."
+)
+
+
 def _scene_block(*, scene: str, light: str, mood: str, style: str, extra: str, quality: str, tag: str,
                  kept_defaults: List[str]) -> str:
     parts: List[str] = []
