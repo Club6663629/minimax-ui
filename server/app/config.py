@@ -38,11 +38,11 @@ class Settings(BaseSettings):
     director_enabled: bool = False
     # ---- 电商广告片 advideo：商品图 → 广告图（人工确认） → 广告视频 ----
     advideo_enabled: bool = True
-    # ---- 【临时 2026-10-08 · 用户指令】广告片功能开发中：仅白名单账号可见/可用 ----
-    # 一键放开：把 advideo_admin_only 改为 False（或 .env 加 ADVIDEO_ADMIN_ONLY=false）后
-    #   systemctl restart minimax-ui-api  即恢复全员可用（前端自动显示入口）。
-    advideo_admin_only: bool = True
-    # 白名单（逗号分隔，大小写无关）；留空则退化为「role=admin 可见」
+    # 广告片已上线（2026-10-09 拍板放开）：默认全员可用。
+    # 如需临时收紧回白名单，把 advideo_admin_only 改回 True（或 .env 加 ADVIDEO_ADMIN_ONLY=true）后
+    #   systemctl restart minimax-ui-api 即生效（前端入口自动隐藏）。
+    advideo_admin_only: bool = False
+    # 白名单（逗号分隔，大小写无关）；仅 advideo_admin_only=True 时生效，留空则退化为「role=admin 可见」
     advideo_admin_emails: str = "admin@minimax-studio.com"
     # 广告图阶段专用 qwen21 节点（ComfyUI HTTP 入口，例 http://192.168.10.246:8192）
     advideo_image_worker: str = ""

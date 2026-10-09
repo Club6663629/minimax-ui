@@ -91,7 +91,7 @@ function usePopover() {
 const chipCls =
   "inline-flex items-center gap-1.5 rounded-full border border-background-300 bg-background-50 px-3 py-1.5 text-xs text-foreground-700 transition hover:border-primary-400";
 
-/** 模式菜单：单段模式 / 电商广告片 / 分镜模式 / 资产管理。 */
+/** 模式菜单：单段模式 / 分镜模式 / 广告片 / 资产管理。 */
 function ModeTabs({
   mode,
   onChange,
@@ -103,11 +103,11 @@ function ModeTabs({
 }) {
   const tabs: { key: CreateMode; label: string; icon: React.ReactNode }[] = [
     { key: "single", label: "单段模式", icon: <Film size={14} /> },
-    // 广告片=开发中：仅白名单账号（后端 advideo_admin_only）渲染该入口
+    { key: "director", label: "分镜模式", icon: <Clapperboard size={14} /> },
+    // 广告片已上线：后端可用性探针通过即渲染入口（服务异常时隐藏，误入只见占位文案）
     ...(showAdvideo
       ? [{ key: "advideo" as CreateMode, label: "广告片", icon: <Package size={14} /> }]
       : []),
-    { key: "director", label: "分镜模式", icon: <Clapperboard size={14} /> },
     { key: "assets", label: "资产管理", icon: <Images size={14} /> },
   ];
   return (
@@ -924,8 +924,7 @@ function SettingsMenu({
 export default function CreatePage() {
   const { user, refreshUser } = useAuth();
   const [mode, setMode] = useState<CreateMode>("single");
-  // 广告片（开发中）可见性：以后端 advideo_admin_only 闸门为唯一真源
-  // （非白名单账号探针 403 → 不渲染入口，且即使误入也只见占位文案）
+  // 广告片可见性：以后端状态探针为唯一真源（advideo_admin_only 已放开；服务异常时隐藏入口，误入只见占位文案）
   const [advideoAllowed, setAdvideoAllowed] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -1198,7 +1197,7 @@ export default function CreatePage() {
 
       {mode === "advideo" && !advideoAllowed && (
         <div className="panel p-10 text-center text-sm text-foreground-500">
-          广告片功能开发中，敬请期待。
+          广告片服务暂不可用，请稍后再试。
         </div>
       )}
 
