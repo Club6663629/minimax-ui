@@ -39,7 +39,7 @@ ASPECT_PRESETS = {
     "9:16": "9:16 (Portrait Widescreen)",
     "1:1": "1:1 (Square)",
 }
-MEGAPIXELS_768P = 1.0
+MEGAPIXELS_768P = 0.98  # 2026-09-28 拍板：0.98 百万像素 = H3 原生 768p 画布（16:9 即 1344x768，避开 1.0 档超面积上限）
 
 # ---- 超分（SeedVR2）分时参数，见《H3集群部署方案》§2 ----
 UPSCALE_TIERS = {
@@ -73,6 +73,10 @@ UPSCALE_TEMPORAL_OVERLAP = 3   # 时域重叠帧数
 
 
 def load_workflow(mode: str) -> dict:
+    # 电商广告片：视频阶段复用 r2v（ref2va）模板与权重族；广告图阶段另有独立模板
+    # （server/workflows/advideo_image_api.json，见 services/advimage.py）
+    if mode == "advideo":
+        mode = "r2v"
     path = WORKFLOW_DIR / f"{mode}_api.json"
     if not path.exists():
         raise ComfyUIError(f"缺少工作流模板: {path}")
@@ -89,7 +93,7 @@ DIRECTOR_OVERLAP_FRAMES = 39
 DIRECTOR_MAX_SEGMENT_FRAMES = 3592
 DIRECTOR_SECOND_PASS_MODEL = "minimax_h3_latent_upscaler_3d_fp16.safetensors"
 # 已实测的导演台画布（16:9 / megapixels=1.0 / multiple=32）
-DIRECTOR_SIZE = {"16:9": (1376, 768), "9:16": (768, 1376)}
+DIRECTOR_SIZE = {"16:9": (1344, 768), "9:16": (768, 1344)}  # 2026-09-28：对齐 0.98MP 768p 原生画布
 
 
 def align_h3_frames(requested_frames: float, fps: int = 24) -> int:
@@ -374,6 +378,11 @@ def inject(
     r2v 模式下 image_names / video_names / audio_names 分别对应参考图(≤9)、
     参考视频(≤3，每条自动接其自带音轨)与独立参考音频(≤3)。
     """
+    # 2026-10-08 修复：advideo 视频阶段复用 r2v 模板（load_workflow 内部已重映射，
+    # 但 inject 未重映射），导致 advideo 不进 r2v 重建分支，模板 demo 参考图
+    # (red_superboy.../mecha_dragon...) 残留 → ComfyUI 报 node 139 Invalid image file。
+    if mode == "advideo":
+        mode = "r2v"
     image_names = list(image_names or [])
     video_names = list(video_names or [])
     audio_names = list(audio_names or [])
@@ -727,6 +736,38 @@ class ComfyUIClient:
                                 return f
                 raise ComfyUIError("任务完成但未找到视频产物，请检查工作流输出节点")
         raise ComfyUIError(f"ComfyUI 任务超时（{settings.comfyui_timeout_minutes} 分钟）")
+
+    async def wait_image_result(self, prompt_id: str) -> dict:
+        """等待出图任务完成，返回首个图片产物文件信息。
+
+        与 wait_result 的区别：不过滤视频后缀（SaveImageAdvanced 产物在 outputs.images），
+        超时用 settings.advideo_image_timeout_minutes（含 PE 冷启 195-285s 余量）。
+        """
+        timeout_min = settings.advideo_image_timeout_minutes
+        poll = max(1.0, float(settings.comfyui_poll_interval))
+        max_polls = max(1, int(timeout_min * 60 / poll))
+        async with httpx.AsyncClient(timeout=30) as client:
+            for _ in range(max_polls):
+                await asyncio.sleep(poll)
+                r = await client.get(f"{self.base}/history/{prompt_id}")
+                if r.status_code != 200:
+                    continue
+                entry = (r.json() or {}).get(prompt_id)
+                if not entry:
+                    continue
+                status_info = entry.get("status") or {}
+                if status_info.get("status_str") == "error":
+                    raise ComfyUIError(f"ComfyUI 执行出错: {status_info.get('messages', [])}")
+                if not status_info.get("completed"):
+                    continue
+                for outputs in entry.get("outputs", {}).values():
+                    for f in outputs.get("images") or []:
+                        if isinstance(f, dict) and f.get("filename", "").lower().endswith(
+                            (".png", ".jpg", ".jpeg", ".webp")
+                        ):
+                            return f
+                raise ComfyUIError("任务完成但未找到图片产物，请检查 SaveImageAdvanced 输出节点")
+        raise ComfyUIError(f"ComfyUI 出图超时（{timeout_min} 分钟）")
 
     async def fetch_file(self, filename: str, subfolder: str = "", folder_type: str = "output") -> bytes:
         async with httpx.AsyncClient(timeout=300) as client:

@@ -464,11 +464,15 @@ export default function AdminPage() {
       {/* ---- Worker 池监控 ---- */}
       {tab === "workers" && workerPool && (
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
               ["排队/增强中", workerPool.queued],
               ["生成阶段", workerPool.generating],
               ["超分阶段", workerPool.upscaling],
+              [
+                "生图节点（qwen21 / A100）",
+                `${workerPool.workers.filter((w) => w.role === "image" && w.healthy).length}/${workerPool.workers.filter((w) => w.role === "image").length}`,
+              ],
             ].map(([label, value]) => (
               <div key={label as string} className="panel p-5">
                 <p className="text-xs text-foreground-500">{label}</p>
@@ -513,9 +517,17 @@ export default function AdminPage() {
                       </span>
                     </td>
                     <td className="py-2.5 pr-3">
-                      <span className={w.role === "generate" ? "text-primary-600" : "text-accent-600"}>
-                        {w.role === "generate" ? "生成" : "超分"}
+                      <span className={w.role === "generate" ? "text-primary-600" : w.role === "image" ? "text-violet-600" : "text-accent-600"}>
+                        {w.role === "generate" ? "生成" : w.role === "image" ? "生图" : "超分"}
                       </span>
+                      {typeof w.gap_sec === "number" && w.gap_sec > 0 && (
+                        <span
+                          className="ml-1.5 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] leading-none text-violet-700 ring-1 ring-violet-500/30"
+                          title={`间隙跑：每完成一张出图后间隔 ${w.gap_sec}s 再发下一张（该节点固有属性）`}
+                        >
+                          gap {w.gap_sec}s
+                        </span>
+                      )}
                     </td>
                     <td className="py-2.5 pr-3 text-xs text-foreground-500" title={w.tags.join("\n")}>
                       {compactTags(w.tags)}

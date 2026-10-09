@@ -6,12 +6,20 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from ..auth import get_current_user
+from ..auth import get_advideo_access, get_current_user
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import get_db
 from ..models import CreditLog, Task, Upload, User
-from ..schemas import PackageOut, PricingOut, TaskOut, UpgradeIn, VideoCreateIn
-from ..services import comfyui
+from ..schemas import (
+    AdvideoConfirmIn,
+    AdvideoCreateIn,
+    PackageOut,
+    PricingOut,
+    TaskOut,
+    UpgradeIn,
+    VideoCreateIn,
+)
+from ..services import advimage, comfyui
 from ..services.billing import (
     PACKAGES,
     compute_cost,
@@ -314,3 +322,191 @@ def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
     if task is None or (task.user_id != user.id and user.role != "admin"):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
     return task
+
+# ---------------------------------------------------------------- 电商广告片（advideo）
+@router.get("/advideo/status")
+def advideo_status(_user: User = Depends(get_advideo_access)):
+    """广告图阶段是否就绪（前端据此禁用入口/提示原因）。
+
+    advideo9：额外下发「生视频提示词增强路由」默认值与可选项，前端据此渲染 C 臂/A 臂开关。
+    """
+    st = advimage.status()
+    default_mode = str(getattr(settings, "advideo_video_prompt_mode", "content_ir") or "content_ir").strip().lower()
+    if default_mode not in ("content_ir", "local"):
+        default_mode = "content_ir"
+    st.update({
+        "video_prompt_default_mode": default_mode,
+        "video_prompt_modes": [
+            {"value": "content_ir", "label": "Content-IR 电商"},
+            {"value": "local", "label": "本地规则"},
+        ],
+        "video_prompt_enhance_enabled": bool(getattr(settings, "advideo_video_prompt_enhance", True)),
+    })
+    return st
+
+
+@router.post("/advideo", response_model=TaskOut)
+def create_advideo(
+    body: AdvideoCreateIn,
+    user: User = Depends(get_advideo_access),
+    db: Session = Depends(get_db),
+):
+    """电商广告片：商品图(+可选参考图) + 一句话场景 → N 张候选广告图（待人工确认）。
+
+    计费口径与 r2v 视频一致，**在人工确认广告图后、视频阶段领取时扣**（复用生成循环的
+    领取计费）；用户只看不确认时不扣积分。
+    """
+    if not settings.advideo_enabled:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "电商广告片未启用")
+    if not advimage.available():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "广告图节点未就绪（qwen21 未切 to-qwen21，或 ADVIDEO_IMAGE_WORKER 未配置）",
+        )
+    input_ids = list(body.product_image_ids) + list(body.ref_image_ids)
+    for rid in input_ids:
+        up = db.get(Upload, rid)
+        if up is None or (up.user_id != user.id and user.role != "admin"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"素材 {rid} 不存在")
+    if body.resolution in ("1k", "2k", "4k") and not settings.upscale_enabled:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "本地超分池未启用，暂不支持该分辨率档位")
+    cost = compute_cost(body.duration, body.resolution)
+    if user.credits < cost:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"积分不足：确认广告图后将生成 {body.duration}s/{body.resolution} 视频，需 {cost} 积分",
+        )
+    task = Task(
+        user_id=user.id,
+        mode="advideo",
+        prompt=(body.video_prompt.strip() or body.prompt.strip())[:2000],  # 视频提示词（独立框）
+        image_prompt=body.prompt.strip(),                                  # 图像提示词（隔离）
+        aspect_ratio=body.aspect_ratio,
+        duration=body.duration,
+        resolution=body.resolution,
+        enhance=body.enhance,
+        scene=body.scene,
+        ref_image_ids=json.dumps(input_ids),
+        ad_input_ids=json.dumps(input_ids),
+        ad_image_count=body.image_count,
+        ad_product_count=len(body.product_image_ids),
+        video_prompt_mode=(body.video_prompt_mode or ""),   # advideo9 生视频增强路由（空=跟随全局默认）
+        status="queued_images",
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return serialize_task(task, db=db)
+
+
+@router.post("/advideo/{task_id}/regenerate", response_model=TaskOut)
+def regenerate_advideo(
+    task_id: int,
+    user: User = Depends(get_advideo_access),
+    db: Session = Depends(get_db),
+):
+    """重新生成候选广告图：以既有任务参数为源新建一条任务。
+
+    - 图像阶段不计费，因此旧任务（尚未进入视频阶段）连记录一并丢弃，避免页面上遗留「待确认」任务；
+    - 参数（商品图/参考图/场景/比例/片长/清晰度/增强路由/张数）全部取自服务端任务，
+      前端不需要回填任何内存状态（修复「重新生成却提示上传商品图」）。
+    """
+    task = _get_owned_task(task_id, user, db)
+    if task.mode != "advideo":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "非电商广告片任务")
+    if task.status not in ("queued_images", "generating_images", "image_ready"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "广告片已进入生成阶段（已计费），如需重做请新建广告片",
+        )
+    if not settings.advideo_enabled:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "电商广告片未启用")
+    if not advimage.available():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "广告图节点未就绪，请稍后再试")
+
+    clone = Task(
+        user_id=user.id,
+        mode="advideo",
+        prompt=task.prompt,
+        image_prompt=task.image_prompt,
+        aspect_ratio=task.aspect_ratio,
+        duration=task.duration,
+        resolution=task.resolution,
+        enhance=task.enhance,
+        scene=task.scene,
+        ref_image_ids=task.ref_image_ids,
+        ad_input_ids=task.ad_input_ids,
+        ad_image_count=task.ad_image_count,
+        ad_product_count=task.ad_product_count,
+        video_prompt_mode=task.video_prompt_mode,
+        status="queued_images",
+    )
+
+    # 旧任务树（自身 + 高清子任务）一并清理；credit_logs.task_id 外键先解除引用
+    ids = [task.id]
+    frontier = [task.id]
+    while frontier:
+        rows = db.query(Task.id).filter(Task.parent_task_id.in_(frontier)).all()
+        kids = [r[0] for r in rows if r[0] not in ids]
+        ids.extend(kids)
+        frontier = kids
+    targets = db.query(Task).filter(Task.id.in_(ids)).all()
+
+    db.add(clone)
+    try:
+        db.query(CreditLog).filter(CreditLog.task_id.in_(ids)).update(
+            {CreditLog.task_id: None}, synchronize_session=False
+        )
+        for t in targets:
+            db.delete(t)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "重新生成失败：" + type(exc).__name__ + ": " + str(exc),
+        ) from exc
+    db.refresh(clone)
+    return serialize_task(clone, db=db)
+
+
+@router.post("/{task_id}/confirm-image", response_model=TaskOut)
+def confirm_advideo_image(
+    task_id: int,
+    body: AdvideoConfirmIn,
+    user: User = Depends(get_advideo_access),
+    db: Session = Depends(get_db),
+):
+    """人工确认广告图（强制关卡）：选定第 image_index 张后才进入视频阶段。"""
+    task = _get_owned_task(task_id, user, db)
+    if task.mode != "advideo":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "非电商广告片任务")
+    if task.status != "image_ready":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"当前状态 {task.status} 不可确认广告图"
+        )
+    try:
+        paths = json.loads(task.ad_image_paths or "[]")
+    except (TypeError, ValueError):
+        paths = []
+    if not (0 <= body.image_index < len(paths)):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "选择的广告图不存在")
+    task.chosen_image = paths[body.image_index]
+    task.chosen_index = body.image_index
+    if body.video_prompt and body.video_prompt.strip():
+        task.prompt = body.video_prompt.strip()[:2000]
+    if body.enhance is not None:
+        task.enhance = body.enhance
+    if body.video_prompt_mode:
+        # advideo9：生视频增强路由（前端 C 臂/A 臂开关）
+        task.video_prompt_mode = body.video_prompt_mode
+        if body.video_prompt_mode == "local":
+            task.enhance = True   # A 臂也要进增强阶段（跳过云端 IR，仅本地规则，0 付费）
+    task.status = "queued"          # 复用既有生成循环（enhance → 768p → 超分）
+    task.error = ""
+    task.worker_url = ""
+    task.started_at = None
+    task.finished_at = None
+    db.commit()
+    db.refresh(task)
+    return serialize_task(task, db=db)

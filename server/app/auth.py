@@ -63,3 +63,19 @@ def get_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "需要管理员权限")
     return user
+
+
+def get_advideo_access(user: User = Depends(get_current_user)) -> User:
+    """电商广告片（开发中）的可见性闸门。
+
+    settings.advideo_admin_only=True 时只有白名单账号（默认 admin@minimax-studio.com）可用，
+    其余登录用户 403、匿名 401（由 get_current_user 抛出）；改回 False 即全量放开。
+    """
+    if not getattr(settings, "advideo_admin_only", False):
+        return user
+    raw = str(getattr(settings, "advideo_admin_emails", "") or "")
+    emails = [e.strip().lower() for e in raw.split(",") if e.strip()]
+    ok = (user.email or "").strip().lower() in emails if emails else user.role == "admin"
+    if not ok:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "广告片功能开发中，暂未对外开放")
+    return user

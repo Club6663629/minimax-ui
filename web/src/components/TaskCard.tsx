@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api, fileUrl } from "../api/client";
+import { humanizeError } from "../lib/humanize";
 import {
   ACTIVE_STATUSES,
   MODE_LABEL,
@@ -237,9 +238,19 @@ export default function TaskCard({
       )}
 
       {task.status === "failed" && (
-        <div className="flex items-center gap-3 rounded-xl bg-rose-500/[0.07] px-3 py-2.5">
-          <AlertCircle size={15} className="shrink-0 text-rose-600" />
-          <p className="flex-1 text-xs text-rose-600">{task.error || "生成失败，积分已退还"}</p>
+        <div className="flex items-start gap-3 rounded-xl bg-rose-500/[0.07] px-3 py-2.5">
+          <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-rose-600">{humanizeError(task.error, "生成失败，积分已退还")}</p>
+            {task.error && (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-[11px] text-foreground-500">查看详情</summary>
+                <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-background-100 p-2 text-[11px] text-foreground-600">
+                  {task.error}
+                </pre>
+              </details>
+            )}
+          </div>
           <button onClick={retry} disabled={retrying} className="btn-ghost !px-3 !py-1.5 text-xs">
             <RotateCcw size={13} /> {retrying ? "提交中…" : "重试"}
           </button>

@@ -9,7 +9,7 @@ from .auth import hash_password
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import User  # noqa: F401  确保建表时包含所有模型
-from .routers import admin, auth, credits, files, uploads, videos
+from .routers import admin, auth, credits, files, legal, ops, uploads, videos
 from .services import billing  # noqa: F401
 from .services.pool import pool
 from .services.worker import start_worker, stop_worker
@@ -53,10 +53,57 @@ def _migrate() -> None:
             logger.info("已为 tasks 表补充 scene 列")
 
 
+def _migrate_uploads() -> None:
+    """轻量迁移：uploads 表补 md5 / size 列（资产管理去重所需）。"""
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    insp = sa_inspect(engine)
+    if not insp.has_table("uploads"):
+        return
+    cols = {c["name"] for c in insp.get_columns("uploads")}
+    with engine.begin() as conn:
+        if "md5" not in cols:
+            conn.execute(text("ALTER TABLE uploads ADD COLUMN md5 VARCHAR(32) DEFAULT ''"))
+            logger.info("已为 uploads 表补充 md5 列")
+        if "size" not in cols:
+            conn.execute(text("ALTER TABLE uploads ADD COLUMN size INTEGER DEFAULT 0"))
+            logger.info("已为 uploads 表补充 size 列")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_uploads_md5 ON uploads (md5)"))
+
+
+def _migrate_advideo() -> None:
+    """轻量迁移：tasks 表补充电商广告片（advideo）列（幂等，兼容 MySQL/TiDB）。"""
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    insp = sa_inspect(engine)
+    if not insp.has_table("tasks"):
+        return
+    cols = {c["name"] for c in insp.get_columns("tasks")}
+    ddl = {
+        "ad_image_paths": "TEXT",
+        "image_prompt": "TEXT",
+        "ad_input_ids": "TEXT",
+        "ad_image_count": "INTEGER DEFAULT 3",
+        "ad_product_count": "INTEGER DEFAULT 0",
+        "chosen_image": "VARCHAR(512) DEFAULT ''",
+        "chosen_index": "INTEGER DEFAULT -1",
+        "video_prompt_mode": "VARCHAR(16) DEFAULT ''",
+    }
+    with engine.begin() as conn:
+        for col, typ in ddl.items():
+            if col not in cols:
+                conn.execute(text(f"ALTER TABLE tasks ADD COLUMN {col} {typ}"))
+                logger.info("已为 tasks 表补充 %s 列", col)
+
+
 def _bootstrap() -> None:
     """建表 + 轻量迁移 + 按环境变量创建初始管理员。"""
     Base.metadata.create_all(bind=engine)
     _migrate()
+    _migrate_advideo()
+    _migrate_uploads()
     if settings.admin_email and settings.admin_password:
         db = SessionLocal()
         try:
@@ -105,6 +152,8 @@ app.include_router(uploads.router)
 app.include_router(files.router)
 app.include_router(credits.router)
 app.include_router(admin.router)
+app.include_router(ops.router)
+app.include_router(legal.router)
 
 
 @app.get("/api/health")

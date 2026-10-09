@@ -1,7 +1,9 @@
-/** 页面骨架：顶部导航（海白菜品牌）+ 内容区。 */
+/** 页面骨架：顶部导航（海白菜品牌）+ 协议更新横幅 + 内容区 + 页脚常驻法律文本入口。 */
 import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import BrandLogo from "./BrandLogo";
+import LegalNotice from "./LegalNotice";
+import { FOOTER_LINKS, LEGAL_UPDATED, LEGAL_VERSION } from "../legal";
 import { useAuth } from "../state/auth";
 
 function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
@@ -69,12 +71,30 @@ export default function Layout() {
         </div>
       </header>
 
+      <LegalNotice />
+
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         <Outlet />
       </main>
 
-      <footer className="border-t border-background-200 py-4 text-center text-xs text-foreground-500">
-        海白菜 · Powered by MiniMax H3 + ComfyUI
+      <footer className="border-t border-background-200 py-5 text-center text-xs text-foreground-500">
+        <div className="mb-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          {FOOTER_LINKS.map((l) => (
+            <a
+              key={l.key}
+              href={l.href}
+              target="_blank"
+              rel="noopener"
+              className="transition hover:text-foreground-800 hover:underline"
+            >
+              {l.title}
+            </a>
+          ))}
+        </div>
+        <p>海白菜 · Powered by MiniMax H3 + ComfyUI</p>
+        <p className="mt-1">
+          版本 {LEGAL_VERSION} · 更新日期 {LEGAL_UPDATED}
+        </p>
       </footer>
     </div>
   );

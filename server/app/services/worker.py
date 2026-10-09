@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
-from . import cloud, comfyui
+from . import advenhance, advpostir, advprompt, cloud, comfyui
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
@@ -37,6 +37,19 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2          # 每阶段最多执行次数（含首次）
 ENHANCE_CONCURRENCY = 4   # 提示词增强并发上限（云端接口调用，不占 GPU）
+
+
+def _video_prompt_mode(task) -> str:
+    """生视频提示词增强路由（advideo9）：任务级覆盖 > 全局默认。
+
+    content_ir = C 臂（默认）：Content-IR + 电商 skill（商品保真硬约束）+ advpostir 单镜化后处理；
+    local      = A 臂：本地规则增强（advenhance.enhance_video_prompt，0 付费）。
+    """
+    m = str(getattr(task, "video_prompt_mode", "") or "").strip().lower()
+    if m not in ("content_ir", "local"):
+        m = str(getattr(settings, "advideo_video_prompt_mode", "content_ir") or "content_ir").strip().lower()
+    return m if m in ("content_ir", "local") else "content_ir"
+
 
 _bg_tasks: list = []
 
@@ -51,6 +64,7 @@ def start_worker() -> None:
     _bg_tasks.append(loop.create_task(_loop_guard(_enhance_loop, "增强")))
     _bg_tasks.append(loop.create_task(_loop_guard(_generate_loop, "生成")))
     _bg_tasks.append(loop.create_task(_loop_guard(_upscale_loop, "超分")))
+    _bg_tasks.append(loop.create_task(_loop_guard(_advideo_image_loop, "广告图")))
     _bg_tasks.append(loop.create_task(_recover_orphans()))
     logger.info("调度器已启动 (mock=%s)", settings.mock_comfy)
 
@@ -125,13 +139,51 @@ async def _run_enhance(task_id: int) -> None:
             task = db.get(Task, task_id)
             prompt, duration, ratio = task.prompt, task.duration, task.aspect_ratio
             scene = task.scene
+            mode = task.mode
+            vmode = _video_prompt_mode(task)   # advideo9：content_ir=C臂（默认）/ local=A臂
         try:
-            compiled = apply_scene(prompt, scene)
-            enhanced = await cloud.enhance_prompt(compiled, duration, ratio)
+            # advideo 强制走电商 skill：通用 skill 为空、无商品保真约束，IR 会自创穿搭（advideo8 实测 → 商品一致性 FAIL）
+            compiled = apply_scene(prompt, "ecommerce" if mode == "advideo" else scene)
+            if mode == "advideo" and (
+                vmode == "local" or not bool(getattr(settings, "advideo_video_prompt_enhance", True))
+            ):
+                # A 臂（local）：advideo 的视频提示词由本地增强层处理（0 付费纯规则），
+                # 不走云端 Content-IR —— 既避免双重增强，也避免产生费用（r3）。
+                enhanced = ""
+                logger.info(
+                    "任务 #%s advideo：跳过云端 Content-IR 增强（路由=%s，0 付费）",
+                    task_id, "local(A臂·本地规则)" if vmode == "local" else "增强总开关关闭",
+                )
+            else:
+                if mode == "advideo":
+                    logger.info("任务 #%s advideo：路由=%s（C臂·Content-IR 电商 skill + 单镜化后处理）", task_id, vmode)
+                enhanced = await cloud.enhance_prompt(compiled, duration, ratio)
+                # advideo8（2026-10-08 实测）：Content-IR 正文自带 [Shot n]/时间码/"the camera cuts to …"，
+                # ref2v 会真的执行成多次硬切（scdet 实测 2 处），尾缀 [CAMERA] no cuts 压不住正文。
+                # 故对 IR 输出做确定性单镜化后处理：切镜→连续运镜、去抖、句级去重、保真主句写进正文。
+                if enhanced and bool(getattr(settings, "advideo_ir_single_shot", True)):
+                    try:
+                        _pp = advpostir.post_process(enhanced)
+                        logger.info(
+                            "任务 #%s Content-IR 单镜化后处理：切镜改写 %s 处 / 去抖 %s 处 / 保留 %s 句 / 剩余 [Shot] %s / %s->%s 字符",
+                            task_id, _pp["stats"]["cuts_rewritten"], _pp["stats"]["shake_rewritten"],
+                            _pp["stats"]["sentences_out"], _pp["text"].count("[Shot"),
+                            _pp["raw_len"], _pp["text_len"],
+                        )
+                        enhanced = _pp["text"]
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("任务 #%s Content-IR 后处理失败，沿用 IR 原文: %s", task_id, exc)
+            if mode == "advideo" and enhanced and not advprompt.enhanced_ok(enhanced):
+                # B2：增强结果丢了「指参考图 / 无画面文字」约束 → 弃用，回退用户原始视频提示词
+                logger.warning(
+                    "任务 #%s 增强结果不满足一致性约束（需同时指代参考图且禁用画面文字），已回退用户原话: %s",
+                    task_id, advprompt.truncate(enhanced, 300),
+                )
+                enhanced = ""
             with SessionLocal() as db:
                 db.get(Task, task_id).enhanced_prompt = enhanced
                 db.commit()
-            logger.info("任务 #%s 提示词增强完成", task_id)
+            logger.info("任务 #%s 提示词增强完成（mode=%s 采用=%s）", task_id, mode, bool(enhanced))
         except Exception as exc:
             logger.warning("任务 #%s 增强失败，使用原始提示词: %s", task_id, exc)
         # 增强完成（无论成败）进入生成队列
@@ -701,6 +753,8 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         task = db.get(Task, task_id)
         final_prompt = task.enhanced_prompt or task.prompt
         mode, ratio, duration = task.mode, task.aspect_ratio, task.duration
+        vmode = _video_prompt_mode(task)   # advideo9：C臂=直接用 Content-IR 结果（不再叠本地层）/ A臂=本地规则
+        # B1 提示词拼装移到下面 image_paths 装配完成后（[SET] 段需要知道参考图张数）
         try:
             ref_ids = json.loads(task.ref_image_ids or "[]")
         except (TypeError, ValueError):
@@ -727,6 +781,69 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
                 audio_paths.append(p)
             else:
                 image_paths.append(p)
+
+        # 电商广告片：人工确认的广告图作为首个参考图（r2v 模板），商品图/参考图随其后
+        if mode == "advideo" and getattr(task, "chosen_image", ""):
+            image_paths.insert(0, Path(task.chosen_image))
+            # R10：原始商品图紧随其后作第二锚点（材质/五金/印花校准），防止 ref2v 只靠一张图漂移
+            try:
+                first_pid = (json.loads(task.ad_input_ids or "[]") or [None])[0]
+            except (TypeError, ValueError):
+                first_pid = None
+            if first_pid:
+                up0 = db.get(Upload, int(first_pid))
+                if up0 and Path(up0.path) not in image_paths:
+                    image_paths.insert(1, Path(up0.path))
+        if mode == "advideo":
+            # 用户口径（10-08）：把这一套广告图**全部**作为参考图输入（r2v 上限 9 张）
+            chosen_p = None
+            try:
+                if getattr(task, "chosen_image", ""):
+                    chosen_p = Path(task.chosen_image)
+            except Exception:  # noqa: BLE001
+                chosen_p = None
+            if chosen_p is not None:
+                set_paths = sorted([p for p in chosen_p.parent.glob("*.png") if p.is_file()])
+                if chosen_p.resolve() not in {p.resolve() for p in set_paths}:
+                    set_paths.insert(0, chosen_p)
+                seen = {p.resolve() for p in set_paths}
+                others = [p for p in image_paths if p.resolve() not in seen]
+                image_paths = (set_paths + others)[:9]
+                set_n = len(set_paths)   # [SET] 段只覆盖这套图，不覆盖随后的商品/参考图
+                logger.info("广告图任务 #%s 视频阶段参考图：整套 %d 张 + 其他 %d 张 → 实际喂 %d 张",
+                            task_id, len(set_paths), len(others), len(image_paths))
+            # ---- P4 视频提示词增强层（2026-10-08，0 付费纯规则）----
+            # 用户给的视频提示词常是一句大白话：这里补默认动作 + 追加固定支撑条款
+            # （商品一致 / 镜头稳定 / 同一人物 / 无文字），正文仍以用户原话为主。
+            _set_n = locals().get("set_n", 1) or 1
+            _ir_used = bool(str(task.enhanced_prompt or "").strip())
+            if vmode == "local" and _ir_used:
+                # A 臂显式选了本地规则：忽略云端增强结果，只用用户原话（与 0 付费口径一致）
+                final_prompt = task.prompt or final_prompt
+                _ir_used = False
+                logger.info("任务 #%s 视频增强路由=local(A臂)：忽略已有云端增强结果，改用本地规则", task_id)
+            _use_local = (vmode == "local") or not _ir_used
+            if _use_local and bool(getattr(settings, "advideo_video_prompt_enhance", True)):
+                _enh_v = advenhance.enhance_video_prompt(final_prompt, n_refs=_set_n, duration=duration)
+                try:
+                    _cdir = Path(task.chosen_image).parent if getattr(task, "chosen_image", "") else STAGING_DIR
+                    (_cdir / f"{task_id}.video_enhance.json").write_text(
+                        json.dumps(_enh_v, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:  # noqa: BLE001
+                    logger.warning("任务 #%s 视频增强记录落盘失败（不影响出片）", task_id)
+                final_prompt = str(_enh_v["text"])
+                logger.info(
+                    "任务 #%s 视频提示词增强(本地规则·A臂)：%d 字符（补默认=%s；剔除冲突 %d 条；整套参考图 %d 张）",
+                    task_id, len(final_prompt), _enh_v["defaults_used"], len(_enh_v["conflicts"]), _set_n,
+                )
+            if not _use_local:
+                logger.info(
+                    "任务 #%s 视频增强路由=%s：直接采用 Content-IR 增强结果（%d 字符，不再叠本地规则层）",
+                    task_id, vmode, len(final_prompt or ""),
+                )
+            # B1：[FIDELITY] + [SET] + 正文 + [CAMERA] + [AUDIO]，SET 段按实际参考图张数生成
+            final_prompt = advprompt.wrap_video_prompt(
+                final_prompt, n_refs=_set_n)
 
     client = comfyui.ComfyUIClient(node.url)
 
@@ -850,3 +967,105 @@ def _make_mock_video(out_path: Path) -> None:
     except (FileNotFoundError, subprocess.SubprocessError):
         logger.warning("ffmpeg 不可用，写入占位视频文件")
         out_path.write_bytes(b"MOCK-VIDEO-PLACEHOLDER")
+
+# ---------------------------------------------------------------- 电商广告片：广告图阶段
+from . import advimage  # noqa: E402  （放在文件末尾避免与既有导入顺序冲突）
+
+
+def _claim_advideo_images() -> Optional[int]:
+    """领取一个待出图的广告图任务（含后端重启遗留的 generating_images 孤儿）。"""
+    with SessionLocal() as db:
+        task = (
+            db.query(Task)
+            .filter(
+                Task.mode == "advideo",
+                Task.worker_url == "",
+                Task.status.in_(("queued_images", "generating_images")),
+            )
+            .order_by(Task.id)
+            .first()
+        )
+        if task is None:
+            return None
+        task.status = "generating_images"
+        task.worker_url = "advimage"          # 占位，避免重复领取
+        task.started_at = task.started_at or datetime.now()
+        db.commit()
+        return task.id
+
+
+async def _run_advideo_images(task_id: int) -> None:
+    """广告图阶段：qwen21(PE i2i) 出 N 张候选图 → status=image_ready 等人工确认。"""
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                return
+            scenario = (task.image_prompt or task.prompt or "").strip()
+            count = task.ad_image_count or settings.advideo_image_count
+            aspect_ratio = task.aspect_ratio
+            try:
+                input_ids = json.loads(task.ad_input_ids or "[]")
+            except (TypeError, ValueError):
+                input_ids = []
+            n_product = int(getattr(task, "ad_product_count", 0) or 0)
+            if n_product <= 0:      # 兼容旧任务：只有第 1 张算商品图
+                n_product = 1
+            product_paths, ref_paths = [], []
+            for i, rid in enumerate(input_ids):
+                up = db.get(Upload, rid)
+                if up is None:
+                    continue
+                (product_paths if i < n_product else ref_paths).append(Path(up.path))
+        if not product_paths:
+            raise RuntimeError("商品图缺失（uploads 记录已删除？）")
+        width, height = advimage.image_size_for(aspect_ratio)   # P1：画幅按前端比例派生
+        paths = await advimage.generate_candidates(
+            task_id=task_id,
+            product_paths=product_paths,
+            ref_paths=ref_paths,
+            scenario=scenario,
+            count=count,
+            width=width,
+            height=height,
+        )
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "generating_images":
+                return
+            task.ad_image_paths = json.dumps(paths, ensure_ascii=False)
+            task.status = "image_ready"       # 强制人工确认关卡（用户拍板 ①）
+            task.worker_url = ""
+            db.commit()
+        logger.info("广告图任务 #%s 出图完成 %d 张（%dx%d），等待人工确认", task_id, len(paths), width, height)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("广告图任务 #%s 失败", task_id)
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is not None:
+                task.status = "failed"
+                task.error = f"广告图阶段失败: {str(exc)[:400]}"
+                task.worker_url = ""
+                task.finished_at = datetime.now()
+                db.commit()
+
+
+async def _advideo_image_loop() -> None:
+    """广告图领取循环：未配置 qwen21 节点时空转（不影响既有三条循环）。"""
+    while True:
+        try:
+            if not advimage.available():
+                await asyncio.sleep(15)
+                continue
+            task_id = await asyncio.to_thread(_claim_advideo_images)
+            if task_id is None:
+                await asyncio.sleep(3)
+                continue
+            asyncio.get_event_loop().create_task(_run_advideo_images(task_id))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("广告图领取循环异常")
+            await asyncio.sleep(3)

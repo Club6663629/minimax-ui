@@ -9,6 +9,12 @@ from ..config import OUTPUT_DIR
 from ..models import Task, Upload
 from ..schemas import TaskOut
 
+_ADVIDEO_STAGE = {
+    "queued_images": "images_queued",
+    "generating_images": "images_running",
+    "image_ready": "image_ready",
+}
+
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
 _AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 
@@ -26,6 +32,21 @@ def _ref_kind(upload_id: int, db: Optional[Session]) -> str:
     if suffix in _AUDIO_SUFFIXES:
         return "audio"
     return "image"
+
+
+def _ad_image_paths(task: Task) -> list:
+    """候选广告图路径列表（字段缺失/脏数据一律返回空列表）。"""
+    try:
+        paths = json.loads(getattr(task, "ad_image_paths", "") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [p for p in paths if isinstance(p, str)]
+
+
+def _advideo_stage(task: Task) -> str:
+    if task.mode != "advideo":
+        return ""
+    return _ADVIDEO_STAGE.get(task.status, "video")
 
 
 def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Session] = None) -> TaskOut:
@@ -98,6 +119,16 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
         upscale_target=task.upscale_target,
         worker_url=task.worker_url or "",
         segments=segments,
+        stage=_advideo_stage(task),
+        ad_image_urls=[
+            f"/files/adimage/{task.id}?index={i}" for i in range(len(_ad_image_paths(task)))
+        ],
+        image_prompt=getattr(task, "image_prompt", "") or "",
+        chosen_index=(getattr(task, "chosen_index", -1) if getattr(task, "chosen_index", -1) is not None else -1),
+        chosen_image_url=(
+            f"/files/adimage/{task.id}?index={task.chosen_index}"
+            if (getattr(task, "chosen_index", -1) or -1) >= 0 else None
+        ),
         created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,

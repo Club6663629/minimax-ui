@@ -20,6 +20,11 @@ export interface UploadOut {
   slot: string;
   filename: string;
   url: string;
+  /** 内容 md5 指纹（后端上传时计算） */
+  md5?: string;
+  size?: number;
+  /** true = 命中库中同内容既有素材（未重复入库，直接复用） */
+  duplicate?: boolean;
 }
 
 /** 资产管理页的上传素材列表项。 */
@@ -30,9 +35,50 @@ export interface UploadListItem {
   url: string;
   kind: "image" | "video" | "audio";
   created_at: string;
+  /** 内容 md5 指纹（历史记录首次列出时后端补算） */
+  md5: string;
+  size: number;
+  /** 同内容素材份数，>1 表示有重复 */
+  dup_count: number;
+}
+
+/** 一组重复素材（同一 md5）。 */
+export interface DedupGroup {
+  md5: string;
+  kind: "image" | "video" | "audio";
+  filename: string;
+  url: string;
+  created_at: string;
+  size: number;
+  count: number;
+  keep_id: number;
+  remove_ids: number[];
+  removable_bytes: number;
+  protected_count: number;
+}
+
+/** 去重预览：可去除的重复素材汇总。 */
+export interface DedupPreview {
+  groups: DedupGroup[];
+  group_count: number;
+  removable_count: number;
+  removable_bytes: number;
+  protected_count: number;
+}
+
+/** 去重执行结果。 */
+export interface DedupResult {
+  removed: number;
+  freed_bytes: number;
+  groups: number;
+  protected_count: number;
 }
 
 export type TaskStatus =
+  // 电商广告片（advideo）图像阶段
+  | "queued_images"
+  | "generating_images"
+  | "image_ready"
   | "queued"
   | "enhancing"
   | "generating_768p"
@@ -42,7 +88,7 @@ export type TaskStatus =
 
 export interface Task {
   id: number;
-  mode: "t2v" | "flf2v" | "r2v" | "director";
+  mode: "t2v" | "flf2v" | "r2v" | "director" | "advideo";
   prompt: string;
   enhanced_prompt: string;
   aspect_ratio: string;
@@ -65,6 +111,15 @@ export interface Task {
   worker_url: string;
   // 导演台段清单（后端吸附后的 frames/start_frame/end_frame/seed 原样回传）
   segments: DirectorSegment[];
+  // 电商广告片（advideo）：stage=images_queued/images_running/image_ready/video
+  stage: string;
+  /** 候选广告图地址（/files/adimage/<id>?index=N，需 fileUrl 附 token） */
+  ad_image_urls: string[];
+  /** 图像阶段提示词（与视频提示词隔离） */
+  image_prompt: string;
+  /** 人工确认选中的候选序号（-1 = 未确认） */
+  chosen_index: number;
+  chosen_image_url: string | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -148,12 +203,14 @@ export interface AdminStats {
 /** Worker 池监控（集群调度） */
 export interface WorkerInfo {
   url: string;
-  role: "generate" | "upscale";
+  role: "generate" | "upscale" | "image";   // image = 广告图节点
   tags: string[];
   healthy: boolean;
   busy: boolean;
   task_id: number | null;
   consecutive_fails: number;
+  /** 间隙跑间隔（秒）：节点标签 gap:<n> 的固有属性；非间隙节点为 null */
+  gap_sec: number | null;
   // 云端实例（clouds/*.env）；非云节点为 null / false
   platform: string | null;
   instance_id: string | null;      // 形如 autodl:pro-7889ca37d10f
@@ -195,9 +252,15 @@ export const ACTIVE_STATUSES: TaskStatus[] = [
   "enhancing",
   "generating_768p",
   "upscaling",
+  // 广告片图像阶段（进行中才需要轮询；image_ready 为等待人工确认，不轮询）
+  "queued_images",
+  "generating_images",
 ];
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
+  queued_images: "广告图排队中",
+  generating_images: "广告图生成中",
+  image_ready: "待确认广告图",
   queued: "排队中",
   enhancing: "提示词增强中",
   generating_768p: "视频生成中",
@@ -218,4 +281,21 @@ export const MODE_LABEL: Record<Task["mode"], string> = {
   flf2v: "首尾帧",
   r2v: "全能参考",
   director: "导演台",
+  advideo: "电商广告片",
 };
+
+
+// ---- 法律文本（用户协议 V2）----
+export interface LegalDoc {
+  key: string;
+  title: string;
+  path: string;
+  version: string;
+}
+
+export interface LegalCurrent {
+  version: string;
+  updated: string;
+  effective: string;
+  docs: LegalDoc[];
+}

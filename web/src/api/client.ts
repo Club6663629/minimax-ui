@@ -3,6 +3,8 @@ import type {
   AdminStats,
   AdminUser,
   CreditLog,
+  DedupPreview,
+  DedupResult,
   Pricing,
   RedeemCodeOut,
   Task,
@@ -12,6 +14,7 @@ import type {
   User,
   WorkerPoolOut,
   CloudPowerResult,
+  LegalCurrent,
 } from "../types";
 
 export class ApiError extends Error {
@@ -85,10 +88,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export const api = {
   // 认证
-  register: (email: string, username: string, password: string) =>
+  register: (
+    email: string,
+    username: string,
+    password: string,
+    agreementVersions?: Record<string, string>
+  ) =>
     request<TokenOut>("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, username, password }),
+      body: JSON.stringify({ email, username, password, agreement_versions: agreementVersions }),
     }),
   login: (email: string, password: string) =>
     request<TokenOut>("/api/auth/login", {
@@ -97,10 +105,49 @@ export const api = {
     }),
   me: () => request<User>("/api/auth/me"),
 
+  // 法律文本（用户协议 V2：版本查询 + 留痕；均不阻断操作）
+  legalCurrent: () => request<LegalCurrent>("/api/legal/current"),
+  legalAck: (entry: string) =>
+    request<{ ok: boolean; recorded: number; version: string }>("/api/legal/ack", {
+      method: "POST",
+      body: JSON.stringify({ entry }),
+    }),
+
   // 视频任务
   pricing: () => request<Pricing>("/api/videos/pricing"),
   createVideo: (body: Record<string, unknown>) =>
     request<Task>("/api/videos", { method: "POST", body: JSON.stringify(body) }),
+
+  // 电商广告片（advideo）：商品图 → 候选广告图（人工确认）→ 视频
+  advideoStatus: () =>
+    request<{
+      enabled: boolean;
+      worker: string;
+      template: string;
+      template_exists: boolean;
+      available: boolean;
+      /** 提示词增强开关默认值（content_ir=开 / local=关） */
+      video_prompt_default_mode?: "content_ir" | "local";
+      video_prompt_modes?: { value: string; label: string }[];
+      video_prompt_enhance_enabled?: boolean;
+    }>("/api/videos/advideo/status"),
+  createAdvideo: (body: Record<string, unknown>) =>
+    request<Task>("/api/videos/advideo", { method: "POST", body: JSON.stringify(body) }),
+  /** 重新生成候选广告图：以原任务参数为源新建一组（候选图阶段不计费）。 */
+  regenerateAdvideo: (id: number) =>
+    request<Task>(`/api/videos/advideo/${id}/regenerate`, { method: "POST" }),
+  /** 人工确认广告图（强制关卡）：选定后进入视频阶段（此时才开始计费）。 */
+  /** body 增加 video_prompt_mode（content_ir=增强开 / local=关） */
+  confirmAdvideoImage: (
+    id: number,
+    body: {
+      image_index: number;
+      video_prompt?: string;
+      enhance?: boolean;
+      video_prompt_mode?: "content_ir" | "local";
+    },
+  ) =>
+    request<Task>(`/api/videos/${id}/confirm-image`, { method: "POST", body: JSON.stringify(body) }),
   listVideos: () => request<Task[]>("/api/videos"),
   retryVideo: (id: number) =>
     request<Task>(`/api/videos/${id}/retry`, { method: "POST" }),
@@ -121,9 +168,11 @@ export const api = {
   // 兼容：仅上传图片（首尾帧等）
   uploadImage: (file: File, slot: string) => api.uploadMedia(file, slot),
 
-  // 资产管理：上传素材列表 / 删除
+  // 资产管理：上传素材列表 / 删除 / 重复素材预览与一键去重
   listUploads: () => request<UploadListItem[]>("/api/uploads"),
   deleteUpload: (id: number) => request<void>(`/api/uploads/${id}`, { method: "DELETE" }),
+  listDuplicates: () => request<DedupPreview>("/api/uploads/duplicates"),
+  dedupUploads: () => request<DedupResult>("/api/uploads/dedup", { method: "POST" }),
 
   // 积分
   creditLogs: () => request<CreditLog[]>("/api/credits/logs"),

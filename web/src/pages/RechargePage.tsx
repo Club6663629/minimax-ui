@@ -96,6 +96,17 @@ export default function RechargePage() {
         <p className="mt-3 text-xs text-foreground-500">
           * 当前版本通过兑换码充值：请联系管理员获取兑换码后在下方兑换。在线支付通道规划中。
         </p>
+        <p className="mt-2 text-xs text-foreground-500">
+          充值即表示同意
+          <a
+            href="/legal/credits-rules.html"
+            target="_blank"
+            rel="noopener"
+            className="text-primary-600 hover:underline"
+          >
+            《积分与计费规则》
+          </a>
+        </p>
       </div>
 
       {/* 兑换码 */}

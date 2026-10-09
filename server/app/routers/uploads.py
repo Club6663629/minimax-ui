@@ -1,4 +1,12 @@
-"""媒体上传：首帧 / 尾帧 / 参考（参考区支持图片、视频、音频混传）及资产列表。"""
+"""媒体上传：首帧 / 尾帧 / 参考（参考区支持图片、视频、音频混传）及资产列表。
+
+资产管理增强（2026-09-28）：
+- 每个素材记录内容 md5 指纹与字节大小（上传时计算，历史记录惰性补算）；
+- 上传时同槽位同 md5 直接复用既有记录，避免重复入库；
+- 提供重复分组预览与一键去重接口（同内容保留最新一条，被任务引用的记录保护不删）。
+"""
+import hashlib
+import json
 import uuid
 from pathlib import Path
 
@@ -8,8 +16,14 @@ from sqlalchemy.orm import Session
 from ..auth import get_current_user
 from ..config import UPLOAD_DIR
 from ..database import get_db
-from ..models import Upload, User
-from ..schemas import UploadListItemOut, UploadOut
+from ..models import Task, Upload, User
+from ..schemas import (
+    DedupGroupOut,
+    DedupPreviewOut,
+    DedupResultOut,
+    UploadListItemOut,
+    UploadOut,
+)
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -55,6 +69,87 @@ def _kind_by_path(path: str) -> str:
     return "image"
 
 
+def _md5_file(path: Path) -> str:
+    """流式计算文件内容 md5；文件缺失/不可读时返回空串。"""
+    digest = hashlib.md5()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def _backfill_fingerprints(rows: list[Upload], db: Session) -> None:
+    """为历史素材惰性补算 md5 / 大小（只处理缺失项，最多提交一次）。"""
+    changed = False
+    for u in rows:
+        if u.md5 and u.size:
+            continue
+        path = Path(u.path)
+        if not path.exists():
+            continue
+        digest = _md5_file(path)
+        if not digest:
+            continue
+        u.md5 = digest
+        try:
+            u.size = path.stat().st_size
+        except OSError:
+            u.size = 0
+        changed = True
+    if changed:
+        db.commit()
+
+
+def _referenced_upload_ids(db: Session, user_id: int) -> set[int]:
+    """收集被历史任务引用的素材 id（首/尾帧、参考列表、导演台分段），去重时保护不删。"""
+    used: set[int] = set()
+    rows = (
+        db.query(Task.first_image_id, Task.last_image_id, Task.ref_image_ids, Task.segments)
+        .filter(Task.user_id == user_id)
+        .all()
+    )
+
+    def _walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "ref_image_ids" and isinstance(value, list):
+                    for item in value:
+                        try:
+                            used.add(int(item))
+                        except (TypeError, ValueError):
+                            continue
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    for first_id, last_id, ref_json, seg_json in rows:
+        for value in (first_id, last_id):
+            if value:
+                used.add(int(value))
+        for raw in (ref_json, seg_json):
+            if not raw:
+                continue
+            try:
+                _walk(json.loads(raw))
+            except (TypeError, ValueError):
+                continue
+    return used
+
+
+def _dup_groups(rows: list[Upload]) -> dict[str, list[Upload]]:
+    """按 md5 聚合（rows 需按 id 倒序，组内首个即最新需保留的一条）。"""
+    groups: dict[str, list[Upload]] = {}
+    for u in rows:
+        if u.md5:
+            groups.setdefault(u.md5, []).append(u)
+    return {k: v for k, v in groups.items() if len(v) > 1}
+
+
 @router.post("", response_model=UploadOut)
 async def upload_media(
     file: UploadFile = File(...),
@@ -79,16 +174,46 @@ async def upload_media(
     if len(content) > max_size:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{_KIND_LABEL[kind]}不能超过 {max_size // (1024 * 1024)}MB")
 
+    digest = hashlib.md5(content).hexdigest()
+    # 先补齐历史指纹，再判定是否已有同内容素材（同槽位直接复用，避免重复入库）
+    history = db.query(Upload).filter(Upload.user_id == user.id).order_by(Upload.id.desc()).all()
+    _backfill_fingerprints(history, db)
+    for old in history:
+        if old.slot == slot and old.md5 == digest and Path(old.path).exists():
+            return UploadOut(
+                id=old.id,
+                slot=old.slot,
+                filename=old.filename,
+                url=f"/files/upload/{old.id}",
+                md5=digest,
+                size=old.size or len(content),
+                duplicate=True,
+            )
+
     ext = _TYPES_TO_EXT[file.content_type]
     name = f"u{user.id}_{uuid.uuid4().hex[:12]}{ext}"
     path = UPLOAD_DIR / name
     path.write_bytes(content)
 
-    upload = Upload(user_id=user.id, slot=slot, filename=file.filename or name, path=str(path))
+    upload = Upload(
+        user_id=user.id,
+        slot=slot,
+        filename=file.filename or name,
+        path=str(path),
+        md5=digest,
+        size=len(content),
+    )
     db.add(upload)
     db.commit()
     db.refresh(upload)
-    return UploadOut(id=upload.id, slot=upload.slot, filename=upload.filename, url=f"/files/upload/{upload.id}")
+    return UploadOut(
+        id=upload.id,
+        slot=upload.slot,
+        filename=upload.filename,
+        url=f"/files/upload/{upload.id}",
+        md5=digest,
+        size=len(content),
+    )
 
 
 @router.get("", response_model=list[UploadListItemOut])
@@ -105,6 +230,11 @@ def list_uploads(
         .limit(limit)
         .all()
     )
+    _backfill_fingerprints(rows, db)
+    dup_count: dict[str, int] = {}
+    for u in rows:
+        if u.md5:
+            dup_count[u.md5] = dup_count.get(u.md5, 0) + 1
     return [
         UploadListItemOut(
             id=u.id,
@@ -113,9 +243,85 @@ def list_uploads(
             url=f"/files/upload/{u.id}",
             kind=_kind_by_path(u.path),
             created_at=u.created_at,
+            md5=u.md5 or "",
+            size=u.size or 0,
+            dup_count=dup_count.get(u.md5, 1) if u.md5 else 1,
         )
         for u in rows
     ]
+
+
+@router.get("/duplicates", response_model=DedupPreviewOut)
+def list_duplicates(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """重复素材分组预览（同内容保留最新一条；被历史任务引用的记录列为保护项）。"""
+    rows = db.query(Upload).filter(Upload.user_id == user.id).order_by(Upload.id.desc()).all()
+    _backfill_fingerprints(rows, db)
+    referenced = _referenced_upload_ids(db, user.id)
+    groups: list[DedupGroupOut] = []
+    protected_total = 0
+    for digest, items in _dup_groups(rows).items():
+        keep = items[0]
+        removable = [u for u in items[1:] if u.id not in referenced]
+        protected = len(items) - 1 - len(removable)
+        protected_total += protected
+        if not removable:
+            continue
+        groups.append(
+            DedupGroupOut(
+                md5=digest,
+                kind=_kind_by_path(keep.path),
+                filename=keep.filename,
+                url=f"/files/upload/{keep.id}",
+                created_at=keep.created_at,
+                size=keep.size or 0,
+                count=len(items),
+                keep_id=keep.id,
+                remove_ids=[u.id for u in removable],
+                removable_bytes=sum(u.size or 0 for u in removable),
+                protected_count=protected,
+            )
+        )
+    groups.sort(key=lambda g: g.removable_bytes, reverse=True)
+    return DedupPreviewOut(
+        groups=groups,
+        group_count=len(groups),
+        removable_count=sum(len(g.remove_ids) for g in groups),
+        removable_bytes=sum(g.removable_bytes for g in groups),
+        protected_count=protected_total,
+    )
+
+
+@router.post("/dedup", response_model=DedupResultOut)
+def dedup_uploads(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """一键去重：同内容保留最新一条，删除其余（连带磁盘文件）；被任务引用的不删。"""
+    preview = list_duplicates(user=user, db=db)
+    removed = 0
+    freed = 0
+    for group in preview.groups:
+        for upload_id in group.remove_ids:
+            row = db.get(Upload, upload_id)
+            if row is None or row.user_id != user.id:
+                continue
+            try:
+                Path(row.path).unlink(missing_ok=True)
+            except OSError:
+                pass  # 文件已不存在时仍清理记录
+            removed += 1
+            freed += row.size or 0
+            db.delete(row)
+    db.commit()
+    return DedupResultOut(
+        removed=removed,
+        freed_bytes=freed,
+        groups=preview.group_count,
+        protected_count=preview.protected_count,
+    )
 
 
 @router.delete("/{upload_id}", status_code=status.HTTP_204_NO_CONTENT)

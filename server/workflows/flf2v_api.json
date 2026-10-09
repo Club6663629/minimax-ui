@@ -238,7 +238,7 @@
     "class_type": "ResolutionSelector",
     "inputs": {
       "aspect_ratio": "16:9 (Widescreen)",
-      "megapixels": 1.0,
+      "megapixels": 0.98,
       "multiple": 32
     },
     "_meta": {

@@ -3,6 +3,7 @@
 <video>/<img> 标签无法携带 Authorization 头，因此这里支持
 ?token=<JWT> 查询参数鉴权（前端 fileUrl 统一拼接）。
 """
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -82,3 +83,26 @@ def download_upload(
         ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
     }.get(suffix, "application/octet-stream")
     return FileResponse(path, media_type=media_type)
+
+@router.get("/adimage/{task_id}")
+def download_advideo_image(
+    task_id: int,
+    index: int = Query(default=0, ge=0, le=9),
+    token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """电商广告片：下载第 index 张候选广告图（<img> 预览用，?token= 鉴权）。"""
+    user = _user_from_query_token(token, db)
+    task = db.get(Task, task_id)
+    if task is None or (task.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
+    try:
+        paths = json.loads(getattr(task, "ad_image_paths", "") or "[]")
+    except (TypeError, ValueError):
+        paths = []
+    if not (0 <= index < len(paths)):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "广告图不存在")
+    path = Path(paths[index])
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "广告图文件已失效")
+    return FileResponse(path, media_type="image/png", filename=f"advideo_{task_id}_{index}.png")

@@ -1,10 +1,11 @@
 """认证路由：注册 / 登录 / 当前用户。"""
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..auth import create_token, get_current_user, hash_password, verify_password
 from ..config import settings
 from ..database import get_db
+from ..legal import record_consents
 from ..models import User
 from ..schemas import LoginIn, RegisterIn, TokenOut, UserOut
 from ..services.billing import add_credits
@@ -20,7 +21,7 @@ def _user_out(user: User) -> UserOut:
 
 
 @router.post("/register", response_model=TokenOut)
-def register(body: RegisterIn, db: Session = Depends(get_db)):
+def register(body: RegisterIn, request: Request, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == body.email.lower()).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "该邮箱已注册")
     user = User(
@@ -33,6 +34,8 @@ def register(body: RegisterIn, db: Session = Depends(get_db)):
     db.flush()
     if settings.signup_bonus > 0:
         add_credits(db, user, settings.signup_bonus, "signup", note="注册赠送")
+    # V2 协议留痕（只记录，不拦截）：勾选即合并同意《用户协议》《隐私政策》《AI 标识说明》
+    record_consents(db, user.id, body.agreement_versions, request, entry="register")
     db.commit()
     db.refresh(user)
     return TokenOut(access_token=create_token(user.id), user=_user_out(user))

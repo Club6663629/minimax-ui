@@ -10,6 +10,8 @@ class RegisterIn(BaseModel):
     email: EmailStr
     username: str = Field(min_length=2, max_length=30)
     password: str = Field(min_length=6, max_length=64)
+    # V2 协议：注册页那 1 个合并勾选框覆盖的文档版本（可选，缺省按当前版本留痕）
+    agreement_versions: Optional[dict] = None
 
 
 class LoginIn(BaseModel):
@@ -38,6 +40,10 @@ class UploadOut(BaseModel):
     slot: str
     filename: str
     url: str
+    md5: str = ""
+    size: int = 0
+    # True 表示命中了库中同槽位同内容的既有素材（未重复入库，直接复用）
+    duplicate: bool = False
 
 
 class UploadListItemOut(BaseModel):
@@ -49,6 +55,40 @@ class UploadListItemOut(BaseModel):
     url: str
     kind: str        # image | video | audio（按文件后缀判定）
     created_at: datetime
+    md5: str = ""    # 内容指纹（历史记录首次列出时补算）
+    size: int = 0    # 字节大小
+    dup_count: int = 1  # 同内容素材份数（>1 表示有重复）
+
+
+class DedupGroupOut(BaseModel):
+    """一组重复素材（同一 md5）：保留 keep_id，删除 remove_ids。"""
+
+    md5: str
+    kind: str
+    filename: str
+    url: str
+    created_at: datetime
+    size: int
+    count: int              # 该内容总份数（含保留项与被保护的）
+    keep_id: int            # 保留的最新一条
+    remove_ids: list[int]   # 可安全删除的记录
+    removable_bytes: int
+    protected_count: int = 0  # 被历史任务引用、不删的重复项数量
+
+
+class DedupPreviewOut(BaseModel):
+    groups: list[DedupGroupOut]
+    group_count: int
+    removable_count: int
+    removable_bytes: int
+    protected_count: int = 0
+
+
+class DedupResultOut(BaseModel):
+    removed: int
+    freed_bytes: int
+    groups: int
+    protected_count: int = 0
 
 
 # ---- 视频任务 ----
@@ -81,6 +121,33 @@ class DirectorSegmentIn(BaseModel):
     ref_image_ids: list[int] = Field(default_factory=list, max_length=9)
 
 
+class AdvideoCreateIn(BaseModel):
+    """电商广告片：商品图(+可选参考图) + 一句话场景 → 候选广告图 → 人工确认 → 视频。"""
+
+    prompt: str = Field(min_length=1, max_length=2000)   # 场景描述（喂 qwen21 PE，中文可）
+    product_image_ids: list[int] = Field(min_length=1, max_length=3)   # 商品图，第 1 张为主
+    ref_image_ids: list[int] = Field(default_factory=list, max_length=6)  # 可选参考图
+    video_prompt: str = Field(default="", max_length=2000)   # 视频提示词（独立框；留空=同 prompt）
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
+    duration: Literal[5, 8, 10, 15] = 8
+    resolution: Literal["768p", "1k", "2k", "4k"] = "768p"
+    image_count: int = Field(default=3, ge=1, le=4)          # 默认 3 张候选（用户拍板）
+    enhance: bool = True                                     # Content-IR 增强（默认开启）
+    # 生视频增强路由：content_ir=C臂（Content-IR 电商，默认）/ local=A臂（本地规则，0 付费）
+    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None
+    scene: Literal["general", "drama", "ecommerce", "music"] = "ecommerce"
+
+
+class AdvideoConfirmIn(BaseModel):
+    """人工确认广告图（强制关卡）：选定后写入 chosen_image 并转入视频阶段。"""
+
+    image_index: int = Field(ge=0, le=9)
+    video_prompt: str = Field(default="", max_length=2000)
+    enhance: Optional[bool] = None
+    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None  # 生视频增强路由：content_ir=C臂 / local=A臂
+    video_prompt_mode: Optional[Literal["content_ir", "local"]] = None  # 生视频增强路由：content_ir=C臂 / local=A臂
+
+
 class TaskOut(BaseModel):
     id: int
     mode: str
@@ -96,6 +163,12 @@ class TaskOut(BaseModel):
     cost: int
     video_url: Optional[str]
     upscale_urls: dict[str, str] = {}  # {"1k": url, "2k": url} 按分辨率下载
+    # ---- 电商广告片（mode=advideo）----
+    stage: str = ""                      # images_queued/images_running/image_ready/video
+    ad_image_urls: list[str] = []        # 候选广告图（/files/adimage/<id>?index=N）
+    image_prompt: str = ""               # 图像阶段提示词（与视频 prompt 隔离）
+    chosen_index: int = -1               # 人工确认选中的序号（-1=未确认）
+    chosen_image_url: Optional[str] = None
     first_image_url: Optional[str]
     last_image_url: Optional[str]
     ref_image_urls: list[str]
@@ -191,8 +264,11 @@ class WorkerOut(BaseModel):
     tags: list[str]
     healthy: bool
     busy: bool
+    disabled: bool = False      # 手动置忙（外部清单指定）
     task_id: Optional[int] = None
     consecutive_fails: int
+    # 「间隙跑」间隔（秒）：来自该节点标签 gap:<n>（节点固有属性）；非间隙节点为 None
+    gap_sec: Optional[float] = None
     # 云端实例（clouds/*.env）；非云节点为 None / false
     platform: Optional[str] = None
     instance_id: Optional[str] = None      # 形如 autodl:pro-7889ca37d10f
@@ -251,3 +327,23 @@ class CloudPowerOut(BaseModel):
     already: bool = False
     msg: str = ""
     request_id: str = ""
+
+
+# ---- 法律文本（用户协议 V2：版本查询 + 留痕，不含拦截） ----
+class LegalDocOut(BaseModel):
+    key: str
+    title: str
+    path: str
+    version: str
+
+
+class LegalCurrentOut(BaseModel):
+    version: str
+    updated: str
+    effective: str
+    docs: list[LegalDocOut]
+
+
+class LegalAckIn(BaseModel):
+    entry: str = "update_notice"
+    versions: Optional[dict] = None
