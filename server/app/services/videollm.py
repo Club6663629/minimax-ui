@@ -99,6 +99,48 @@ FIDELITY_SYSTEM_VIDEO = """# 电商商品保真增强器（视频 · 最高优�
 5. 广告片默认单一连续镜头、运镜平稳；不要设计多主体并置或商品复刻多份。"""
 
 
+# ------------------------------------------------------------------ 拼贴/多视图参考图处理（附图时）
+# 最高优先级：不仅要「看图理解」，还必须把拼贴处理**显式写进输出的 H3 正文**，
+# 否则下游模型仍可能照搬九宫格/分屏版式。与 FIDELITY 同为不可被 skill 覆盖的系统级约束。
+MONTAGE_OUTPUT_RULE = """# 参考图拼贴/多视图处理（附图时·最高优先级·必须写进输出正文）
+
+随本条 user 消息附上的是**参考图**，你需要先「看图」。若其中任意一张是**拼贴图 / 多视图参考表**
+（同一人物的多个姿势、多个机位/角度、表情表，或九宫格 / 多格并置 / 分屏 / 商品多视角拼图），
+你**必须**在输出的 H3 提示词正文里（integrated_multimodal_description 段）**显式写明**下面四点，
+用英文落笔，缺一不可（不能只在心里理解而不写进正文）：
+1. 指明它是参考表，例如：`<Picture 1> is a multi-angle / multi-pose reference sheet`；
+2. 只当作多视角证据、用于锁定一致性，例如：`use it only as reference evidence to keep the same face,
+   hairstyle, outfit, body proportion and colors consistent`；
+3. 画面只合成**一个**连贯一致的主体、单一连续镜头，例如：`render exactly one single consistent
+   character/subject in one continuous shot`；
+4. 明确禁止复刻拼贴版式，例如：`do not reproduce the grid / collage / split-screen layout, no multiple
+   panels, no duplicated instances of the subject`。
+
+若参考图只是单张普通照片（非拼贴），按常规参考图保真即可，不必强加上述措辞。
+本节优先级高于所附 skill；skill 与本节冲突时以本节为准。"""
+
+
+# ------------------------------------------------------------------ 多张参考图冲突处理（附≥２张时）
+# 最高优先级：多张参考图在发饰/手持物/配饰/细节上互相冲突时，若原样全代入会让视频前后矛盾。
+# 铁律：以第一张 <Picture 1> 为准，其余图仅补角度、不引入矛盾细节；同样必须写进输出正文。
+CONFLICT_RULE = """# 多张参考图冲突处理（附≥２张参考图时·最高优先级·必须写进输出正文）
+
+当随消息附上多张参考图（`<Picture 1>`、`<Picture 2>`…）时，它们可能在细节上互相冲突
+（如发饰/配饰有无、是否手持手机或道具、发型、服装细节、颜色、件数等差异）。若把这些差异
+原样代入，会让视频前后矛盾、主体在不同镜头/时刻忽变忽不变。处理铁律：
+1. **以第一张参考图 `<Picture 1>` 为准**：凡是各图之间冲突的属性，一律采用 `<Picture 1>` 的版本；
+   其余参考图仅用于补充 `<Picture 1>` 未体现的角度/信息，**不得**引入与 `<Picture 1>` 矛盾的细节（不加也不减配饰/手持物）；
+2. 全片保持**单一一致**的主体外观：同一属性（发饰、手持物、配饰、发型、服装、颜色、件数）从头到尾不变，
+   不在镜头之间翻转或时隐时现；
+3. 在输出正文里显式锁定，例如：`keep the subject's appearance strictly consistent with <Picture 1> throughout
+   the whole video (same hairstyle, accessories, handheld items, outfit and colors); if the references differ,
+   <Picture 1> is authoritative — do not add or remove accessories or props from the other references,
+   no frame-to-frame contradictions`。
+
+若只附一张参考图，或多图之间无冲突，按常规保真即可，不必强加上述措辞。
+本节优先级高于所附 skill；skill 与本节冲突时以本节为准。"""
+
+
 # ------------------------------------------------------------------ skill 装载
 def _read(rel: str, cap: int = _FILE_CAP) -> str:
     fp = SKILL_DIR / rel
@@ -138,8 +180,10 @@ def _load_skill(scene: str, is_ref_mode: bool) -> str:
     return blob
 
 
-def _build_system_prompt(scene: str, is_ref_mode: bool, fidelity: bool) -> str:
-    """system = [保真约束（广告场景，最高优先级）] + 身份/输出规范 + 官方 skill。system 消息不含图片。"""
+def _build_system_prompt(scene: str, is_ref_mode: bool, fidelity: bool, n_images: int = 0) -> str:
+    """system = [保真约束] + [拼贴规则（附图）] + [多图冲突规则（≥２张）] + 身份/输出规范 + 官方 skill。system 不含图片。"""
+    has_images = n_images > 0
+    multi_images = n_images > 1
     head = (
         "# MiniMax-H3 视频提示词改写 agent\n\n"
         "你是 MiniMax-H3 视频生成提示词改写专家。请把用户需求改写为**可直接用于 H3 视频生成**的提示词，"
@@ -153,9 +197,25 @@ def _build_system_prompt(scene: str, is_ref_mode: bool, fidelity: bool) -> str:
         "- 总时长必须与用户请求的视频时长一致；`<Picture N>` / `<Video N>` / `<Audio N>` 标签在各段保持一致；\n"
         "- 优先具体的视觉与音频细节，避免 cinematic / beautiful 这类空泛词。"
     )
+    if has_images:
+        head += (
+            "\n- 【拼贴参考图】若任一参考图是多姿态/多机位拼贴（多视图参考表/九宫格/分屏），必须在 "
+            "integrated_multimodal_description 正文里**显式写明**：把它当作多视角证据、只合成一个连贯"
+            "一致的主体、并禁止复刻拼贴/分屏/多格版式（具体英文措辞见上方「参考图拼贴/多视图处理」节）。"
+        )
+    if multi_images:
+        head += (
+            "\n- 【多图冲突】附了多张参考图时，若它们在发饰/手持物/配饰/服装/颜色等细节上互相冲突，"
+            "必须在正文里**显式写明**：以第一张 <Picture 1> 为准、全片主体外观单一一致、不从其余图加减"
+            "矛盾细节、无镜头间矛盾（具体英文措辞见上方「多张参考图冲突处理」节）。"
+        )
     seg: List[str] = []
     if fidelity:
         seg.append(FIDELITY_SYSTEM_VIDEO)
+    if has_images:
+        seg.append(MONTAGE_OUTPUT_RULE)
+    if multi_images:
+        seg.append(CONFLICT_RULE)
     seg.append(head)
     skill = _load_skill(scene, is_ref_mode)
     if skill:
@@ -170,13 +230,21 @@ def _build_user_text(*, prompt: str, gen_mode: str, ref_hint: str, duration: int
     if ref_hint:
         seg.append(f"[参考素材] {ref_hint}")
     if n_images > 0:
-        seg.append(
-            "[已附参考图] 共 %d 张，按顺序对应 <Picture 1>..<Picture %d>。请先「看图」再改写：\n"
-            "- 严格保持参考图中商品/人物的形状、颜色、材质、件数、logo 与既有文字一致，不得改款改色、臆造细节；\n"
-            "- 若某张是拼贴图/多视图（如同一人物的不同姿势、不同机位或表情参考表），把它当作**证据**而非画面主体，"
-            "最终画面只合成**一个**连贯一致的主体，绝不把九宫格/多格并置搬进成片；\n"
-            "- 用 <Picture N> 标签指代参考图，不要用形容词重述其外观。" % (n_images, n_images)
-        )
+        lines = [
+            f"[已附参考图] 共 {n_images} 张，按顺序对应 <Picture 1>..<Picture {n_images}>。请先「看图」再改写：",
+            "- 严格保持参考图中商品/人物的形状、颜色、材质、件数、logo 与既有文字一致，不得改款改色、臆造细节；",
+            "- 【重要】若某张是拼贴图/多视图（同一人物的不同姿势、不同机位、表情表或九宫格/分屏），"
+            "不能只在心里理解——必须按 system「参考图拼贴/多视图处理」节，把『它是多视角参考表、只作证据、"
+            "只合成一个一致主体、禁止复刻拼贴/分屏/多格版式』这几点用英文**显式写进输出正文**；",
+        ]
+        if n_images > 1:
+            lines.append(
+                "- 【多图冲突】本次附了多张参考图，若它们在发饰/手持物(如是否拿手机)/配饰/服装/颜色等细节上不一致，"
+                "必须按 system「多张参考图冲突处理」节，以第一张 <Picture 1> 为准、全片主体外观单一一致，"
+                "并把这一锁定用英文**显式写进输出正文**（不从其余图加减矛盾细节、无镜头间矛盾）；"
+            )
+        lines.append("- 用 <Picture N> 标签指代参考图，不要用形容词重述其外观。")
+        seg.append("\n".join(lines))
     seg.append(f"[视频时长] {duration} 秒（改写正文的总时长必须与此一致）")
     if ratio:
         seg.append(f"[画幅] {ratio}")
@@ -250,12 +318,12 @@ async def enhance_video_prompt(
     if fidelity is None:
         fidelity = scene == "ecommerce"
 
-    system_prompt = _build_system_prompt(scene, is_ref_mode, fidelity)
-    # 视觉增强：参考图读成 base64（仅 video_llm_vision 开启且有图时）
+    # 视觉增强：参考图读成 base64（仅 video_llm_vision 开启且有图时）；先编码，system 需据是否附图注入拼贴规则
     imgs: List[Dict[str, str]] = []
     if image_paths and bool(getattr(settings, "video_llm_vision", True)):
         cap = int(getattr(settings, "video_llm_max_images", 4) or 4)
         imgs = _encode_images(image_paths, cap)
+    system_prompt = _build_system_prompt(scene, is_ref_mode, fidelity, n_images=len(imgs))
     user_text = _build_user_text(
         prompt=prompt, gen_mode=gen_mode, ref_hint=ref_hint, duration=duration, ratio=ratio,
         n_images=len(imgs),
