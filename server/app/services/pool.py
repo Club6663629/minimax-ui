@@ -176,8 +176,12 @@ def _parse_workers() -> List[WorkerNode]:
 
 
 def _mock_workers() -> List[WorkerNode]:
-    """Mock 模式：4 生成 + 3 超分虚拟节点，用于无 GPU 环境联调。"""
-    nodes = [WorkerNode(f"mock://generate-{i}", "generate", ["heavy"] if i == 0 else [])
+    """Mock 模式：4 生成 + 3 超分虚拟节点，用于无 GPU 环境联调。
+
+    0 号生成节点同时带 director 标签，模拟 A100 长视频机兼任导演台节点。
+    """
+    nodes = [WorkerNode(f"mock://generate-{i}", "generate",
+                        ["heavy", "director"] if i == 0 else [])
              for i in range(4)]
     nodes += [WorkerNode(f"mock://upscale-{i}", "upscale", ["1k", "2k"]) for i in range(3)]
     return nodes

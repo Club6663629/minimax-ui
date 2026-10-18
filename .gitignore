@@ -8,6 +8,7 @@ __pycache__/
 # Node
 web/node_modules/
 web/dist/
+*.tsbuildinfo
 
 # 杂项
 .DS_Store
@@ -18,6 +19,9 @@ workflow_templates/*
 
 # Agent 本地技能（从 MiniMax-H3 外部仓库安装，可重新拉取，不入库）
 .claude/
+
+# 本地设计与代理缓存（设计文档不入库）
+.qoder/
 
 
 # 云实例真实配置（含 token，不入库）

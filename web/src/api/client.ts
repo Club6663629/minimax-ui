@@ -5,6 +5,22 @@ import type {
   CreditLog,
   DedupPreview,
   DedupResult,
+  DramaArtifactVersion,
+  DramaBeat,
+  DramaCharacter,
+  DramaChecklist,
+  DramaEpisode,
+  DramaEpisodeDetail,
+  DramaEpisodeStatus,
+  DramaProject,
+  DramaProjectDetail,
+  DramaRenderResult,
+  DramaReview,
+  DramaRun,
+  DramaScene,
+  DramaShot,
+  DramaShotDraft,
+  DramaStatus,
   Pricing,
   RedeemCodeOut,
   Task,
@@ -205,5 +221,161 @@ export const api = {
     request<CloudPowerResult>("/api/admin/clouds/power", {
       method: "POST",
       body: JSON.stringify({ url, action }),
+    }),
+
+  // ---------------------------------------------------------------- 短剧流水线
+  dramaStatus: () => request<DramaStatus>("/api/drama/status"),
+  dramaProjects: () => request<{ projects: DramaProject[] }>("/api/drama/projects"),
+  dramaCreateProject: (body: {
+    title: string;
+    logline: string;
+    genre: string;
+    style_bible: string;
+    aspect_ratio: string;
+    target_episodes: number;
+  }) =>
+    request<{ project: DramaProject; episode: DramaEpisode }>("/api/drama/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dramaProject: (pid: number) =>
+    request<DramaProjectDetail>(`/api/drama/projects/${pid}`),
+  dramaPatchProject: (
+    pid: number,
+    body: Partial<Pick<DramaProject, "title" | "logline" | "genre" | "style_bible" | "aspect_ratio" | "target_episodes">>,
+  ) =>
+    request<{ project: DramaProject }>(`/api/drama/projects/${pid}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  dramaCreateEpisode: (pid: number, body: { title?: string; brief?: string } = {}) =>
+    request<{ episode: DramaEpisode }>(`/api/drama/projects/${pid}/episodes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dramaEpisode: (eid: number) =>
+    request<DramaEpisodeDetail>(`/api/drama/episodes/${eid}`),
+  dramaGenerateScript: (
+    eid: number,
+    body: { beat_count: number; target_seconds: number; regenerate?: boolean },
+  ) =>
+    request<{ source: string; beats: DramaBeat[]; script: string; status: DramaEpisodeStatus }>(
+      `/api/drama/episodes/${eid}/script/generate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  dramaSaveScript: (eid: number, body: { beats: DramaBeat[]; script?: string }) =>
+    request<{ status: DramaEpisodeStatus; beats: DramaBeat[] }>(
+      `/api/drama/episodes/${eid}/script`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+  dramaExtractCharacters: (eid: number, regenerate = false) =>
+    request<{ source: string; characters: DramaCharacter[]; scenes: DramaScene[] }>(
+      `/api/drama/episodes/${eid}/characters/extract`,
+      { method: "POST", body: JSON.stringify({ regenerate }) },
+    ),
+  dramaExtractScenes: (eid: number, regenerate = false) =>
+    request<{ scenes: DramaScene[] }>(`/api/drama/episodes/${eid}/scenes/extract`, {
+      method: "POST",
+      body: JSON.stringify({ regenerate }),
+    }),
+  dramaCreateCharacter: (
+    pid: number,
+    body: Partial<Pick<DramaCharacter, "name" | "role" | "gender" | "age" | "appearance" | "personality" | "costume" | "voice">> & { name: string },
+  ) =>
+    request<{ character: DramaCharacter }>(`/api/drama/projects/${pid}/characters`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dramaPatchCharacter: (cid: number, body: Partial<Omit<DramaCharacter, "id" | "project_id" | "card_url" | "first_episode_id">>) =>
+    request<{ character: DramaCharacter }>(`/api/drama/characters/${cid}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  dramaDeleteCharacter: (cid: number) =>
+    request<{ ok: boolean }>(`/api/drama/characters/${cid}`, { method: "DELETE" }),
+  dramaUploadCharacter: (cid: number, file: File, view = "front") => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("view", view);
+    return request<{ upload_id: number; character: DramaCharacter }>(
+      `/api/drama/characters/${cid}/upload`,
+      { method: "POST", body: form },
+    );
+  },
+  dramaLockCharacter: (cid: number, locked: boolean) =>
+    request<{ locked: boolean; character: DramaCharacter; status: DramaEpisodeStatus }>(
+      `/api/drama/characters/${cid}/lock`,
+      { method: "POST", body: JSON.stringify({ locked }) },
+    ),
+  dramaCreateScene: (
+    eid: number,
+    body: Partial<Pick<DramaScene, "name" | "location" | "time_of_day" | "description">> & { name: string },
+  ) =>
+    request<{ scene: DramaScene }>(`/api/drama/episodes/${eid}/scenes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dramaPatchScene: (sid: number, body: Partial<Pick<DramaScene, "name" | "location" | "time_of_day" | "description">>) =>
+    request<{ scene: DramaScene }>(`/api/drama/scenes/${sid}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  dramaDeleteScene: (sid: number) =>
+    request<{ ok: boolean }>(`/api/drama/scenes/${sid}`, { method: "DELETE" }),
+  dramaUploadScene: (sid: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ upload_id: number; scene: DramaScene }>(`/api/drama/scenes/${sid}/upload`, {
+      method: "POST",
+      body: form,
+    });
+  },
+  dramaPlanShots: (eid: number, mode: "replace" | "append" = "replace") =>
+    request<{ source: string; shots: DramaShotDraft[] }>(`/api/drama/episodes/${eid}/shots/plan`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+  dramaSaveShots: (eid: number, shots: DramaShotDraft[]) =>
+    request<{ status: DramaEpisodeStatus; shots: DramaShot[] }>(`/api/drama/episodes/${eid}/shots`, {
+      method: "PUT",
+      body: JSON.stringify({ shots }),
+    }),
+  dramaChecklist: (eid: number) =>
+    request<DramaChecklist>(`/api/drama/episodes/${eid}/checklist`),
+  dramaRender: (eid: number, force = false) =>
+    request<DramaRenderResult>(`/api/drama/episodes/${eid}/render`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "full", force }),
+    }),
+  dramaRun: (rid: number) => request<DramaRun>(`/api/drama/runs/${rid}`),
+  dramaCancelRun: (rid: number) =>
+    request<{ run: DramaRun }>(`/api/drama/runs/${rid}/cancel`, { method: "POST" }),
+  dramaRepairRun: (rid: number) =>
+    request<{ run: DramaRun }>(`/api/drama/runs/${rid}/repair`, { method: "POST" }),
+  dramaApproveShot: (sid: number) =>
+    request<{ status: string; shot: DramaShot }>(`/api/drama/shots/${sid}/approve`, {
+      method: "POST",
+    }),
+  dramaRejectShot: (
+    sid: number,
+    body: { reason: string; rerun?: boolean; anchor?: boolean },
+  ) =>
+    request<{ shot: DramaShot; run?: DramaRun; cost?: number }>(`/api/drama/shots/${sid}/reject`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  dramaReview: (eid: number) => request<DramaReview>(`/api/drama/episodes/${eid}/review`),
+  dramaShotArtifacts: (sid: number) =>
+    request<{ shot_no: number; artifacts: DramaArtifactVersion[] }>(
+      `/api/drama/shots/${sid}/artifacts`,
+    ),
+  dramaFinish: (eid: number) =>
+    request<DramaEpisode>(`/api/drama/episodes/${eid}/finish`, { method: "POST" }),
+  dramaReopen: (eid: number) =>
+    request<{ episode: DramaEpisode }>(`/api/drama/episodes/${eid}/reopen`, { method: "POST" }),
+  dramaRollback: (eid: number, artifactId: number) =>
+    request<{ episode: DramaEpisode; shot?: DramaShot }>(`/api/drama/episodes/${eid}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ artifact_id: artifactId }),
     }),
 };

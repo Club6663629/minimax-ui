@@ -231,6 +231,120 @@ class PricingOut(BaseModel):
     packages: list[PackageOut]
 
 
+# ---- 短剧流水线 ----
+class DramaProjectIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    logline: str = Field(min_length=1, max_length=2000)
+    genre: str = Field(default="", max_length=32)
+    style_bible: str = Field(default="", max_length=2000)
+    aspect_ratio: Literal["16:9", "9:16"] = "16:9"
+    target_episodes: int = Field(default=1, ge=1, le=50)
+
+
+class DramaProjectPatchIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    logline: Optional[str] = Field(default=None, max_length=2000)
+    genre: Optional[str] = Field(default=None, max_length=32)
+    style_bible: Optional[str] = Field(default=None, max_length=2000)
+    aspect_ratio: Optional[Literal["16:9", "9:16"]] = None
+    target_episodes: Optional[int] = Field(default=None, ge=1, le=50)
+
+
+class DramaEpisodeIn(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+    brief: Optional[str] = Field(default=None, max_length=4000)
+
+
+class DramaScriptGenerateIn(BaseModel):
+    beat_count: int = Field(default=6, ge=3, le=12)
+    target_seconds: int = Field(default=60, ge=15, le=180)
+    regenerate: bool = False
+
+
+class DramaScriptSaveIn(BaseModel):
+    beats: list[dict]
+    script: str = ""
+
+
+class DramaExtractIn(BaseModel):
+    regenerate: bool = False
+
+
+class DramaCharacterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    role: Literal["main", "support", "extra"] = "support"
+    gender: str = Field(default="", max_length=16)
+    age: str = Field(default="", max_length=16)
+    appearance: str = Field(default="", max_length=2000)
+    personality: str = Field(default="", max_length=2000)
+    costume: str = Field(default="", max_length=2000)
+    voice: str = Field(default="", max_length=80)
+
+
+class DramaCharacterPatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    role: Optional[Literal["main", "support", "extra"]] = None
+    gender: Optional[str] = Field(default=None, max_length=16)
+    age: Optional[str] = Field(default=None, max_length=16)
+    appearance: Optional[str] = Field(default=None, max_length=2000)
+    personality: Optional[str] = Field(default=None, max_length=2000)
+    costume: Optional[str] = Field(default=None, max_length=2000)
+    voice: Optional[str] = Field(default=None, max_length=80)
+
+
+class DramaCharacterLockIn(BaseModel):
+    locked: bool = True
+
+
+class DramaSceneIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    location: str = Field(default="", max_length=80)
+    time_of_day: str = Field(default="", max_length=80)
+    description: str = Field(default="", max_length=2000)
+
+
+class DramaScenePatchIn(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    location: Optional[str] = Field(default=None, max_length=80)
+    time_of_day: Optional[str] = Field(default=None, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class DramaShotIn(BaseModel):
+    shot_no: int = Field(ge=1, le=64)
+    scene_no: int = Field(default=1, ge=1, le=64)
+    beat_id: str = Field(default="", max_length=16)
+    prompt: str = Field(default="", max_length=4000)
+    duration_s: float = Field(default=5.0, ge=0.5, le=12)
+    shot_size: str = Field(default="", max_length=24)
+    camera: str = Field(default="", max_length=24)
+    movement: str = Field(default="", max_length=24)
+    character_ids: list[int] = Field(default_factory=list)
+    ref_upload_ids: list[int] = Field(default_factory=list)
+    continuity_note: str = Field(default="", max_length=2000)
+    dialogue: str = Field(default="", max_length=2000)
+    audio_note: str = Field(default="", max_length=2000)
+
+
+class DramaShotsSaveIn(BaseModel):
+    shots: list[DramaShotIn]
+
+
+class DramaRenderIn(BaseModel):
+    mode: Literal["full"] = "full"
+    force: bool = False
+
+
+class DramaRejectIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    rerun: bool = True
+    anchor: bool = True
+
+
+class DramaRollbackIn(BaseModel):
+    artifact_id: int
+
+
 # ---- 管理后台 ----
 class AdminAdjustIn(BaseModel):
     amount: int = Field(ge=-100000, le=100000)

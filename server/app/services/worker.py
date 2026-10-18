@@ -386,6 +386,18 @@ def _director_busy() -> bool:
     return _DIRECTOR_RUNNING
 
 
+def _notify_drama(task_id: int) -> None:
+    """导演台任务终结后通知短剧执行器（惰性导入避免循环依赖）。
+
+    即使通知失败也不影响任务本身：短剧 30s 巡扫会按 task 状态兜底推进。
+    """
+    try:
+        from . import drama_runner
+        drama_runner.on_task_finished(task_id)
+    except Exception:
+        logger.exception("短剧任务 #%s 完成通知处理失败（巡扫将兜底）", task_id)
+
+
 def _claim_director() -> Optional[int]:
     """领取导演台任务（计费口径同短视频：派发即扣、失败全额退还）。"""
     with SessionLocal() as db:
@@ -477,6 +489,7 @@ async def _run_director(task_id: int, node: WorkerNode) -> None:
             task.finished_at = datetime.now()
             db.commit()
             logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
+        await asyncio.to_thread(_notify_drama, task_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -524,6 +537,22 @@ async def _generate_director(task_id: int, node: WorkerNode) -> Path:
         uploads = {uid: db.get(Upload, uid) for uid in upload_ids}
 
     plan = comfyui.plan_director_segments(segments, aspect_ratio=aspect)
+    if settings.mock_comfy:
+        # Mock：按段清单总时长生成 24fps 测试素材（切片按帧号对齐，多留 0.5s 防末帧缺失）
+        _DIRECTOR_RUNNING = True
+        try:
+            await asyncio.sleep(3)
+            _make_mock_video(
+                out_path, duration=plan["total_frames"] / plan["fps"] + 0.5, fps=plan["fps"]
+            )
+        finally:
+            _DIRECTOR_RUNNING = False
+        logger.info(
+            "导演台任务 #%s（mock）产物已落盘：%d 段 / 总 %d 帧（%.2fs）",
+            task_id, len(plan["segments"]), plan["total_frames"],
+            plan["total_frames"] / plan["fps"],
+        )
+        return out_path
     client = comfyui.ComfyUIClient(node.url)
     images, uploaded = [], {}
     for uid, up in uploads.items():
@@ -664,6 +693,8 @@ async def _recover_orphans() -> None:
             continue
         if task.status == "upscaling":
             asyncio.get_event_loop().create_task(_resume_upscale(task.id, node))
+        elif task.mode == "director":
+            asyncio.get_event_loop().create_task(_resume_director(task.id, node))
         else:
             asyncio.get_event_loop().create_task(_resume_generate(task.id, node))
 
@@ -715,6 +746,50 @@ async def _resume_generate(task_id: int, node: WorkerNode) -> None:
         raise
     except Exception as exc:
         logger.exception("孤儿任务 #%s 恢复失败", task_id)
+        await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
+    finally:
+        pool.release(node)
+
+
+async def _resume_director(task_id: int, node: WorkerNode) -> None:
+    """恢复已派发到节点的导演台任务：轮询 prompt_id 并落盘，完成后通知短剧执行器。"""
+    global _DIRECTOR_RUNNING
+    out_path = STAGING_DIR / f"{task_id}_director.mp4"
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "generating_768p":
+                return
+            prompt_id = task.comfy_prompt_id
+        if not prompt_id:
+            await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p")
+            return
+        client = comfyui.ComfyUIClient(node.url)
+        _DIRECTOR_RUNNING = True
+        try:
+            file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
+            content = await client.fetch_file(
+                file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
+            )
+        finally:
+            _DIRECTOR_RUNNING = False
+        out_path.write_bytes(content)
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None or task.status != "generating_768p":
+                return
+            final_path = OUTPUT_DIR / f"{task_id}.mp4"
+            shutil.move(str(out_path), final_path)
+            task.video_path = str(final_path)
+            task.status = "done"
+            task.finished_at = datetime.now()
+            db.commit()
+        logger.info("孤儿导演台任务 #%s 恢复完成: %s", task_id, final_path)
+        await asyncio.to_thread(_notify_drama, task_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("孤儿导演台任务 #%s 恢复失败", task_id)
         await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
     finally:
         pool.release(node)
@@ -849,10 +924,12 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
 # ------------------------------------------------- 毒丸隔离辅助（POISON_GUARD）
 def _fail_task(task_id: int, error: str) -> None:
     """判失败并退还积分（毒丸隔离 / 粘滞超时用）。"""
+    is_director = False
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         if task is None or task.status in ("done", "failed"):
             return
+        is_director = task.mode == "director"
         task.status = "failed"
         task.error = error[:500]
         task.finished_at = datetime.now()
@@ -862,6 +939,8 @@ def _fail_task(task_id: int, error: str) -> None:
             task.cost = 0
         db.commit()
     logger.error("任务 #%s 判失败：%s", task_id, error)
+    if is_director:
+        _notify_drama(task_id)
 
 
 def _acquire_with_pin(task_id: int, role: str, fallback, require_director: bool = False):
@@ -898,6 +977,7 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
         task = db.get(Task, task_id)
         if task is None or task.status in ("done", "failed"):
             return False
+        is_director = task.mode == "director"
         failed_url = (task.worker_url or "").rstrip("/")
         guard = poison_guard.enabled() and failed_url not in ("", "pending")
         pool_node = pool.get_node_by_url(failed_url) if failed_url else None
@@ -918,6 +998,8 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
                 task.cost = 0
             db.commit()
             logger.error("毒丸隔离 #%s：%s 已熔断，拒绝跨节点重投", task_id, failed_url)
+            if is_director:
+                _notify_drama(task_id)
             return False
         if task.attempts < MAX_ATTEMPTS:
             task.status = stage
@@ -937,6 +1019,8 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             user = db.get(User, task.user_id)
             add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
         db.commit()
+        if is_director:
+            _notify_drama(task_id)
     return False
 
 # ---------------------------------------------------------------- ② 768p 生成
@@ -1151,18 +1235,22 @@ def _ensure_audio(src: Path, out_path: Path) -> None:
 
 
 # ---------------------------------------------------------------- Mock
-def _make_mock_video(out_path: Path) -> None:
-    """Mock 模式：优先用 ffmpeg 生成带音轨的测试视频，否则写占位文件。"""
+def _make_mock_video(out_path: Path, duration: float = 5.0, fps: int = 25) -> None:
+    """Mock 模式：优先用 ffmpeg 生成带音轨的测试视频，否则写占位文件。
+
+    director 任务需按 24fps 生成与段清单等长的素材（后处理按帧号切片）。
+    """
+    duration = max(0.5, float(duration))
     try:
         subprocess.run(
             [
                 "ffmpeg", "-y", "-loglevel", "error",
-                "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=5",
-                "-f", "lavfi", "-i", "sine=frequency=440:duration=5",
+                "-f", "lavfi", "-i", f"testsrc2=size=1280x720:rate={fps}:duration={duration:.3f}",
+                "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration:.3f}",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-shortest", str(out_path),
             ],
-            check=True, timeout=120,
+            check=True, timeout=max(120, int(duration * 10)),
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         logger.warning("ffmpeg 不可用，写入占位视频文件")

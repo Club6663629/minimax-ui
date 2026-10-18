@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
     # 长视频导演台（TimelineDirector，director_api.json）后端入口开关；默认关，拍板后置 true
     director_enabled: bool = False
+    # ---- 短剧流水线（七阶段：剧本→角色→分镜→就绪→生成→审片→交付）----
+    # 总开关；上线时显式置 true（还需 director_enabled 与带 director 标签的节点）
+    drama_enabled: bool = False
+    drama_max_shots: int = 24
+    drama_max_episode_seconds: int = 180
+    drama_max_shot_seconds: float = 10.0
+    drama_min_shot_seconds: float = 2.0
+    drama_keep_versions: int = 5          # 每镜保留版本数（P1 只记录，不清理）
+    drama_llm_timeout: int = 90
+    # qwen / off（off=强制本地模板，便于无 key 联调与 smoke）
+    drama_llm_provider: str = "qwen"
     # ---- 电商广告片 advideo：商品图 → 广告图（人工确认） → 广告视频 ----
     advideo_enabled: bool = True
     # 广告片已上线（2026-10-09 拍板放开）：默认全员可用。
@@ -198,7 +209,8 @@ UPLOAD_DIR = DATA_DIR / "uploads"     # 用户上传的首尾帧 / 参考图
 STAGING_DIR = DATA_DIR / "staging"    # 768p 中间产物
 OUTPUT_DIR = DATA_DIR / "output"      # 最终成片
 ADVIDEO_DIR = DATA_DIR / "advideo"    # 广告片候选广告图
+DRAMA_DIR = DATA_DIR / "drama"        # 短剧产物（clips/final/sheet/anchors/runs）
 WORKFLOW_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
-for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR):
+for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, DRAMA_DIR):
     _d.mkdir(parents=True, exist_ok=True)

@@ -9,8 +9,9 @@ from .auth import hash_password
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import User  # noqa: F401  确保建表时包含所有模型
-from .routers import admin, auth, credits, files, legal, ops, uploads, videos
+from .routers import admin, auth, credits, drama, files, legal, ops, uploads, videos
 from .services import billing  # noqa: F401
+from .services import drama_runner
 from .services.pool import pool
 from .services.worker import start_worker, stop_worker
 
@@ -128,6 +129,11 @@ def _bootstrap() -> None:
 async def lifespan(_app: FastAPI):
     _bootstrap()
     start_worker()
+    sweep_task = None
+    if settings.drama_enabled:
+        import asyncio
+        sweep_task = asyncio.get_event_loop().create_task(drama_runner.sweep_loop())
+        logger.info("短剧巡扫已启动（%ss 间隔）", drama_runner.SWEEP_INTERVAL_SECONDS)
     counts = pool.counts()
     logger.info(
         "服务启动 (mock_comfy=%s, cloud=%s, 生成节点=%d, 超分节点=%d)",
@@ -135,6 +141,8 @@ async def lifespan(_app: FastAPI):
         counts["generate_total"], counts["upscale_total"],
     )
     yield
+    if sweep_task is not None:
+        sweep_task.cancel()
     await stop_worker()
 
 
@@ -156,6 +164,7 @@ app.include_router(credits.router)
 app.include_router(admin.router)
 app.include_router(ops.router)
 app.include_router(legal.router)
+app.include_router(drama.router)
 
 
 @app.get("/api/health")

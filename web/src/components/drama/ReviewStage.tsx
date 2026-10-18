@@ -1,0 +1,640 @@
+/** S6 审片：成片播放、逐镜通过/返修、接缝指标与版本回滚。 */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  Download,
+  Film,
+  History,
+  Loader2,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from "lucide-react";
+import { api, fileUrl } from "../../api/client";
+import type {
+  DramaArtifactVersion,
+  DramaEpisode,
+  DramaReview,
+  DramaRun,
+  DramaShot,
+} from "../../types";
+import { errText, fmtSecs, fmtTime, SHOT_STATUS_LABEL, SHOT_STATUS_TONE } from "./labels";
+import SeamBadge from "./SeamBadge";
+
+export default function ReviewStage({
+  eid,
+  episode,
+  costPer5s,
+  activePatchRun,
+  notify,
+  onPatchStarted,
+  onChanged,
+  onGoShots,
+  onGoDeliver,
+}: {
+  eid: number;
+  episode: DramaEpisode;
+  costPer5s: number;
+  activePatchRun: DramaRun | null;
+  notify: (message: string) => void;
+  onPatchStarted: (run: DramaRun) => void;
+  onChanged: () => void | Promise<void>;
+  onGoShots: () => void;
+  onGoDeliver: () => void;
+}) {
+  const [review, setReview] = useState<DramaReview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showSheet, setShowSheet] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<DramaShot | null>(null);
+  const [reason, setReason] = useState("");
+  const [rerun, setRerun] = useState(true);
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const [versionsFor, setVersionsFor] = useState<DramaShot | null>(null);
+  const [approvingId, setApprovingId] = useState<number | null>(null);
+  const rowRefs = useRef(new Map<number, HTMLDivElement>());
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await api.dramaReview(eid);
+      setReview(data);
+    } catch (exc) {
+      setError(errText(exc));
+    } finally {
+      setLoading(false);
+    }
+  }, [eid]);
+
+  useEffect(() => {
+    void load();
+  }, [load, episode.updated_at, episode.final_url, episode.status]);
+
+  useEffect(() => {
+    if (!rejectTarget) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRejectTarget(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rejectTarget]);
+
+  const seams = useMemo(() => {
+    const map = new Map<number, DramaReview["seams"][number]>();
+    for (const seam of review?.seams || []) map.set(seam.between[0], seam);
+    return map;
+  }, [review]);
+
+  const shots = review?.shots || [];
+  const staleCount = shots.filter((shot) => shot.stale).length;
+  const rejected = shots.filter((shot) => shot.status === "rejected").length;
+  const rendered = shots.filter((shot) => shot.status === "rendered").length;
+  const missingClip = shots.filter((shot) => !shot.clip_url).length;
+  const finalStale = Boolean(review?.episode.final_stale ?? episode.final_stale);
+  const canDeliver =
+    shots.length > 0 && rejected === 0 && staleCount === 0 && missingClip === 0 && !finalStale;
+  const repairRatio =
+    review && review.stats.full_cost > 0
+      ? review.stats.repair_cost_total / review.stats.full_cost
+      : 0;
+
+  const focusShot = (shotId: number | undefined) => {
+    if (!shotId) return;
+    window.setTimeout(() => {
+      rowRefs.current.get(shotId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+  };
+
+  const approve = async (shot: DramaShot) => {
+    setApprovingId(shot.id);
+    try {
+      await api.dramaApproveShot(shot.id);
+      const next = shots.find((item, index) => {
+        const current = shots.findIndex((entry) => entry.id === shot.id);
+        return index > current && item.status === "rendered";
+      });
+      await load();
+      await onChanged();
+      notify(`第 ${shot.shot_no} 镜已通过`);
+      if (next) focusShot(next.id);
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const submitReject = async () => {
+    if (!rejectTarget) return;
+    if (!reason.trim()) {
+      notify("请填写返修原因");
+      return;
+    }
+    setRejectBusy(true);
+    try {
+      const result = await api.dramaRejectShot(rejectTarget.id, {
+        reason: reason.trim(),
+        rerun,
+        anchor: true,
+      });
+      setRejectTarget(null);
+      setReason("");
+      if (result.run) {
+        notify(
+          result.cost
+            ? `返修已提交，预计 ${result.cost} 积分`
+            : "返修已提交",
+        );
+        onPatchStarted(result.run);
+      } else {
+        notify(`第 ${rejectTarget.shot_no} 镜已标记待返修`);
+        await load();
+        await onChanged();
+      }
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setRejectBusy(false);
+    }
+  };
+
+  if (!review && loading) {
+    return (
+      <div className="panel flex items-center justify-center gap-2 px-6 py-16 text-sm text-foreground-500">
+        <Loader2 size={16} className="animate-spin" /> 正在汇总审片数据…
+      </div>
+    );
+  }
+
+  if (!review) {
+    return (
+      <div className="panel space-y-3 px-6 py-12 text-center">
+        <p className="text-sm text-rose-600">{error || "审片数据加载失败"}</p>
+        <button type="button" className="btn-ghost" onClick={() => void load()}>
+          重试
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {activePatchRun && (
+        <section className="panel flex items-center gap-2 border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          <Loader2 size={14} className="animate-spin" />
+          返修生成中（run #{activePatchRun.id} · {activePatchRun.phase}），完成后自动刷新。
+        </section>
+      )}
+
+      <section className="panel space-y-3 p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+            <Film size={15} /> 本集成片
+          </h2>
+          <div className="flex items-center gap-2">
+            {review.episode.final_url && (
+              <a
+                className="btn-ghost px-2 py-1 text-xs"
+                href={fileUrl(review.episode.final_url)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                在新窗口播放
+              </a>
+            )}
+            {review.sheet_url && (
+              <button
+                type="button"
+                className="btn-ghost px-2 py-1 text-xs"
+                onClick={() => setShowSheet((value) => !value)}
+              >
+                {showSheet ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                联系表
+              </button>
+            )}
+          </div>
+        </div>
+
+        {review.episode.final_url ? (
+          <video
+            key={review.episode.final_url}
+            src={fileUrl(review.episode.final_url)}
+            controls
+            className="max-h-[360px] w-full rounded-xl bg-black"
+          />
+        ) : (
+          <div className="rounded-xl bg-background-200 px-4 py-10 text-center text-xs text-foreground-500">
+            还没有成片，请回「就绪」提交整集。
+          </div>
+        )}
+
+        {finalStale && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            成片已过旧（分镜或角色卡已改动），当前仅可查看，交付前需要重新生成整集。
+          </p>
+        )}
+
+        {showSheet && review.sheet_url && (
+          <img
+            src={fileUrl(review.sheet_url)}
+            alt="联系表"
+            className="w-full rounded-xl border border-background-200"
+          />
+        )}
+      </section>
+
+      <section className="panel grid grid-cols-2 gap-3 px-4 py-3 text-xs md:grid-cols-6">
+        <div>
+          <p className="text-foreground-500">待审</p>
+          <p className="mt-0.5 text-sm text-sky-700">{review.stats.rendered}</p>
+        </div>
+        <div>
+          <p className="text-foreground-500">已通过</p>
+          <p className="mt-0.5 text-sm text-emerald-700">{review.stats.approved}</p>
+        </div>
+        <div>
+          <p className="text-foreground-500">待返修</p>
+          <p className="mt-0.5 text-sm text-rose-700">{review.stats.rejected}</p>
+        </div>
+        <div>
+          <p className="text-foreground-500" title="当前成片与最新分镜/角色卡不一致的镜头数">
+            旧片镜数
+          </p>
+          <p className="mt-0.5 text-sm text-foreground-700">{review.stats.stale}</p>
+        </div>
+        <div>
+          <p className="text-foreground-500">返修成本</p>
+          <p className={`mt-0.5 text-sm ${repairRatio > 0.4 ? "text-rose-700" : "text-foreground-800"}`}>
+            {review.stats.repair_cost_total} / {review.stats.full_cost} 积分
+          </p>
+        </div>
+        <div>
+          <p className="text-foreground-500">接缝</p>
+          <p className="mt-0.5 text-sm text-foreground-800">{review.seams.length} 处已测</p>
+        </div>
+      </section>
+
+      {repairRatio > 0.4 && (
+        <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
+          已返修成本占整集 {Math.round(repairRatio * 100)}%，建议整集重跑（可能更省）。
+        </p>
+      )}
+
+      <section className="space-y-2">
+        {shots.map((shot) => {
+          const seam = seams.get(shot.shot_no);
+          const disabled = shot.stale;
+          return (
+            <div key={shot.id} ref={(node) => {
+              if (node) rowRefs.current.set(shot.id, node);
+              else rowRefs.current.delete(shot.id);
+            }}>
+              <div className="panel grid grid-cols-[112px_minmax(0,1fr)] items-start gap-3 p-3 sm:grid-cols-[112px_1fr_auto]">
+                <div className="relative h-[63px] w-[112px] overflow-hidden rounded-lg bg-black">
+                  {shot.clip_url ? (
+                    <video
+                      src={fileUrl(shot.clip_url)}
+                      muted
+                      preload="metadata"
+                      playsInline
+                      className="h-full w-full object-cover"
+                      onMouseEnter={(event) => void event.currentTarget.play().catch(() => {})}
+                      onMouseLeave={(event) => {
+                        event.currentTarget.pause();
+                        event.currentTarget.currentTime = 0;
+                      }}
+                    />
+                  ) : (
+                    <span className="flex h-full items-center justify-center text-[10px] text-background-50/70">
+                      无成片
+                    </span>
+                  )}
+                  <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-background-50">
+                    #{shot.shot_no}
+                  </span>
+                </div>
+
+                <div className="min-w-0 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${SHOT_STATUS_TONE[shot.status]}`}>
+                      {SHOT_STATUS_LABEL[shot.status]}
+                    </span>
+                    {shot.stale && (
+                      <span
+                        className="rounded bg-background-200 px-1.5 py-0.5 text-[10px] text-foreground-500"
+                        title="分镜或角色卡已改动，当前成片是旧片，需重新生成"
+                      >
+                        旧片
+                      </span>
+                    )}
+                    <span className="text-[10px] text-foreground-400">
+                      v{shot.version_no || 0} · {fmtSecs(shot.duration_s)}
+                      {shot.repair_count > 0 && ` · 返修 ${shot.repair_count} 次`}
+                    </span>
+                    <button
+                      type="button"
+                      className="ml-auto inline-flex items-center gap-0.5 text-[10px] text-foreground-500 hover:text-foreground-800"
+                      onClick={() => setVersionsFor(shot)}
+                    >
+                      <History size={11} /> 版本
+                    </button>
+                  </div>
+                  <p className="line-clamp-2 text-xs leading-relaxed text-foreground-700">
+                    {shot.prompt}
+                  </p>
+                  {shot.dialogue && (
+                    <p className="text-[11px] text-foreground-500">台词：{shot.dialogue}</p>
+                  )}
+                  {shot.status === "rejected" && (
+                    <p className="text-[11px] text-rose-600">
+                      已标记待返修（未生成）；可点「重新返修」提交。
+                    </p>
+                  )}
+                </div>
+
+                <div className="col-span-2 flex shrink-0 flex-wrap gap-1.5 sm:col-span-1 sm:flex-col">
+                  <button
+                    type="button"
+                    className="btn-ghost px-2 py-1 text-xs"
+                    disabled={disabled || approvingId === shot.id || shot.status === "approved" || !shot.clip_url}
+                    onClick={() => void approve(shot)}
+                    title={disabled ? "旧版镜头需重新生成后再审" : ""}
+                  >
+                    <ThumbsUp size={12} />
+                    {approvingId === shot.id ? "…" : shot.status === "approved" ? "已通过" : "通过"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost px-2 py-1 text-xs text-rose-600"
+                    disabled={disabled || !shot.clip_url || Boolean(activePatchRun)}
+                    onClick={() => {
+                      setRejectTarget(shot);
+                      setReason("");
+                      setRerun(true);
+                    }}
+                    title={disabled ? "旧版镜头需重新生成后再审" : ""}
+                  >
+                    <ThumbsDown size={12} />
+                    {shot.status === "rejected" ? "重新返修" : "返修"}
+                  </button>
+                </div>
+              </div>
+
+              {seam && (
+                <div className="flex items-center justify-center gap-2 py-0.5 text-[10px] text-foreground-400">
+                  <span className="h-px w-8 bg-background-300" />
+                  <SeamBadge seam={seam} label={`${seam.between[0]}→${seam.between[1]}`} />
+                  <span>接缝 {seam.between[0]}→{seam.between[1]}</span>
+                  <span className="h-px w-8 bg-background-300" />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </section>
+
+      <section className="panel flex flex-wrap items-center gap-3 px-4 py-3">
+        {rendered > 0 && (
+          <span className="text-xs text-foreground-500">
+            还有 {rendered} 镜未审，交付时自动视为通过。
+          </span>
+        )}
+        {staleCount > 0 && (
+          <span className="text-xs text-rose-600">有 {staleCount} 个旧版镜头，需重新生成整集。</span>
+        )}
+        {rejected > 0 && (
+          <span className="text-xs text-rose-600">还有 {rejected} 镜待返修，不能交付。</span>
+        )}
+        {finalStale && <span className="text-xs text-rose-600">成片过旧，不能交付。</span>}
+        <div className="ml-auto flex gap-2">
+          <button type="button" className="btn-ghost" onClick={onGoShots}>
+            回分镜
+          </button>
+          <button type="button" className="btn-primary" disabled={!canDeliver} onClick={onGoDeliver}>
+            去交付
+          </button>
+        </div>
+      </section>
+
+      {rejectTarget && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+          <div className="panel w-full max-w-md space-y-3 p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-foreground-900">
+                返修第 {rejectTarget.shot_no} 镜
+              </h3>
+              <button
+                type="button"
+                className="rounded-lg p-1 text-foreground-500 hover:bg-background-200"
+                onClick={() => setRejectTarget(null)}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <textarea
+              className="input min-h-[96px] resize-y text-xs"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="必填：说明要改什么（会写入重采样提示词）"
+            />
+
+            <label className="flex items-start gap-2 text-xs text-foreground-600">
+              <input type="checkbox" checked disabled className="mt-0.5" />
+              图锚保持首尾连贯（L1）— 自动使用相邻镜头首尾帧作参考
+            </label>
+            <label className="flex items-start gap-2 text-xs text-foreground-600">
+              <input
+                type="checkbox"
+                checked={rerun}
+                onChange={(event) => setRerun(event.target.checked)}
+                className="mt-0.5"
+              />
+              立即重新生成（<Clock3 size={11} className="inline" /> 约{" "}
+              {Math.max(1, Math.ceil(rejectTarget.duration_s / 5)) * costPer5s} 积分）
+            </label>
+            {!rerun && (
+              <p className="rounded-lg bg-background-200 px-3 py-2 text-[11px] text-foreground-600">
+                仅标记待返修、不生成；稍后可在行内点「重新返修」再提交。
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-ghost" onClick={() => setRejectTarget(null)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={rejectBusy}
+                onClick={() => void submitReject()}
+              >
+                {rejectBusy ? "提交中…" : rerun ? "提交返修" : "标记待返修"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {versionsFor && (
+        <VersionDrawer
+          episodeId={eid}
+          shot={versionsFor}
+          onClose={() => setVersionsFor(null)}
+          onRolledBack={async () => {
+            setVersionsFor(null);
+            await load();
+            await onChanged();
+            notify("已回滚到所选版本，并重新拼接成片（0 成本）");
+          }}
+          notify={notify}
+        />
+      )}
+    </div>
+  );
+}
+
+function VersionDrawer({
+  episodeId,
+  shot,
+  notify,
+  onClose,
+  onRolledBack,
+}: {
+  episodeId: number;
+  shot: DramaShot;
+  notify: (message: string) => void;
+  onClose: () => void;
+  onRolledBack: () => void | Promise<void>;
+}) {
+  const [versions, setVersions] = useState<DramaArtifactVersion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api
+      .dramaShotArtifacts(shot.id)
+      .then((result) => {
+        if (alive) setVersions(result.artifacts);
+      })
+      .catch((exc) => notify(errText(exc)))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [shot.id, notify]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const rollback = async (artifact: DramaArtifactVersion) => {
+    if (!window.confirm(`回滚到 v${artifact.version_no}？将重新拼接成片，0 成本。`)) return;
+    setBusyId(artifact.id);
+    try {
+      await api.dramaRollback(episodeId, artifact.id);
+      await onRolledBack();
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-sm overflow-y-auto bg-background-50 p-4 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-foreground-900">
+            第 {shot.shot_no} 镜 · 历史版本
+          </h3>
+          <button
+            type="button"
+            className="rounded-lg p-1 text-foreground-500 hover:bg-background-200"
+            onClick={onClose}
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        {loading ? (
+          <p className="flex items-center gap-2 py-6 text-xs text-foreground-500">
+            <Loader2 size={14} className="animate-spin" /> 加载版本…
+          </p>
+        ) : versions.length === 0 ? (
+          <p className="py-6 text-xs text-foreground-500">还没有历史版本。</p>
+        ) : (
+          <ul className="space-y-2">
+            {versions.map((version) => (
+              <li
+                key={version.id}
+                className={`rounded-xl border p-2.5 text-xs ${
+                  version.is_current
+                    ? "border-primary-300 bg-primary-50"
+                    : "border-background-200 bg-background-100"
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-foreground-900">v{version.version_no}</span>
+                  {version.is_current && (
+                    <span className="rounded bg-primary-100 px-1 text-[10px] text-primary-700">
+                      当前
+                    </span>
+                  )}
+                  {version.stale && (
+                    <span className="rounded bg-background-200 px-1 text-[10px] text-foreground-500">
+                      旧版
+                    </span>
+                  )}
+                  <span className="ml-auto text-[10px] text-foreground-400">
+                    {fmtSecs(version.duration)} · {version.frames} 帧
+                  </span>
+                </div>
+                <p className="mt-1 text-[10px] text-foreground-400">{fmtTime(version.created_at)}</p>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  {version.url && (
+                    <a
+                      className="btn-ghost px-2 py-0.5 text-[11px]"
+                      href={fileUrl(version.url)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Download size={11} /> 查看
+                    </a>
+                  )}
+                  {!version.is_current && (
+                    <button
+                      type="button"
+                      className="btn-ghost px-2 py-0.5 text-[11px]"
+                      disabled={busyId === version.id}
+                      onClick={() => void rollback(version)}
+                    >
+                      {busyId === version.id ? "回滚中…" : "回滚到此版本"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-3 text-[10px] leading-relaxed text-foreground-500">
+          回滚只切换当前指针并重新拼接成片，不重新生成、不扣积分。
+        </p>
+      </div>
+    </div>
+  );
+}

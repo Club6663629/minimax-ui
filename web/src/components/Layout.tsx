@@ -1,12 +1,37 @@
 /** 页面骨架：顶部导航（海白菜品牌）+ 协议更新横幅 + 内容区 + 页脚常驻法律文本入口。 */
-import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck, Sparkles } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { api } from "../api/client";
 import BrandLogo from "./BrandLogo";
 import LegalNotice from "./LegalNotice";
 import { FOOTER_LINKS, LEGAL_UPDATED, LEGAL_VERSION } from "../legal";
 import { useAuth } from "../state/auth";
 
-function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label: string }) {
+function NavItem({
+  to,
+  icon,
+  label,
+  disabled,
+  title,
+}: {
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  title?: string;
+}) {
+  if (disabled) {
+    return (
+      <span
+        title={title}
+        className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-foreground-400"
+      >
+        {icon}
+        {label}
+      </span>
+    );
+  }
   return (
     <NavLink
       to={to}
@@ -28,6 +53,15 @@ function NavItem({ to, icon, label }: { to: string; icon: React.ReactNode; label
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [dramaEnabled, setDramaEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    api
+      .dramaStatus()
+      .then((result) => setDramaEnabled(result.enabled))
+      .catch(() => setDramaEnabled(null));
+  }, [user]);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -38,7 +72,14 @@ export default function Layout() {
           </div>
 
           <nav className="flex items-center gap-1">
-            <NavItem to="/" icon={<Clapperboard size={15} />} label="创作" />
+            <NavItem to="/" icon={<Sparkles size={15} />} label="创作" />
+            <NavItem
+              to="/drama"
+              icon={<Clapperboard size={15} />}
+              label="短剧"
+              disabled={dramaEnabled === false}
+              title={dramaEnabled === false ? "短剧功能未开启（需 DRAMA_ENABLED 与 DIRECTOR_ENABLED）" : "短剧流水线"}
+            />
             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
             {user?.role === "admin" && (
               <NavItem to="/admin" icon={<ShieldCheck size={15} />} label="管理" />

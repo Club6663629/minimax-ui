@@ -305,3 +305,282 @@ export interface LegalCurrent {
   effective: string;
   docs: LegalDoc[];
 }
+
+// ---------------------------------------------------------------- 短剧流水线
+// 七阶段：剧本 → 角色 → 分镜 → 就绪 → 生成 → 审片 → 交付
+export type DramaEpisodeStatus =
+  | "draft"
+  | "script_ready"
+  | "cast_ready"
+  | "shots_ready"
+  | "rendering"
+  | "review"
+  | "done";
+
+export type DramaShotStatus = "ready" | "rendered" | "approved" | "rejected";
+export type DramaRunStatus = "queued" | "postprocess" | "done" | "failed" | "cancelled";
+
+export interface DramaStatus {
+  enabled: boolean;
+  director_enabled: boolean;
+  director_node_available: boolean;
+  pricing: { cost_768p_5s: number; block_seconds: number };
+  limits: { max_shots: number; max_seconds: number; min_shot: number; max_shot: number };
+}
+
+export interface DramaBeat {
+  id: string;
+  title: string;
+  summary: string;
+  mood: string;
+  location: string;
+  characters: string[];
+  target_seconds: number;
+  dialogue_hint: string;
+}
+
+export interface DramaCharacter {
+  id: number;
+  project_id: number;
+  name: string;
+  role: "main" | "support" | "extra" | string;
+  gender: string;
+  age: string;
+  appearance: string;
+  personality: string;
+  costume: string;
+  voice: string;
+  card_upload_id: number | null;
+  card_url: string | null;
+  locked: boolean;
+  first_episode_id: number | null;
+}
+
+export interface DramaScene {
+  id: number;
+  episode_id: number;
+  scene_no: number;
+  name: string;
+  location: string;
+  time_of_day: string;
+  description: string;
+  anchor_upload_id: number | null;
+  anchor_url: string | null;
+}
+
+export interface DramaSeamMetric {
+  ssim?: number | null;
+  d_y?: number | null;
+  audio_db?: number | null;
+  level?: "ok" | "warn" | "fail" | string;
+}
+
+export interface DramaShot {
+  id: number;
+  shot_no: number;
+  scene_no: number;
+  beat_id: string;
+  prompt: string;
+  duration_s: number;
+  shot_size: string;
+  camera: string;
+  movement: string;
+  character_ids: number[];
+  ref_upload_ids: number[];
+  continuity_note: string;
+  dialogue: string;
+  audio_note: string;
+  status: DramaShotStatus;
+  version_no: number;
+  repair_count: number;
+  repair_cost_total: number;
+  clip_url: string | null;
+  stale: boolean;
+  qa: { in?: DramaSeamMetric; out?: DramaSeamMetric };
+}
+
+/** `/shots/plan` 响应与 `PUT /shots` 入参共用的草稿字段。 */
+export interface DramaShotDraft {
+  shot_no: number;
+  scene_no: number;
+  beat_id: string;
+  prompt: string;
+  duration_s: number;
+  shot_size: string;
+  camera: string;
+  movement: string;
+  character_ids: number[];
+  ref_upload_ids: number[];
+  continuity_note: string;
+  dialogue: string;
+  audio_note: string;
+}
+
+export interface DramaEpisodeStats {
+  shots: number;
+  total_seconds: number;
+  rendered: number;
+  approved: number;
+  rejected: number;
+  stale: number;
+  repair_cost_total: number;
+  full_cost: number;
+}
+
+export interface DramaEpisode {
+  id: number;
+  project_id: number;
+  episode_no: number;
+  title: string;
+  brief: string;
+  status: DramaEpisodeStatus;
+  spec_hash: string;
+  final_duration: number;
+  final_url: string | null;
+  final_stale: boolean;
+  last_error: string;
+  beats: DramaBeat[];
+  script: string;
+  stats: DramaEpisodeStats;
+  /** 本集所有 run 的实际消耗合计 */
+  spent: number;
+  run_count: number;
+  /** 当前镜头版本去重数量 */
+  version_count: number;
+  shots: DramaShot[];
+  active_run: { id: number; status: string } | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface DramaEpisodeSummary {
+  id: number;
+  episode_no: number;
+  title: string;
+  status: DramaEpisodeStatus;
+  final_url: string | null;
+  final_duration: number;
+  shot_count: number;
+}
+
+export interface DramaProject {
+  id: number;
+  user_id: number;
+  title: string;
+  logline: string;
+  genre: string;
+  style_bible: string;
+  aspect_ratio: string;
+  target_episodes: number;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+  episode_count?: number;
+  episodes?: DramaEpisodeSummary[];
+}
+
+export interface DramaProjectDetail {
+  project: DramaProject;
+  episodes: DramaEpisode[];
+  characters: DramaCharacter[];
+}
+
+export interface DramaEpisodeDetail {
+  episode: DramaEpisode;
+  project: DramaProject;
+  characters: DramaCharacter[];
+  scenes: DramaScene[];
+}
+
+export interface DramaRunShot {
+  shot_no: number;
+  clip_url: string | null;
+  version_no: number;
+  status: DramaShotStatus;
+  stale: boolean;
+}
+
+export interface DramaRun {
+  id: number;
+  mode: "full" | "patch";
+  status: DramaRunStatus;
+  /** 展示用派生阶段：queued / generating / postprocess / done / failed / cancelled */
+  phase: string;
+  task_id: number;
+  task_status: string;
+  task_error: string;
+  error: string;
+  cost: number;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  shot_ids: number[];
+  master_url: string | null;
+  shots: DramaRunShot[];
+}
+
+export interface DramaIssue {
+  code: string;
+  message: string;
+  shot_no?: number;
+}
+
+export interface DramaPlanSegment {
+  shot_no: number;
+  frames: number;
+  visible_frames: number;
+  ref_count: number;
+  prompt: string;
+}
+
+export interface DramaChecklist {
+  ready: boolean;
+  shots: number;
+  total_seconds: number;
+  est_cost: number;
+  balance: number;
+  sufficient: boolean;
+  issues: DramaIssue[];
+  warnings: DramaIssue[];
+  plan: {
+    total_frames: number;
+    fps: number;
+    segments: DramaPlanSegment[];
+    windows: { shot_no: number; frames: number; duration: number }[];
+  } | null;
+}
+
+export interface DramaSeam {
+  between: [number, number];
+  ssim: number | null;
+  d_y: number | null;
+  audio_db: number | null;
+  level: string;
+}
+
+export interface DramaReview {
+  episode: DramaEpisode;
+  stats: DramaEpisodeStats;
+  shots: DramaShot[];
+  seams: DramaSeam[];
+  sheet_url: string;
+  warnings: DramaIssue[];
+}
+
+export interface DramaArtifactVersion {
+  id: number;
+  version_no: number;
+  url: string | null;
+  duration: number;
+  frames: number;
+  is_current: boolean;
+  stale: boolean;
+  created_at: string | null;
+}
+
+export interface DramaRenderResult {
+  reused: boolean;
+  run: DramaRun;
+  cost: number;
+}
+
