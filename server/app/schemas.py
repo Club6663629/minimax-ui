@@ -135,6 +135,9 @@ class AdvideoCreateIn(BaseModel):
     enhance: bool = True                                     # Content-IR 增强（默认开启）
     # 生视频增强路由：llm=主方案（qwen3.8-flash，默认）/ content_ir=C臂备选 / local=A臂（0 付费）
     video_prompt_mode: Optional[Literal["llm", "content_ir", "local"]] = None
+    # 自动模式：True=候选图出完自动确认（选第 1 张）直接进视频阶段（默认）；False=等人工确认；
+    # None=跟随服务端全局默认（ADVIDEO_AUTO_CONFIRM，默认 True）
+    auto_confirm: Optional[bool] = None
     scene: Literal["general", "drama", "ecommerce", "music"] = "ecommerce"
 
 
@@ -169,6 +172,7 @@ class TaskOut(BaseModel):
     chosen_index: int = -1               # 人工确认选中的序号（-1=未确认）
     chosen_image_url: Optional[str] = None
     ad_image_cost: int = 0               # 广告图阶段已扣积分（独立于 cost）
+    auto_confirm: bool = True            # 自动模式：候选图出完自动确认（无需人工点击）
     first_image_url: Optional[str]
     last_image_url: Optional[str]
     ref_image_urls: list[str]

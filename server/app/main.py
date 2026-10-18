@@ -91,6 +91,7 @@ def _migrate_advideo() -> None:
         "chosen_index": "INTEGER DEFAULT -1",
         "ad_image_cost": "INTEGER DEFAULT 0",
         "video_prompt_mode": "VARCHAR(16) DEFAULT ''",
+        "ad_auto_confirm": "TINYINT(1) DEFAULT 1",
     }
     with engine.begin() as conn:
         for col, typ in ddl.items():

@@ -130,6 +130,8 @@ export const api = {
       video_prompt_default_mode?: "llm" | "content_ir" | "local";
       video_prompt_modes?: { value: string; label: string }[];
       video_prompt_enhance_enabled?: boolean;
+      /** 自动模式默认值（true=候选图出完自动确认并直接进视频阶段） */
+      auto_confirm_default?: boolean;
     }>("/api/videos/advideo/status"),
   createAdvideo: (body: Record<string, unknown>) =>
     request<Task>("/api/videos/advideo", { method: "POST", body: JSON.stringify(body) }),

@@ -19,7 +19,7 @@ from ..schemas import (
     UpgradeIn,
     VideoCreateIn,
 )
-from ..services import advimage, comfyui
+from ..services import advconfirm, advimage, comfyui
 from ..services.billing import (
     PACKAGES,
     add_credits,
@@ -372,6 +372,8 @@ def advideo_status(_user: User = Depends(get_advideo_access)):
             {"value": "local", "label": "本地规则"},
         ],
         "video_prompt_enhance_enabled": bool(getattr(settings, "advideo_video_prompt_enhance", True)),
+        # 自动模式默认值（前端据此初始化开关；true=候选图出完自动确认并直接进视频阶段）
+        "auto_confirm_default": bool(getattr(settings, "advideo_auto_confirm", True)),
     })
     return st
 
@@ -426,6 +428,10 @@ def create_advideo(
         ad_product_count=len(body.product_image_ids),
         ad_image_cost=image_cost,                 # 提交即扣（与视频 cost 独立）
         video_prompt_mode=(body.video_prompt_mode or ""),   # advideo9 生视频增强路由（空=跟随全局默认）
+        # 自动模式：默认跟随服务端全局配置（ADVIDEO_AUTO_CONFIRM=true）→ 出图完成即自动进视频阶段
+        ad_auto_confirm=(
+            bool(settings.advideo_auto_confirm) if body.auto_confirm is None else bool(body.auto_confirm)
+        ),
         status="queued_images",
     )
     db.add(task)
@@ -489,6 +495,7 @@ def regenerate_advideo(
         ad_product_count=task.ad_product_count,
         ad_image_cost=image_cost,
         video_prompt_mode=task.video_prompt_mode,
+        ad_auto_confirm=bool(getattr(task, "ad_auto_confirm", True)),   # 重生成沿用本组的自动/手动模式
         status="queued_images",
     )
     db.add(clone)
@@ -517,10 +524,7 @@ def confirm_advideo_image(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"当前状态 {task.status} 不可确认广告图"
         )
-    try:
-        paths = json.loads(task.ad_image_paths or "[]")
-    except (TypeError, ValueError):
-        paths = []
+    paths = advconfirm.candidate_paths(task)
     if not (0 <= body.image_index < len(paths)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "选择的广告图不存在")
     # 视频阶段计费预检：确认后按时长×分辨率扣（实际扣款在 _claim_generate 领取时）
@@ -530,22 +534,14 @@ def confirm_advideo_image(
             status.HTTP_402_PAYMENT_REQUIRED,
             f"积分不足：合成 {task.duration}s/{task.resolution} 广告片需 {video_cost} 积分，请先充值",
         )
-    task.chosen_image = paths[body.image_index]
-    task.chosen_index = body.image_index
-    if body.video_prompt and body.video_prompt.strip():
-        task.prompt = body.video_prompt.strip()[:2000]
-    if body.enhance is not None:
-        task.enhance = body.enhance
-    if body.video_prompt_mode:
-        # advideo9：生视频增强路由（前端增强开关：llm 主方案 / content_ir 备选 / local 本地）
-        task.video_prompt_mode = body.video_prompt_mode
-        if body.video_prompt_mode == "local":
-            task.enhance = True   # A 臂也要进增强阶段（跳过云端 IR，仅本地规则，0 付费）
-    task.status = "queued"          # 复用既有生成循环（enhance → 768p → 超分）
-    task.error = ""
-    task.worker_url = ""
-    task.started_at = None
-    task.finished_at = None
+    # 与自动模式共用同一套确认逻辑（services/advconfirm.apply_confirm），两条路径不漂移
+    advconfirm.apply_confirm(
+        task,
+        body.image_index,
+        video_prompt=body.video_prompt,
+        enhance=body.enhance,
+        video_prompt_mode=body.video_prompt_mode,
+    )
     db.commit()
     db.refresh(task)
     return serialize_task(task, db=db)

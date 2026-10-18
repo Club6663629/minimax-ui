@@ -122,6 +122,8 @@ export interface Task {
   chosen_image_url: string | null;
   /** 本次任务已扣的广告图积分（cost_ad_image × 张数）；与视频费 task.cost 独立计。0/缺省 = 未扣或已退 */
   ad_image_cost?: number;
+  /** 自动模式：true=候选图出完自动确认（选第 1 张）直接进视频阶段，无需人工点击 */
+  auto_confirm?: boolean;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

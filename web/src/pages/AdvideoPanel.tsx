@@ -23,6 +23,7 @@ import {
   Trash2,
   UploadCloud,
   X,
+  Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -50,6 +51,8 @@ interface AdvideoStatus {
   /** 提示词增强默认是否开启（后端全局配置） */
   video_prompt_default_mode?: AdvanceMode;
   video_prompt_enhance_enabled?: boolean;
+  /** 自动模式默认值（后端全局配置；true=候选图出完自动确认并直接进视频阶段） */
+  auto_confirm_default?: boolean;
 }
 
 /** 提示词增强开关：开 = 开启（后端 llm 主方案：qwen-flash，失败自动回退 Content-IR），关 = 关闭（后端 local）。
@@ -131,6 +134,8 @@ export default function AdvideoPanel({
   const [videoPrompt, setVideoPrompt] = useState("");
   // 提示词增强开关：默认跟随后端全局配置
   const [videoMode, setVideoMode] = useState<AdvanceMode>(ENHANCE_ON);
+  // 自动模式（默认开）：候选图出完后自动选定第 1 张并直接合成广告片，无需手动确认
+  const [autoMode, setAutoMode] = useState(true);
   const [imageCount, setImageCount] = useState(3);
   const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
   const [duration, setDuration] = useState<(typeof DURATIONS)[number]>(8);
@@ -155,6 +160,7 @@ export default function AdvideoPanel({
       .then((st) => {
         setNode(st);
         if (st.video_prompt_default_mode) setVideoMode(st.video_prompt_default_mode);
+        if (typeof st.auto_confirm_default === "boolean") setAutoMode(st.auto_confirm_default);
       })
       .catch(() => setNode(null));
   }, []);
@@ -274,6 +280,7 @@ export default function AdvideoPanel({
         image_count: imageCount,
         enhance: true,
         video_prompt_mode: videoMode, // 提示词增强开/关
+        auto_confirm: autoMode, // 自动模式：候选图出完自动确认并直接进视频阶段
         scene: "ecommerce",
       });
       setActiveId(t.id);
@@ -544,6 +551,22 @@ export default function AdvideoPanel({
               on={videoMode === ENHANCE_ON}
               onToggle={() => setVideoMode(videoMode === ENHANCE_ON ? ENHANCE_OFF : ENHANCE_ON)}
             />
+            <button
+              type="button"
+              onClick={() => setAutoMode((v) => !v)}
+              title={
+                autoMode
+                  ? "自动模式（默认）：候选广告图出完后自动选定第 1 张并直接合成广告片，无需手动确认"
+                  : "手动模式：候选广告图出完后需你手动确认才合成广告片"
+              }
+              className={
+                autoMode
+                  ? "flex items-center gap-1.5 rounded-full border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs text-primary-700"
+                  : "flex items-center gap-1.5 rounded-full border border-background-300 bg-background-50 px-3 py-1.5 text-xs text-foreground-600 hover:border-primary-400"
+              }
+            >
+              <Zap size={13} /> 自动模式{autoMode ? "：开" : "：关"}
+            </button>
 
             <div className="ml-auto flex items-center gap-3">
               <span className="flex items-center gap-1.5 text-xs text-foreground-500" title="提交生成即按张数扣除广告图积分">
@@ -573,7 +596,9 @@ export default function AdvideoPanel({
             </div>
           </div>
           <p className="mt-2 text-[11px] text-foreground-500">
-            计费分两步：提交生成即扣候选广告图 {imageCost} 积分（{imageCount} 张 × {imageUnit}，图片一经生成即消耗，仅系统出图失败全额退还）；确认合成广告片时再按片长/清晰度扣 {cost} 积分。
+            计费分两步：提交生成即扣候选广告图 {imageCost} 积分（{imageCount} 张 × {imageUnit}，图片一经生成即消耗，仅系统出图失败全额退还）；{autoMode
+              ? "自动模式下候选图出完即自动选定第 1 张并进入合成，"
+              : "确认合成广告片时"}再按片长/清晰度扣 {cost} 积分。
           </p>
           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
         </div>
@@ -585,7 +610,9 @@ export default function AdvideoPanel({
           <Loader2 size={22} className="mx-auto animate-spin text-primary-600" />
           <p className="mt-3 text-sm text-foreground-800">候选广告图生成中</p>
           <p className="mt-1 text-xs text-foreground-500">
-            生成期间任务不可取消，完成后将自动进入确认环节。
+            {activeTask.auto_confirm === false
+              ? "生成期间任务不可取消，完成后需你手动确认候选图才进入广告片合成。"
+              : "生成期间任务不可取消；自动模式已开启，候选图出完后会自动选定第 1 张并直接合成广告片（无需手动确认）。"}
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
             <button type="button" onClick={() => dismiss(activeTask.id)} className="btn-ghost !px-3 !py-1.5 text-xs">
@@ -607,7 +634,10 @@ export default function AdvideoPanel({
               <ImageIcon size={16} />
             </span>
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-foreground-900">候选广告图已生成</h3>
+              <h3 className="text-sm font-medium text-foreground-900">
+                候选广告图已生成
+                {activeTask.auto_confirm === false ? "" : "（自动模式）"}
+              </h3>
               <p className="mt-0.5 text-xs text-foreground-500">
                 共 {usedImages} 张候选图（本组广告图积分已扣除）。同组候选同源生成、高度一致，确认后整组用于合成广告片，成片更稳定连贯；如需重做可重新生成。
               </p>

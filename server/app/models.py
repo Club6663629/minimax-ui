@@ -82,6 +82,8 @@ class Task(Base):
     ad_image_cost: Mapped[int] = mapped_column(Integer, default=0)
     # 生视频提示词增强路由（任务级覆盖）：content_ir=C臂（默认）| local=A臂；空=跟随全局默认
     video_prompt_mode: Mapped[str] = mapped_column(String(16), default="")
+    # 自动模式：候选图出完自动确认（选第 N 张）直接进视频阶段，无需人工点击；默认 True（用户拍板 2026-10-10）
+    ad_auto_confirm: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)

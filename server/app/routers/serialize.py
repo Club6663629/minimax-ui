@@ -130,6 +130,7 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
             if (getattr(task, "chosen_index", -1) or -1) >= 0 else None
         ),
         ad_image_cost=int(getattr(task, "ad_image_cost", 0) or 0),
+        auto_confirm=bool(getattr(task, "ad_auto_confirm", True)),
         created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,

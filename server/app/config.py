@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     advideo_image_width: int = 1920          # 用户拍板 ③：1920x1088
     advideo_image_height: int = 1088
     advideo_image_count: int = 3             # 用户拍板 ②：默认 3 张候选
+    # 自动模式（2026-10-10 用户拍板）：候选广告图出完即自动确认（选第 N 张）→ 直接进入视频阶段，
+    # 无需人工点击；默认开启（=默认模式），前端可按次切回手动确认。ADVIDEO_AUTO_CONFIRM=false 全局关闭。
+    advideo_auto_confirm: bool = True
+    advideo_auto_confirm_index: int = 0      # 自动选中的候选图序号（0 起；越界取最后一张）
     advideo_image_timeout_minutes: int = 30  # 单张含 PE 冷启（实测 195-285s）+ 出图 52s
     # A100 qwen21 节点「间隙跑」：每次出图任务完成后间隔 N 秒再发下一张（散热/防 84C 降频）；0=关闭
     advideo_image_gap_sec: float = 5.0

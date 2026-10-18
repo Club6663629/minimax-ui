@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
-from . import advenhance, advpostir, advprompt, cloud, comfyui, videollm
+from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, videollm
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
@@ -1116,15 +1116,28 @@ async def _run_advideo_images(task_id: int) -> None:
             width=width,
             height=height,
         )
+        auto_index = -1
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             if task is None or task.status != "generating_images":
                 return
             task.ad_image_paths = json.dumps(paths, ensure_ascii=False)
-            task.status = "image_ready"       # 强制人工确认关卡（用户拍板 ①）
             task.worker_url = ""
+            if bool(getattr(task, "ad_auto_confirm", False)) and paths:
+                # 自动模式（默认）：候选图出完即自动确认 → 直接进视频阶段，无需人工点击
+                auto_index = advconfirm.apply_confirm(
+                    task, int(getattr(settings, "advideo_auto_confirm_index", 0) or 0)
+                )
+            else:
+                task.status = "image_ready"   # 手动模式：强制人工确认关卡（用户拍板 ①）
             db.commit()
-        logger.info("广告图任务 #%s 出图完成 %d 张（%dx%d），等待人工确认", task_id, len(paths), width, height)
+        if auto_index >= 0:
+            logger.info(
+                "广告图任务 #%s 出图完成 %d 张（%dx%d）｜自动模式：已自动确认第 %d 张 → 进入视频阶段（无需人工点击）",
+                task_id, len(paths), width, height, auto_index + 1,
+            )
+        else:
+            logger.info("广告图任务 #%s 出图完成 %d 张（%dx%d），等待人工确认", task_id, len(paths), width, height)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
