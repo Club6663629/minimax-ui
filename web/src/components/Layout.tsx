@@ -7,6 +7,7 @@ import BrandLogo from "./BrandLogo";
 import LegalNotice from "./LegalNotice";
 import { FOOTER_LINKS, LEGAL_UPDATED, LEGAL_VERSION } from "../legal";
 import { useAuth } from "../state/auth";
+import type { DramaStatus } from "../types";
 
 function NavItem({
   to,
@@ -53,15 +54,22 @@ function NavItem({
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [dramaEnabled, setDramaEnabled] = useState<boolean | null>(null);
+  const [dramaStatus, setDramaStatus] = useState<DramaStatus | null>(null);
 
   useEffect(() => {
     if (!user) return;
     api
       .dramaStatus()
-      .then((result) => setDramaEnabled(result.enabled))
-      .catch(() => setDramaEnabled(null));
+      .then(setDramaStatus)
+      .catch(() => setDramaStatus(null));
   }, [user]);
+
+  const dramaDisabled = dramaStatus !== null && !dramaStatus.available;
+  const dramaTitle = dramaDisabled
+    ? dramaStatus?.enabled
+      ? "短剧功能测试中，暂仅管理员可用"
+      : "短剧功能未开启（需 DRAMA_ENABLED 与 DIRECTOR_ENABLED）"
+    : "短剧流水线";
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -77,8 +85,8 @@ export default function Layout() {
               to="/drama"
               icon={<Clapperboard size={15} />}
               label="短剧"
-              disabled={dramaEnabled === false}
-              title={dramaEnabled === false ? "短剧功能未开启（需 DRAMA_ENABLED 与 DIRECTOR_ENABLED）" : "短剧流水线"}
+              disabled={dramaDisabled}
+              title={dramaTitle}
             />
             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
             {user?.role === "admin" && (

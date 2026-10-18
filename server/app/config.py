@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     drama_llm_timeout: int = 90
     # qwen / off（off=强制本地模板，便于无 key 联调与 smoke）
     drama_llm_provider: str = "qwen"
+    # 测试期只对管理员开放；测试完成后置 false（或 .env 加 DRAMA_ADMIN_ONLY=false）对外开放
+    drama_admin_only: bool = True
     # ---- 电商广告片 advideo：商品图 → 广告图（人工确认） → 广告视频 ----
     advideo_enabled: bool = True
     # 广告片已上线（2026-10-09 拍板放开）：默认全员可用。

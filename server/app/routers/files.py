@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..auth import decode_token
-from ..config import OUTPUT_DIR
+from ..config import OUTPUT_DIR, settings
 from ..database import get_db
 from ..models import DramaArtifact, DramaEpisode, DramaProject, Task, Upload, User
 
@@ -93,6 +93,8 @@ def download_drama(
 ):
     """短剧产物：镜头切片 / 成片 / 联系表；鉴权链 artifact → episode → project。"""
     user = _user_from_query_token(token, db)
+    if settings.drama_admin_only and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "短剧功能测试中，暂未对外开放")
     artifact = db.get(DramaArtifact, artifact_id)
     if artifact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "产物不存在")

@@ -322,6 +322,9 @@ export type DramaRunStatus = "queued" | "postprocess" | "done" | "failed" | "can
 
 export interface DramaStatus {
   enabled: boolean;
+  admin_only: boolean;
+  /** 当前账号能否使用：已启用，且非测试期或本人是管理员 */
+  available: boolean;
   director_enabled: boolean;
   director_node_available: boolean;
   pricing: { cost_768p_5s: number; block_seconds: number };

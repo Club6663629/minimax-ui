@@ -2,6 +2,7 @@
 
 约定：
 - 前缀 /api/drama；全部需要登录；project.user_id 或 admin 才可见，否则 404（不泄露存在性）；
+- 测试期 DRAMA_ADMIN_ONLY=true（默认）时非管理员一律 403，/status 仍可读（前端据此隐藏入口）；
 - 业务错误统一 HTTPException(status, detail=中文可读文本)，前端直接展示 detail；
 - 响应形状以《短剧流水线落地设计》§6.3 为准，本文件的序列化函数是唯一出口。
 """
@@ -54,6 +55,8 @@ def drama_user(user: User = Depends(get_current_user)) -> User:
             status.HTTP_400_BAD_REQUEST,
             "短剧功能未开启（需同时开启 DRAMA_ENABLED 与 DIRECTOR_ENABLED）",
         )
+    if settings.drama_admin_only and user.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "短剧功能测试中，暂未对外开放")
     return user
 
 
@@ -335,8 +338,13 @@ def _reject_if_stale(clip: Optional[DramaArtifact], episode: DramaEpisode, shot_
 # ---------------------------------------------------------------- 状态 / 项目
 @router.get("/status")
 def drama_status(user: User = Depends(get_current_user)):
+    enabled = bool(settings.drama_enabled and settings.director_enabled)
+    admin_only = bool(settings.drama_admin_only)
     return {
-        "enabled": bool(settings.drama_enabled and settings.director_enabled),
+        "enabled": enabled,
+        "admin_only": admin_only,
+        # 当前账号能否使用：功能已开启，且非测试期或本人是管理员
+        "available": enabled and (not admin_only or user.role == "admin"),
         "director_enabled": bool(settings.director_enabled),
         "director_node_available": bool(pool.has_director()),
         "pricing": {"cost_768p_5s": settings.cost_768p_5s, "block_seconds": 5},

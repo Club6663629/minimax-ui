@@ -31,9 +31,25 @@ export default function DramaListPage() {
   };
 
   useEffect(() => {
-    void load();
-    api.dramaStatus().then(setStatus).catch(() => setStatus(null));
+    let alive = true;
+    (async () => {
+      const remote = await api.dramaStatus().catch(() => null);
+      if (!alive) return;
+      setStatus(remote);
+      // 测试期非管理员不拉列表（避免拉出 403 反而像报错），直接展示拦截提示
+      if (remote && !remote.available) {
+        setLoading(false);
+        return;
+      }
+      await load();
+    })();
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  const unavailable = status !== null && !status.available;
+  const blockedTitle = status?.enabled ? "短剧功能测试中，暂仅管理员可用" : "短剧功能未开启";
 
   return (
     <div className="space-y-4">
@@ -50,8 +66,8 @@ export default function DramaListPage() {
           type="button"
           className="btn-primary ml-auto"
           onClick={() => setCreating(true)}
-          disabled={status ? !status.enabled : false}
-          title={status && !status.enabled ? "短剧功能未开启" : ""}
+          disabled={unavailable}
+          title={unavailable ? blockedTitle : ""}
         >
           <Plus size={15} /> 新建短剧
         </button>
@@ -63,7 +79,13 @@ export default function DramaListPage() {
         </div>
       )}
 
-      {status && status.enabled && !status.director_node_available && (
+      {status && status.enabled && !status.available && (
+        <div className="panel border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          短剧功能测试中，暂仅管理员可用；测试完成后对外开放。
+        </div>
+      )}
+
+      {status && status.available && !status.director_node_available && (
         <div className="panel border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
           当前没有带 director 标签的生成节点，可以编辑剧本与分镜，但暂时不能提交整集。
         </div>
@@ -80,6 +102,10 @@ export default function DramaListPage() {
 
       {loading ? (
         <div className="panel px-6 py-16 text-center text-sm text-foreground-500">加载中…</div>
+      ) : unavailable ? (
+        <div className="panel px-6 py-16 text-center text-sm text-foreground-500">
+          {blockedTitle}；测试完成后对外开放。
+        </div>
       ) : projects.length === 0 ? (
         <div className="panel flex flex-col items-center gap-3 px-6 py-16 text-center">
           <Film size={24} className="text-foreground-400" />
@@ -91,7 +117,7 @@ export default function DramaListPage() {
             type="button"
             className="btn-primary"
             onClick={() => setCreating(true)}
-            disabled={status ? !status.enabled : false}
+            disabled={unavailable}
           >
             <Plus size={15} /> 新建第一部短剧
           </button>
