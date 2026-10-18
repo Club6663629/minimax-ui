@@ -1,0 +1,1212 @@
+diff --git a/server/app/config.py b/server/app/config.py
+index 197c1dc..55fc21a 100644
+--- a/server/app/config.py
++++ b/server/app/config.py
+@@ -49,6 +49,10 @@ class Settings(BaseSettings):
+     advideo_image_width: int = 1920          # 用户拍板 ③：1920x1088
+     advideo_image_height: int = 1088
+     advideo_image_count: int = 3             # 用户拍板 ②：默认 3 张候选
++    # 自动模式（2026-10-10 用户拍板）：候选广告图出完即自动确认（选第 N 张）→ 直接进入视频阶段，
++    # 无需人工点击；默认开启（=默认模式），前端可按次切回手动确认。ADVIDEO_AUTO_CONFIRM=false 全局关闭。
++    advideo_auto_confirm: bool = True
++    advideo_auto_confirm_index: int = 0      # 自动选中的候选图序号（0 起；越界取最后一张）
+     advideo_image_timeout_minutes: int = 30  # 单张含 PE 冷启（实测 195-285s）+ 出图 52s
+     # A100 qwen21 节点「间隙跑」：每次出图任务完成后间隔 N 秒再发下一张（散热/防 84C 降频）；0=关闭
+     advideo_image_gap_sec: float = 5.0
+diff --git a/server/app/main.py b/server/app/main.py
+index 112e453..9001f4e 100644
+--- a/server/app/main.py
++++ b/server/app/main.py
+@@ -91,6 +91,7 @@ def _migrate_advideo() -> None:
+         "chosen_index": "INTEGER DEFAULT -1",
+         "ad_image_cost": "INTEGER DEFAULT 0",
+         "video_prompt_mode": "VARCHAR(16) DEFAULT ''",
++        "ad_auto_confirm": "TINYINT(1) DEFAULT 1",
+     }
+     with engine.begin() as conn:
+         for col, typ in ddl.items():
+diff --git a/server/app/models.py b/server/app/models.py
+index 50f1174..6ed091e 100644
+--- a/server/app/models.py
++++ b/server/app/models.py
+@@ -82,6 +82,8 @@ class Task(Base):
+     ad_image_cost: Mapped[int] = mapped_column(Integer, default=0)
+     # 生视频提示词增强路由（任务级覆盖）：content_ir=C臂（默认）| local=A臂；空=跟随全局默认
+     video_prompt_mode: Mapped[str] = mapped_column(String(16), default="")
++    # 自动模式：候选图出完自动确认（选第 N 张）直接进视频阶段，无需人工点击；默认 True（用户拍板 2026-10-10）
++    ad_auto_confirm: Mapped[bool] = mapped_column(Boolean, default=True)
+ 
+ 
+     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+diff --git a/server/app/routers/serialize.py b/server/app/routers/serialize.py
+index 116be46..7b0eb8a 100644
+--- a/server/app/routers/serialize.py
++++ b/server/app/routers/serialize.py
+@@ -130,6 +130,7 @@ def serialize_task(task: Task, user_email: Optional[str] = None, db: Optional[Se
+             if (getattr(task, "chosen_index", -1) or -1) >= 0 else None
+         ),
+         ad_image_cost=int(getattr(task, "ad_image_cost", 0) or 0),
++        auto_confirm=bool(getattr(task, "ad_auto_confirm", True)),
+         created_at=task.created_at,
+         started_at=task.started_at,
+         finished_at=task.finished_at,
+diff --git a/server/app/routers/videos.py b/server/app/routers/videos.py
+index 746c979..8dd6aa4 100644
+--- a/server/app/routers/videos.py
++++ b/server/app/routers/videos.py
+@@ -19,7 +19,7 @@ from ..schemas import (
+     UpgradeIn,
+     VideoCreateIn,
+ )
+-from ..services import advimage, comfyui
++from ..services import advconfirm, advimage, comfyui
+ from ..services.billing import (
+     PACKAGES,
+     add_credits,
+@@ -372,6 +372,8 @@ def advideo_status(_user: User = Depends(get_advideo_access)):
+             {"value": "local", "label": "本地规则"},
+         ],
+         "video_prompt_enhance_enabled": bool(getattr(settings, "advideo_video_prompt_enhance", True)),
++        # 自动模式默认值（前端据此初始化开关；true=候选图出完自动确认并直接进视频阶段）
++        "auto_confirm_default": bool(getattr(settings, "advideo_auto_confirm", True)),
+     })
+     return st
+ 
+@@ -426,6 +428,10 @@ def create_advideo(
+         ad_product_count=len(body.product_image_ids),
+         ad_image_cost=image_cost,                 # 提交即扣（与视频 cost 独立）
+         video_prompt_mode=(body.video_prompt_mode or ""),   # advideo9 生视频增强路由（空=跟随全局默认）
++        # 自动模式：默认跟随服务端全局配置（ADVIDEO_AUTO_CONFIRM=true）→ 出图完成即自动进视频阶段
++        ad_auto_confirm=(
++            bool(settings.advideo_auto_confirm) if body.auto_confirm is None else bool(body.auto_confirm)
++        ),
+         status="queued_images",
+     )
+     db.add(task)
+@@ -489,6 +495,7 @@ def regenerate_advideo(
+         ad_product_count=task.ad_product_count,
+         ad_image_cost=image_cost,
+         video_prompt_mode=task.video_prompt_mode,
++        ad_auto_confirm=bool(getattr(task, "ad_auto_confirm", True)),   # 重生成沿用本组的自动/手动模式
+         status="queued_images",
+     )
+     db.add(clone)
+@@ -517,10 +524,7 @@ def confirm_advideo_image(
+         raise HTTPException(
+             status.HTTP_400_BAD_REQUEST, f"当前状态 {task.status} 不可确认广告图"
+         )
+-    try:
+-        paths = json.loads(task.ad_image_paths or "[]")
+-    except (TypeError, ValueError):
+-        paths = []
++    paths = advconfirm.candidate_paths(task)
+     if not (0 <= body.image_index < len(paths)):
+         raise HTTPException(status.HTTP_400_BAD_REQUEST, "选择的广告图不存在")
+     # 视频阶段计费预检：确认后按时长×分辨率扣（实际扣款在 _claim_generate 领取时）
+@@ -530,22 +534,14 @@ def confirm_advideo_image(
+             status.HTTP_402_PAYMENT_REQUIRED,
+             f"积分不足：合成 {task.duration}s/{task.resolution} 广告片需 {video_cost} 积分，请先充值",
+         )
+-    task.chosen_image = paths[body.image_index]
+-    task.chosen_index = body.image_index
+-    if body.video_prompt and body.video_prompt.strip():
+-        task.prompt = body.video_prompt.strip()[:2000]
+-    if body.enhance is not None:
+-        task.enhance = body.enhance
+-    if body.video_prompt_mode:
+-        # advideo9：生视频增强路由（前端增强开关：llm 主方案 / content_ir 备选 / local 本地）
+-        task.video_prompt_mode = body.video_prompt_mode
+-        if body.video_prompt_mode == "local":
+-            task.enhance = True   # A 臂也要进增强阶段（跳过云端 IR，仅本地规则，0 付费）
+-    task.status = "queued"          # 复用既有生成循环（enhance → 768p → 超分）
+-    task.error = ""
+-    task.worker_url = ""
+-    task.started_at = None
+-    task.finished_at = None
++    # 与自动模式共用同一套确认逻辑（services/advconfirm.apply_confirm），两条路径不漂移
++    advconfirm.apply_confirm(
++        task,
++        body.image_index,
++        video_prompt=body.video_prompt,
++        enhance=body.enhance,
++        video_prompt_mode=body.video_prompt_mode,
++    )
+     db.commit()
+     db.refresh(task)
+     return serialize_task(task, db=db)
+diff --git a/server/app/schemas.py b/server/app/schemas.py
+index c32707d..fe6b3c2 100644
+--- a/server/app/schemas.py
++++ b/server/app/schemas.py
+@@ -135,6 +135,9 @@ class AdvideoCreateIn(BaseModel):
+     enhance: bool = True                                     # Content-IR 增强（默认开启）
+     # 生视频增强路由：llm=主方案（qwen3.8-flash，默认）/ content_ir=C臂备选 / local=A臂（0 付费）
+     video_prompt_mode: Optional[Literal["llm", "content_ir", "local"]] = None
++    # 自动模式：True=候选图出完自动确认（选第 1 张）直接进视频阶段（默认）；False=等人工确认；
++    # None=跟随服务端全局默认（ADVIDEO_AUTO_CONFIRM，默认 True）
++    auto_confirm: Optional[bool] = None
+     scene: Literal["general", "drama", "ecommerce", "music"] = "ecommerce"
+ 
+ 
+@@ -169,6 +172,7 @@ class TaskOut(BaseModel):
+     chosen_index: int = -1               # 人工确认选中的序号（-1=未确认）
+     chosen_image_url: Optional[str] = None
+     ad_image_cost: int = 0               # 广告图阶段已扣积分（独立于 cost）
++    auto_confirm: bool = True            # 自动模式：候选图出完自动确认（无需人工点击）
+     first_image_url: Optional[str]
+     last_image_url: Optional[str]
+     ref_image_urls: list[str]
+diff --git a/server/app/services/advconfirm.py b/server/app/services/advconfirm.py
+new file mode 100644
+index 0000000..c910c3b
+--- /dev/null
++++ b/server/app/services/advconfirm.py
+@@ -0,0 +1,54 @@
++"""广告片「确认候选图」公共逻辑：人工确认路由 与 自动模式 共用，避免两条路径漂移。
++
++- 只改字段/状态，**不 commit**（由调用方在同一事务里提交）；
++- 不含鉴权、不含积分预检：视频费仍在生成领取时（worker._claim_generate）扣除。
++"""
++import json
++from typing import Optional
++
++from ..models import Task
++
++
++def candidate_paths(task: Task) -> list:
++    """候选广告图本地路径列表（脏数据一律返回空列表）。"""
++    try:
++        paths = json.loads(getattr(task, "ad_image_paths", "") or "[]")
++    except (TypeError, ValueError):
++        return []
++    return [p for p in paths if isinstance(p, str)]
++
++
++def apply_confirm(
++    task: Task,
++    image_index: int,
++    *,
++    video_prompt: Optional[str] = None,
++    enhance: Optional[bool] = None,
++    video_prompt_mode: Optional[str] = None,
++) -> int:
++    """把任务从「候选图已就绪」推进到视频阶段（status=queued）。
++
++    返回实际选中的序号（入参越界会被吸附到合法范围）。调用方负责校验状态/素材并 db.commit()。
++    与 POST /api/videos/{id}/confirm-image 的行为完全一致——自动模式只是把同一步骤自动化。
++    """
++    paths = candidate_paths(task)
++    if not paths:
++        raise ValueError("候选广告图不存在")
++    idx = max(0, min(int(image_index), len(paths) - 1))
++    task.chosen_image = paths[idx]
++    task.chosen_index = idx
++    if video_prompt and video_prompt.strip():
++        task.prompt = video_prompt.strip()[:2000]
++    if enhance is not None:
++        task.enhance = bool(enhance)
++    if video_prompt_mode:
++        # advideo9：生视频增强路由（llm 主方案 / content_ir 备选 / local 本地规则）
++        task.video_prompt_mode = video_prompt_mode
++        if video_prompt_mode == "local":
++            task.enhance = True   # A 臂也要进增强阶段（跳过云端 IR，仅本地规则，0 付费）
++    task.status = "queued"          # 复用既有生成循环（enhance → 768p → 超分）
++    task.error = ""
++    task.worker_url = ""
++    task.started_at = None
++    task.finished_at = None
++    return idx
+diff --git a/server/app/services/pool.py b/server/app/services/pool.py
+index af44abb..3b4f5a1 100644
+--- a/server/app/services/pool.py
++++ b/server/app/services/pool.py
+@@ -22,6 +22,7 @@ from typing import List, Optional
+ import httpx
+ 
+ from ..config import settings
++from . import quarantine as poison_guard
+ from .clouds import registry
+ 
+ logger = logging.getLogger(__name__)
+@@ -46,6 +47,8 @@ class WorkerNode:
+         self.queue_busy = False             # ComfyUI 真实队列是否忙碌（心跳探测 /queue）
+         self.disabled = False               # 手动置忙（外部清单）：派发侧视同 busy
+         self.cloud = None                   # 云端实例（clouds/*.env 按 url 绑定；非云节点为 None）
++        self.ram_free_gb = None            # 宿主可用内存 GB（心跳刷新，POISON_RAM 长任务准入用）
++        self.ram_total_gb = None           # 宿主总内存 GB
+ 
+     @property
+     def busy(self) -> bool:
+@@ -190,6 +193,7 @@ class WorkerPool:
+         self._cloud_task: Optional[asyncio.Task] = None
+         self._rr_index = 0  # 生成节点轮询指针（round-robin，避免永远优先第一个节点）
+         self._disabled_meta: dict = {}
++        self._ram_log_ts = 0.0  # POISON_RAM 准入告警节流
+         # 云端实例绑定：按 CLOUD_WORKER_URL 精确匹配；目录不存在/不匹配只告警（防误操作）
+         try:
+             registry.bind_nodes(self.nodes)
+@@ -237,6 +241,14 @@ class WorkerPool:
+             async with httpx.AsyncClient(timeout=5) as client:
+                 r = await client.get(f"{node.url}/system_stats")
+                 r.raise_for_status()
++                try:  # POISON_RAM：记录宿主可用内存，供长任务准入
++                    _sysd = (r.json() or {}).get("system") or {}
++                    _tot, _free = _sysd.get("ram_total") or 0, _sysd.get("ram_free") or 0
++                    if _tot:
++                        node.ram_total_gb = _tot / 1024 ** 3
++                        node.ram_free_gb = _free / 1024 ** 3
++                except Exception:
++                    pass
+                 # 同时探测真实队列状态：有 running/pending 即视为忙碌
+                 try:
+                     q = await client.get(f"{node.url}/queue")
+@@ -294,6 +306,28 @@ class WorkerPool:
+         }
+ 
+     # ---- 槽位分配 ----
++    def _ram_filter(self, idle: List[WorkerNode], long_task: bool) -> List[WorkerNode]:
++        """长任务内存准入（POISON_RAM）：宿主可用内存不足的节点不参与长任务派发。
++
++        事故根因是"长任务把宿主内存打爆 → kernel OOM 杀 python"，故派发前先看
++        /system_stats 的 ram_free（心跳每 10s 刷新）。全部节点都不达标时返回空，
++        调用方自然让任务排队等待，而不是把节点打崩。
++        """
++        if not long_task or not poison_guard.ram_admission_enabled():
++            return idle
++        need = poison_guard.long_task_ram_min_gb()
++        ok = [n for n in idle if n.ram_free_gb is None or n.ram_free_gb >= need]
++        if not ok and idle:
++            now = time.time()
++            if now - getattr(self, "_ram_log_ts", 0) > 60:
++                self._ram_log_ts = now
++                logger.warning(
++                    "长任务准入拦截：无节点满足宿主可用内存 ≥ %sGB（%s）",
++                    need, ", ".join(f"{n.url}={n.ram_free_gb if n.ram_free_gb is None else round(n.ram_free_gb, 1)}GB"
++                                    for n in idle),
++                )
++        return ok
++
+     def acquire_generate(self, heavy: bool, task_id: int) -> Optional[WorkerNode]:
+         """领取生成节点：时长>10s 的任务优先 heavy 节点（A100），否则任意空闲节点。
+ 
+@@ -301,7 +335,7 @@ class WorkerPool:
+         节点（此前 idle[0] 导致 45 永远优先、51/246 空闲）。
+         """
+         idle = [n for n in self.nodes if n.role == "generate" and n.healthy and not n.busy]
+-        idle = self._split_by_priority(idle)   # 低优先级节点仅在高优先级全忙时兜底
++        idle = self._ram_filter(self._split_by_priority(idle), heavy)  # POISON_RAM 长任务内存准入
+         if not idle:
+             return None
+         if heavy:
+@@ -346,7 +380,7 @@ class WorkerPool:
+             n for n in self.nodes
+             if n.role == "generate" and n.has_tag("director") and n.healthy and not n.busy
+         ]
+-        idle = self._split_by_priority(idle)
++        idle = self._ram_filter(self._split_by_priority(idle), True)  # POISON_RAM 长任务内存准入
+         if not idle:
+             return None
+         node = self._pick_round_robin(idle)
+@@ -368,6 +402,20 @@ class WorkerPool:
+         node.task_id = task_id
+         return node
+ 
++    def acquire_url(self, url: str, role: str, task_id: int,
++                    require_director: bool = False) -> Optional[WorkerNode]:
++        """按 url 精确领取指定节点（毒丸隔离的"节点粘滞"用，POISON_GUARD）。
++
++        仅当该节点存在、角色匹配、健康、未置忙且真正空闲时返回，否则 None。
++        """
++        n = self.get_node_by_url(url)
++        if n is None or n.role != role or not n.healthy or n.busy:
++            return None
++        if require_director and not n.has_tag("director"):
++            return None
++        n.task_id = task_id
++        return n
++
+     def release(self, node: WorkerNode) -> None:
+         node.task_id = None
+ 
+diff --git a/server/app/services/quarantine.py b/server/app/services/quarantine.py
+new file mode 100644
+index 0000000..ffa7e27
+--- /dev/null
++++ b/server/app/services/quarantine.py
+@@ -0,0 +1,252 @@
++"""毒丸任务隔离（Poison Guard）—— SAI 2026-10-14 落地，防 incident-retro-20261013 复发。
++
++事故机理（详见 /data/memory/experts/general/knowledge/incident-retro-20261013.md）
++    导演台长任务（多段 / 长时长）在 ComfyUI 上把宿主内存打爆 → kernel OOM 杀 python
++    → worker 池按"失联 ≥30s"摘节点 → 任务 attempts < MAX_ATTEMPTS(2) 触发 _requeue_or_fail
++    的**回退重投**（worker_url 清空 → 被重新领取 → 派到另一台节点）
++    → 同一条毒任务把集群逐个打爆（10-12~10-13 复发 5 次，三台生成节点全灭）。
++
++本模块提供三层隔离
++    1) 熔断名单：长任务若在运行中打爆节点，则其签名进入名单，后续同名任务直接判失败；
++    2) 跨节点重投禁令 + 节点粘滞：节点失联导致失败的任务**永不换节点重投**；
++       节点仍存活时只允许在**同一个节点**重试（同一时刻只有一个节点承担风险）；
++    3) 事件留痕：所有隔离动作写 poison_events.jsonl，供复盘与告警。
++
++落盘（持久卷，服务重启不丢）
++    <data_dir>/poison_tasks.json    熔断名单 + 节点粘滞表
++    <data_dir>/poison_events.jsonl  隔离事件流（JSONL，append-only）
++
++开关
++    POISON_GUARD=1|0            总开关（默认 1=开启）
++    POISON_GUARD_FILE=<path>    覆盖熔断名单路径（自测用）
++    POISON_GUARD_EVENTS=<path>  覆盖事件流路径（自测用）
++"""
++import json
++import logging
++import os
++import time
++import urllib.request
++from pathlib import Path
++from typing import Optional
++
++logger = logging.getLogger(__name__)
++
++LONG_TASK_SECONDS = 20    # "长任务"判定阈值：mode=director 或 duration >= 20s
++PIN_TTL_SECONDS = 1800    # 节点粘滞有效期（30 分钟）
++PIN_MAX_ATTEMPTS = 10     # 同节点重试等待上限（每次等待派发计一次）
++
++try:  # 服务内运行：跟随 settings.data_dir
++    from ..config import settings  # noqa
++    _DEFAULT_DIR = Path(settings.data_dir).resolve()
++except Exception:  # 独立自测：退回环境变量/默认路径
++    _DEFAULT_DIR = Path(os.getenv("MINIMAX_DATA_DIR", "/data/workspace/minimax-ui/server/data"))
++
++
++def enabled() -> bool:
++    """总开关；POISON_GUARD=0/false 时整体关闭（回退到旧行为）。"""
++    return os.getenv("POISON_GUARD", "1").strip().lower() not in ("0", "false", "no", "off")
++
++
++def _store() -> Path:
++    p = os.getenv("POISON_GUARD_FILE")
++    return Path(p) if p else _DEFAULT_DIR / "poison_tasks.json"
++
++
++def _events_path() -> Path:
++    p = os.getenv("POISON_GUARD_EVENTS")
++    return Path(p) if p else _DEFAULT_DIR / "poison_events.jsonl"
++
++
++# ------------------------------------------------------------------ 签名
++def signature(task) -> dict:
++    """任务签名：模式 + 时长 + 分辨率 + 段数（段数仅作证据，不参与匹配）。"""
++    mode = (getattr(task, "mode", "") or "").lower()
++    try:
++        duration = float(getattr(task, "duration", 0) or 0)
++    except Exception:
++        duration = 0.0
++    resolution = getattr(task, "resolution", "") or ""
++    segs = 0
++    raw = getattr(task, "timeline_data", None)
++    if raw:
++        try:
++            data = json.loads(raw) if isinstance(raw, str) else raw
++            if isinstance(data, dict) and isinstance(data.get("segments"), list):
++                segs = len(data["segments"])
++        except Exception:
++            segs = 0
++    return {"mode": mode, "duration": duration, "resolution": resolution, "segments": segs}
++
++
++def sig_key(sig: dict) -> str:
++    """匹配键（粗粒度）：同一用户重投同一档长任务即命中熔断，不因分段微调而绕过。"""
++    return f"{sig.get('mode')}|{sig.get('duration')}s|{sig.get('resolution')}"
++
++
++def is_long(task) -> bool:
++    """长任务（风险类）：导演台整卡长任务，或时长 >= LONG_TASK_SECONDS。"""
++    mode = (getattr(task, "mode", "") or "").lower()
++    try:
++        duration = float(getattr(task, "duration", 0) or 0)
++    except Exception:
++        duration = 0.0
++    return mode == "director" or duration >= LONG_TASK_SECONDS
++
++
++# ------------------------------------------------------------------ 存取
++def _load() -> dict:
++    f = _store()
++    try:
++        if f.exists():
++            data = json.loads(f.read_text())
++            if isinstance(data, dict):
++                data.setdefault("poison", [])
++                data.setdefault("pins", {})
++                return data
++    except Exception:
++        logger.warning("毒丸清单读取失败，按空处理: %s", f)
++    return {"poison": [], "pins": {}}
++
++
++def _save(data: dict) -> None:
++    f = _store()
++    try:
++        f.parent.mkdir(parents=True, exist_ok=True)
++        tmp = f.with_name(f.name + ".tmp")
++        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
++        tmp.replace(f)
++    except Exception:
++        logger.exception("毒丸清单写入失败: %s", f)
++
++
++def _event(kind: str, **kwargs) -> None:
++    rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind}
++    rec.update({k: v for k, v in kwargs.items() if k is not None})
++    try:
++        f = _events_path()
++        f.parent.mkdir(parents=True, exist_ok=True)
++        with f.open("a") as fh:
++            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
++    except Exception:
++        logger.exception("毒丸事件写入失败")
++
++
++# ------------------------------------------------------------------ 熔断名单
++def is_poisoned(task) -> bool:
++    key = sig_key(signature(task))
++    return any(e.get("key") == key for e in _load().get("poison", []))
++
++
++def poison_reason(task) -> str:
++    key = sig_key(signature(task))
++    for e in _load().get("poison", []):
++        if e.get("key") == key:
++            return f"{e.get('reason', '')}（{e.get('ts', '')} @ {e.get('node', '')}）"
++    return ""
++
++
++def add_poison(task, reason: str, node: str = "", extra: Optional[dict] = None) -> dict:
++    """把任务签名写入熔断名单（幂等，同签名覆盖并记录最新证据）。"""
++    sig = signature(task)
++    entry = {
++        "key": sig_key(sig),
++        "sig": sig,
++        "reason": reason,
++        "node": node,
++        "task_id": getattr(task, "id", None),
++        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
++    }
++    if extra:
++        entry.update(extra)
++    data = _load()
++    data["poison"] = [e for e in data["poison"] if e.get("key") != entry["key"]] + [entry]
++    _save(data)
++    _event("poison_add", **entry)
++    logger.error("毒丸熔断：%s ← %s（节点 %s，任务 #%s）", entry["key"], reason, node, entry["task_id"])
++    return entry
++
++
++def poison_list() -> list:
++    return _load().get("poison", [])
++
++
++def clear_poison(key: Optional[str] = None) -> int:
++    """解除熔断：key 为空则清空全部。返回清除条数。"""
++    data = _load()
++    before = len(data["poison"])
++    data["poison"] = [] if not key else [e for e in data["poison"] if e.get("key") != key]
++    _save(data)
++    _event("poison_clear", key=key, removed=before - len(data["poison"]))
++    return before - len(data["poison"])
++
++
++# ------------------------------------------------------------------ 节点粘滞（同节点重试）
++def pin_set(task_id: int, url: str) -> None:
++    data = _load()
++    cur = data["pins"].get(str(task_id)) or {}
++    data["pins"][str(task_id)] = {
++        "url": (url or "").rstrip("/"),
++        "ts": time.time(),
++        "attempts": cur.get("attempts", 0),
++    }
++    _save(data)
++
++
++def pin_get(task_id: int) -> Optional[str]:
++    entry = _load()["pins"].get(str(task_id))
++    if not entry:
++        return None
++    if time.time() - float(entry.get("ts", 0)) > PIN_TTL_SECONDS:
++        pin_clear(task_id)
++        _event("pin_expired", task_id=task_id, url=entry.get("url"))
++        return None
++    return entry.get("url")
++
++
++def pin_attempts(task_id: int) -> int:
++    return int((_load()["pins"].get(str(task_id)) or {}).get("attempts", 0))
++
++
++def pin_bump(task_id: int) -> int:
++    data = _load()
++    entry = data["pins"].get(str(task_id))
++    if entry is None:
++        return 0
++    entry["attempts"] = int(entry.get("attempts", 0)) + 1
++    _save(data)
++    return entry["attempts"]
++
++
++def pin_clear(task_id: int) -> None:
++    data = _load()
++    if str(task_id) in data["pins"]:
++        data["pins"].pop(str(task_id), None)
++        _save(data)
++
++
++# ------------------------------------------------------------------ 存活探测
++def node_alive(url: str, timeout: float = 3.0) -> bool:
++    """同步探测节点是否活着（/system_stats 200）。用于判断"节点死于任务运行中"。"""
++    url = (url or "").rstrip("/")
++    if not url or url == "pending":
++        return False
++    try:
++        with urllib.request.urlopen(f"{url}/system_stats", timeout=timeout) as r:
++            return 200 <= getattr(r, "status", 200) < 300
++    except Exception:
++        return False
++
++
++# ------------------------------------------------------------------ 长任务内存准入
++def ram_admission_enabled() -> bool:
++    """长任务内存准入开关（POISON_RAM_ADMISSION=0 关闭）。"""
++    return enabled() and os.getenv("POISON_RAM_ADMISSION", "1").strip().lower() not in (
++        "0", "false", "no", "off")
++
++
++def long_task_ram_min_gb() -> float:
++    """长任务派发前要求节点宿主可用内存下限（GB，默认 60）。"""
++    try:
++        return float(os.getenv("POISON_RAM_MIN_GB", "60"))
++    except Exception:
++        return 60.0
+diff --git a/server/app/services/worker.py b/server/app/services/worker.py
+index 4b293e5..303f281 100644
+--- a/server/app/services/worker.py
++++ b/server/app/services/worker.py
+@@ -28,10 +28,11 @@ from sqlalchemy.orm import Session
+ from ..config import OUTPUT_DIR, STAGING_DIR, settings
+ from ..database import SessionLocal
+ from ..models import Task, Upload, User
+-from . import advenhance, advpostir, advprompt, cloud, comfyui, videollm
++from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, videollm
+ from ..scenes import apply_scene
+ from .billing import add_credits, compute_cost, compute_director_cost
+ from .pool import WorkerNode, pool
++from . import quarantine as poison_guard  # POISON_GUARD: 毒丸隔离
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -325,6 +326,18 @@ def _claim_generate() -> Optional[int]:
+         )
+         if task is None:
+             return None
++        if poison_guard.enabled() and poison_guard.is_poisoned(task):
++            reason = poison_guard.poison_reason(task)
++            task.status = "failed"
++            task.error = f"熔断隔离：{reason}"[:500]
++            task.finished_at = datetime.now()
++            if task.cost > 0:
++                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
++                            note="熔断隔离退还", task_id=task.id)
++                task.cost = 0
++            db.commit()
++            logger.warning("任务 #%s 命中毒丸熔断名单，拒绝执行：%s", task.id, reason)
++            return None
+         task_id, user_id = task.id, task.user_id
+         if task.cost > 0:  # 重投任务已在首次派发时计费，不重复扣款；占位同步写入防再领
+             task.status = "generating_768p"
+@@ -388,6 +401,18 @@ def _claim_director() -> Optional[int]:
+         )
+         if task is None:
+             return None
++        if poison_guard.enabled() and poison_guard.is_poisoned(task):
++            reason = poison_guard.poison_reason(task)
++            task.status = "failed"
++            task.error = f"熔断隔离：{reason}"[:500]
++            task.finished_at = datetime.now()
++            if task.cost > 0:
++                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
++                            note="熔断隔离退还", task_id=task.id)
++                task.cost = 0
++            db.commit()
++            logger.warning("任务 #%s 命中毒丸熔断名单，拒绝执行：%s", task.id, reason)
++            return None
+         task_id, user_id = task.id, task.user_id
+         if task.cost > 0:  # 重投任务已在首次派发时计费
+             task.status = "generating_768p"
+@@ -414,8 +439,17 @@ def _claim_director() -> Optional[int]:
+ 
+ async def _dispatch_director(task_id: int) -> None:
+     """派发导演台任务：只认 director 标签的空闲节点（独占整卡，无兜底）。"""
+-    node = pool.acquire_director(task_id)
++    node, _pin_state = _acquire_with_pin(
++        task_id, "generate", lambda: pool.acquire_director(task_id), require_director=True
++    )
+     if node is None:
++        if _pin_state == "fail":
++            poison_guard.pin_clear(task_id)
++            await asyncio.to_thread(
++                _fail_task, task_id,
++                "节点粘滞重试超时：目标节点长时间不可用，任务判失败（不跨节点扩散；确需换节点请人工重投）",
++            )
++            return
+         await asyncio.to_thread(_uncharge, task_id)  # 暂无专用空闲槽位：退积分回队
+         return
+     with SessionLocal() as db:
+@@ -529,8 +563,17 @@ async def _dispatch_generate(task_id: int) -> None:
+     with SessionLocal() as db:
+         task = db.get(Task, task_id)
+         heavy = task.duration >= 10
+-    node = pool.acquire_generate(heavy, task_id)
++    node, _pin_state = _acquire_with_pin(
++        task_id, "generate", lambda: pool.acquire_generate(heavy, task_id), require_director=False
++    )
+     if node is None:
++        if _pin_state == "fail":
++            poison_guard.pin_clear(task_id)
++            await asyncio.to_thread(
++                _fail_task, task_id,
++                "节点粘滞重试超时：目标节点长时间不可用，任务判失败（不跨节点扩散；确需换节点请人工重投）",
++            )
++            return
+         await asyncio.to_thread(_uncharge, task_id)  # 无空闲槽位：退还积分回队
+         return
+     with SessionLocal() as db:
+@@ -803,18 +846,89 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
+         pool.release(node)
+ 
+ 
++# ------------------------------------------------- 毒丸隔离辅助（POISON_GUARD）
++def _fail_task(task_id: int, error: str) -> None:
++    """判失败并退还积分（毒丸隔离 / 粘滞超时用）。"""
++    with SessionLocal() as db:
++        task = db.get(Task, task_id)
++        if task is None or task.status in ("done", "failed"):
++            return
++        task.status = "failed"
++        task.error = error[:500]
++        task.finished_at = datetime.now()
++        if task.cost > 0:
++            add_credits(db, db.get(User, task.user_id), task.cost, "refund",
++                        note="失败退还", task_id=task_id)
++            task.cost = 0
++        db.commit()
++    logger.error("任务 #%s 判失败：%s", task_id, error)
++
++
++def _acquire_with_pin(task_id: int, role: str, fallback, require_director: bool = False):
++    """带节点粘滞的节点领取。返回 (node, status)。
++
++    status = "ok"   领取成功（或无粘滞记录，走原有派发逻辑）
++             "wait" 该任务被粘滞在某个节点上、该节点暂时不可用 → 稍后再派，**不换节点**
++             "fail" 粘滞等待超限 → 判失败（绝不换节点扩散）
++    """
++    if not poison_guard.enabled():
++        return fallback(), "ok"
++    url = poison_guard.pin_get(task_id)
++    if not url:
++        return fallback(), "ok"
++    node = pool.acquire_url(url, role, task_id, require_director=require_director)
++    if node is not None:
++        logger.info("任务 #%s 按粘滞回到原节点 %s", task_id, url)
++        return node, "ok"
++    if poison_guard.pin_attempts(task_id) >= poison_guard.PIN_MAX_ATTEMPTS:
++        return None, "fail"
++    poison_guard.pin_bump(task_id)
++    return None, "wait"
++
++
+ # ---------------------------------------------------------------- 失败处理
+ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
+-    """attempts < MAX 回退状态重投；否则失败退积分。返回是否已重投。"""
++    """失败处理（POISON_GUARD：不再让一条毒任务跨节点扩散）。
++
++    - 运行中节点失联（宿主 OOM / 进程被杀）且属长任务 → 熔断该签名、直接判失败，**不重投**；
++    - 运行中节点失联但属短任务 → 只允许在**同一节点**重试（节点粘滞），不换节点；
++    - 节点存活、任务自身报错 → 沿用原逻辑（attempts < MAX_ATTEMPTS 回退重投）。
++    """
+     with SessionLocal() as db:
+         task = db.get(Task, task_id)
+         if task is None or task.status in ("done", "failed"):
+             return False
++        failed_url = (task.worker_url or "").rstrip("/")
++        guard = poison_guard.enabled() and failed_url not in ("", "pending")
++        pool_node = pool.get_node_by_url(failed_url) if failed_url else None
++        node_lost = guard and (
++            (pool_node is not None and not pool_node.healthy) or not poison_guard.node_alive(failed_url)
++        )
++        if node_lost and poison_guard.is_long(task):
++            reason = f"{stage} 运行中节点 {failed_url} 失联（宿主 OOM/进程被杀）: {error}"[:300]
++            poison_guard.add_poison(task, reason=reason, node=failed_url,
++                                    extra={"stage": stage, "error": error[:300]})
++            task.status = "failed"
++            task.error = ("毒丸隔离：该任务运行中打爆节点（宿主内存耗尽/进程被杀），已熔断该任务签名，"
++                          "且不会重投到其它节点；请调低段数/时长后重试")
++            task.finished_at = datetime.now()
++            if task.cost > 0:
++                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
++                            note="毒丸隔离退还", task_id=task_id)
++                task.cost = 0
++            db.commit()
++            logger.error("毒丸隔离 #%s：%s 已熔断，拒绝跨节点重投", task_id, failed_url)
++            return False
+         if task.attempts < MAX_ATTEMPTS:
+             task.status = stage
+             task.worker_url = ""
+             db.commit()
+-            logger.warning("任务 #%s 回退重投（%s，已尝试 %d 次）", task_id, stage, task.attempts)
++            if node_lost:
++                poison_guard.pin_set(task_id, failed_url)
++                logger.warning("任务 #%s 同节点重试（%s，第 %d 次，粘滞 %s）",
++                               task_id, stage, task.attempts, failed_url)
++            else:
++                logger.warning("任务 #%s 回退重投（%s，已尝试 %d 次）", task_id, stage, task.attempts)
+             return True
+         task.status = "failed"
+         task.error = error or "执行失败"
+@@ -825,7 +939,6 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
+         db.commit()
+     return False
+ 
+-
+ # ---------------------------------------------------------------- ② 768p 生成
+ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
+     """在指定节点生成 768p 视频，返回 staging 目录中的中间产物路径。"""
+@@ -1116,15 +1229,28 @@ async def _run_advideo_images(task_id: int) -> None:
+             width=width,
+             height=height,
+         )
++        auto_index = -1
+         with SessionLocal() as db:
+             task = db.get(Task, task_id)
+             if task is None or task.status != "generating_images":
+                 return
+             task.ad_image_paths = json.dumps(paths, ensure_ascii=False)
+-            task.status = "image_ready"       # 强制人工确认关卡（用户拍板 ①）
+             task.worker_url = ""
++            if bool(getattr(task, "ad_auto_confirm", False)) and paths:
++                # 自动模式（默认）：候选图出完即自动确认 → 直接进视频阶段，无需人工点击
++                auto_index = advconfirm.apply_confirm(
++                    task, int(getattr(settings, "advideo_auto_confirm_index", 0) or 0)
++                )
++            else:
++                task.status = "image_ready"   # 手动模式：强制人工确认关卡（用户拍板 ①）
+             db.commit()
+-        logger.info("广告图任务 #%s 出图完成 %d 张（%dx%d），等待人工确认", task_id, len(paths), width, height)
++        if auto_index >= 0:
++            logger.info(
++                "广告图任务 #%s 出图完成 %d 张（%dx%d）｜自动模式：已自动确认第 %d 张 → 进入视频阶段（无需人工点击）",
++                task_id, len(paths), width, height, auto_index + 1,
++            )
++        else:
++            logger.info("广告图任务 #%s 出图完成 %d 张（%dx%d），等待人工确认", task_id, len(paths), width, height)
+     except asyncio.CancelledError:
+         raise
+     except Exception as exc:
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 05d146f..01c6ef6 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -4,7 +4,6 @@ import AdminPage from "./pages/AdminPage";
+ import AuthPage from "./pages/AuthPage";
+ import CreatePage from "./pages/CreatePage";
+ import LedgerPage from "./pages/LedgerPage";
+-import RechargePage from "./pages/RechargePage";
+ import { AuthProvider, useAuth } from "./state/auth";
+ 
+ function RequireAuth({ children }: { children: React.ReactNode }) {
+@@ -34,7 +33,7 @@ export default function App() {
+             }
+           >
+             <Route path="/" element={<CreatePage />} />
+-            <Route path="/recharge" element={<RechargePage />} />
++            <Route path="/recharge" element={<Navigate to="/ledger" replace />} />
+             <Route path="/ledger" element={<LedgerPage />} />
+             <Route path="/admin" element={<AdminPage />} />
+           </Route>
+diff --git a/web/src/api/client.ts b/web/src/api/client.ts
+index b61c4ad..b046cf2 100644
+--- a/web/src/api/client.ts
++++ b/web/src/api/client.ts
+@@ -130,6 +130,8 @@ export const api = {
+       video_prompt_default_mode?: "llm" | "content_ir" | "local";
+       video_prompt_modes?: { value: string; label: string }[];
+       video_prompt_enhance_enabled?: boolean;
++      /** 自动模式默认值（true=候选图出完自动确认并直接进视频阶段） */
++      auto_confirm_default?: boolean;
+     }>("/api/videos/advideo/status"),
+   createAdvideo: (body: Record<string, unknown>) =>
+     request<Task>("/api/videos/advideo", { method: "POST", body: JSON.stringify(body) }),
+diff --git a/web/src/components/Layout.tsx b/web/src/components/Layout.tsx
+index 0d96990..56e49d4 100644
+--- a/web/src/components/Layout.tsx
++++ b/web/src/components/Layout.tsx
+@@ -39,7 +39,6 @@ export default function Layout() {
+ 
+           <nav className="flex items-center gap-1">
+             <NavItem to="/" icon={<Clapperboard size={15} />} label="创作" />
+-            <NavItem to="/recharge" icon={<Coins size={15} />} label="充值" />
+             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
+             {user?.role === "admin" && (
+               <NavItem to="/admin" icon={<ShieldCheck size={15} />} label="管理" />
+@@ -48,7 +47,7 @@ export default function Layout() {
+ 
+           <div className="ml-auto flex items-center gap-3">
+             <NavLink
+-              to="/recharge"
++              to="/ledger"
+               className="inline-flex items-center gap-1.5 rounded-full border border-primary-300/40 bg-primary-100 px-3 py-1 text-sm text-primary-700 transition hover:bg-primary-200"
+             >
+               <Coins size={14} />
+diff --git a/web/src/lib/humanize.ts b/web/src/lib/humanize.ts
+index 21f1184..a09aec6 100644
+--- a/web/src/lib/humanize.ts
++++ b/web/src/lib/humanize.ts
+@@ -2,7 +2,7 @@
+ export function humanizeError(raw: string, fallback = "生成未成功，请稍后重试。"): string {
+   const s = (raw || "").trim();
+   if (!s) return fallback;
+-  if (/积分不足|402/.test(s)) return "积分不足，请先充值。";
++  if (/积分不足|402/.test(s)) return "积分不足，请联系管理员。";
+   if (/Invalid image file|无法读取|decode|PIL/i.test(s)) return "商品图无法识别，请更换图片后重试。";
+   if (/prompt_outputs_failed_validation|node_errors|validation|校验/i.test(s))
+     return "生成未通过内容校验，请调整文字描述后重试。";
+diff --git a/web/src/pages/AdvideoPanel.tsx b/web/src/pages/AdvideoPanel.tsx
+index 274b905..79699bf 100644
+--- a/web/src/pages/AdvideoPanel.tsx
++++ b/web/src/pages/AdvideoPanel.tsx
+@@ -23,6 +23,7 @@ import {
+   Trash2,
+   UploadCloud,
+   X,
++  Zap,
+ } from "lucide-react";
+ import { useEffect, useMemo, useRef, useState } from "react";
+ import { Link } from "react-router-dom";
+@@ -50,6 +51,8 @@ interface AdvideoStatus {
+   /** 提示词增强默认是否开启（后端全局配置） */
+   video_prompt_default_mode?: AdvanceMode;
+   video_prompt_enhance_enabled?: boolean;
++  /** 自动模式默认值（后端全局配置；true=候选图出完自动确认并直接进视频阶段） */
++  auto_confirm_default?: boolean;
+ }
+ 
+ /** 提示词增强开关：开 = 开启（后端 llm 主方案：qwen-flash，失败自动回退 Content-IR），关 = 关闭（后端 local）。
+@@ -131,6 +134,8 @@ export default function AdvideoPanel({
+   const [videoPrompt, setVideoPrompt] = useState("");
+   // 提示词增强开关：默认跟随后端全局配置
+   const [videoMode, setVideoMode] = useState<AdvanceMode>(ENHANCE_ON);
++  // 自动模式（默认开）：候选图出完后自动选定第 1 张并直接合成广告片，无需手动确认
++  const [autoMode, setAutoMode] = useState(true);
+   const [imageCount, setImageCount] = useState(3);
+   const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
+   const [duration, setDuration] = useState<(typeof DURATIONS)[number]>(8);
+@@ -155,6 +160,7 @@ export default function AdvideoPanel({
+       .then((st) => {
+         setNode(st);
+         if (st.video_prompt_default_mode) setVideoMode(st.video_prompt_default_mode);
++        if (typeof st.auto_confirm_default === "boolean") setAutoMode(st.auto_confirm_default);
+       })
+       .catch(() => setNode(null));
+   }, []);
+@@ -274,6 +280,7 @@ export default function AdvideoPanel({
+         image_count: imageCount,
+         enhance: true,
+         video_prompt_mode: videoMode, // 提示词增强开/关
++        auto_confirm: autoMode, // 自动模式：候选图出完自动确认并直接进视频阶段
+         scene: "ecommerce",
+       });
+       setActiveId(t.id);
+@@ -544,14 +551,30 @@ export default function AdvideoPanel({
+               on={videoMode === ENHANCE_ON}
+               onToggle={() => setVideoMode(videoMode === ENHANCE_ON ? ENHANCE_OFF : ENHANCE_ON)}
+             />
++            <button
++              type="button"
++              onClick={() => setAutoMode((v) => !v)}
++              title={
++                autoMode
++                  ? "自动模式（默认）：候选广告图出完后自动选定第 1 张并直接合成广告片，无需手动确认"
++                  : "手动模式：候选广告图出完后需你手动确认才合成广告片"
++              }
++              className={
++                autoMode
++                  ? "flex items-center gap-1.5 rounded-full border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs text-primary-700"
++                  : "flex items-center gap-1.5 rounded-full border border-background-300 bg-background-50 px-3 py-1.5 text-xs text-foreground-600 hover:border-primary-400"
++              }
++            >
++              <Zap size={13} /> 自动模式{autoMode ? "：开" : "：关"}
++            </button>
+ 
+             <div className="ml-auto flex items-center gap-3">
+               <span className="flex items-center gap-1.5 text-xs text-foreground-500" title="提交生成即按张数扣除广告图积分">
+                 候选广告图 {imageCount}×{imageUnit} = <Coins size={13} className="text-amber-500" /> {imageCost} 积分
+               </span>
+               {(user?.credits ?? 0) < imageCost && (
+-                <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
+-                  去充值
++                <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
++                  积分明细
+                 </Link>
+               )}
+               {(product.length > 0 || refs.length > 0 || scenario.trim().length > 0) && (
+@@ -573,7 +596,9 @@ export default function AdvideoPanel({
+             </div>
+           </div>
+           <p className="mt-2 text-[11px] text-foreground-500">
+-            计费分两步：提交生成即扣候选广告图 {imageCost} 积分（{imageCount} 张 × {imageUnit}，图片一经生成即消耗，仅系统出图失败全额退还）；确认合成广告片时再按片长/清晰度扣 {cost} 积分。
++            计费分两步：提交生成即扣候选广告图 {imageCost} 积分（{imageCount} 张 × {imageUnit}，图片一经生成即消耗，仅系统出图失败全额退还）；{autoMode
++              ? "自动模式下候选图出完即自动选定第 1 张并进入合成，"
++              : "确认合成广告片时"}再按片长/清晰度扣 {cost} 积分。
+           </p>
+           {error && <p className="mt-3 text-sm text-rose-600">{error}</p>}
+         </div>
+@@ -585,7 +610,9 @@ export default function AdvideoPanel({
+           <Loader2 size={22} className="mx-auto animate-spin text-primary-600" />
+           <p className="mt-3 text-sm text-foreground-800">候选广告图生成中</p>
+           <p className="mt-1 text-xs text-foreground-500">
+-            生成期间任务不可取消，完成后将自动进入确认环节。
++            {activeTask.auto_confirm === false
++              ? "生成期间任务不可取消，完成后需你手动确认候选图才进入广告片合成。"
++              : "生成期间任务不可取消；自动模式已开启，候选图出完后会自动选定第 1 张并直接合成广告片（无需手动确认）。"}
+           </p>
+           <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+             <button type="button" onClick={() => dismiss(activeTask.id)} className="btn-ghost !px-3 !py-1.5 text-xs">
+@@ -607,7 +634,10 @@ export default function AdvideoPanel({
+               <ImageIcon size={16} />
+             </span>
+             <div className="flex-1">
+-              <h3 className="text-sm font-medium text-foreground-900">候选广告图已生成</h3>
++              <h3 className="text-sm font-medium text-foreground-900">
++                候选广告图已生成
++                {activeTask.auto_confirm === false ? "" : "（自动模式）"}
++              </h3>
+               <p className="mt-0.5 text-xs text-foreground-500">
+                 共 {usedImages} 张候选图（本组广告图积分已扣除）。同组候选同源生成、高度一致，确认后整组用于合成广告片，成片更稳定连贯；如需重做可重新生成。
+               </p>
+@@ -658,8 +688,8 @@ export default function AdvideoPanel({
+               />
+               <span className="text-xs text-foreground-500">确认并生成广告片将消耗 {taskCost} 积分</span>
+               {(user?.credits ?? 0) < taskCost && (
+-                <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
+-                  去充值
++                <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
++                  积分明细
+                 </Link>
+               )}
+               <div className="ml-auto flex items-center gap-2">
+diff --git a/web/src/pages/CreatePage.tsx b/web/src/pages/CreatePage.tsx
+index 9ed82f0..b3ffcbe 100644
+--- a/web/src/pages/CreatePage.tsx
++++ b/web/src/pages/CreatePage.tsx
+@@ -1323,8 +1323,8 @@ export default function CreatePage() {
+                   <Coins size={15} className="text-amber-500" /> {cost}
+                 </span>
+                 {(user?.credits ?? 0) < cost && (
+-                  <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
+-                    去充值
++                  <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
++                    积分明细
+                   </Link>
+                 )}
+                 <button onClick={submit} disabled={submitting} className="btn-primary !rounded-full">
+diff --git a/web/src/pages/RechargePage.tsx b/web/src/pages/RechargePage.tsx
+deleted file mode 100644
+index b9a43eb..0000000
+--- a/web/src/pages/RechargePage.tsx
++++ /dev/null
+@@ -1,174 +0,0 @@
+-/** 充值页：余额、套餐卡片、兑换码、积分记录。 */
+-import { Check, Coins, Ticket } from "lucide-react";
+-import { useEffect, useState } from "react";
+-import { api } from "../api/client";
+-import { useAuth } from "../state/auth";
+-import type { CreditLog, Pricing } from "../types";
+-
+-const LOG_LABEL: Record<CreditLog["type"], string> = {
+-  signup: "注册赠送",
+-  consume: "生成消耗",
+-  refund: "失败退还",
+-  redeem: "兑换充值",
+-  adjust: "管理员调整",
+-};
+-
+-export default function RechargePage() {
+-  const { user, refreshUser } = useAuth();
+-  const [pricing, setPricing] = useState<Pricing | null>(null);
+-  const [logs, setLogs] = useState<CreditLog[]>([]);
+-  const [code, setCode] = useState("");
+-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+-  const [busy, setBusy] = useState(false);
+-
+-  useEffect(() => {
+-    api.pricing().then(setPricing).catch(() => {});
+-    api.creditLogs().then(setLogs).catch(() => {});
+-  }, []);
+-
+-  async function redeem() {
+-    if (!code.trim()) return;
+-    setBusy(true);
+-    setMessage(null);
+-    try {
+-      const result = await api.redeem(code.trim());
+-      setMessage({ ok: true, text: `充值成功，到账 ${result.added} 积分` });
+-      setCode("");
+-      await Promise.all([refreshUser(), api.creditLogs().then(setLogs)]);
+-    } catch (err) {
+-      setMessage({ ok: false, text: err instanceof Error ? err.message : "兑换失败" });
+-    } finally {
+-      setBusy(false);
+-    }
+-  }
+-
+-  return (
+-    <div className="mx-auto max-w-4xl space-y-6">
+-      {/* 余额 */}
+-      <div className="panel flex items-center justify-between p-6">
+-        <div>
+-          <p className="text-sm text-foreground-500">当前积分余额</p>
+-          <p className="mt-1 flex items-center gap-2 text-4xl font-semibold text-foreground-950">
+-            <Coins className="text-primary-500" size={30} />
+-            {user?.credits ?? 0}
+-          </p>
+-        </div>
+-        <div className="text-right text-xs leading-relaxed text-foreground-500">
+-          <p>768p·5s 消耗 {pricing?.cost_768p_5s ?? "-"} 积分</p>
+-          <p>768p·10s 消耗 {pricing?.cost_768p_10s ?? "-"} 积分</p>
+-          <p>1K 升级附加 {pricing?.cost_1k_extra ?? "-"} 积分</p>
+-          <p>2K 升级附加 {pricing?.cost_2k_extra ?? "-"} 积分</p>
+-        </div>
+-      </div>
+-
+-      {/* 套餐 */}
+-      <div>
+-        <h2 className="mb-3 text-base font-semibold text-foreground-950">充值套餐</h2>
+-        <div className="grid gap-4 sm:grid-cols-3">
+-          {(pricing?.packages ?? []).map((p) => (
+-            <div
+-              key={p.name}
+-              className={`panel relative p-5 ${p.tag ? "border-primary-400/50" : ""}`}
+-            >
+-              {p.tag && (
+-                <span className="absolute -top-2.5 right-4 rounded-full bg-primary-500 px-2.5 py-0.5 text-xs text-background-50">
+-                  {p.tag}
+-                </span>
+-              )}
+-              <p className="text-sm text-foreground-600">{p.name}</p>
+-              <p className="mt-2 text-3xl font-semibold text-foreground-950">
+-                {p.credits}
+-                <span className="ml-1 text-sm font-normal text-foreground-500">积分</span>
+-              </p>
+-              <p className="mt-1 text-lg text-primary-600">{p.price}</p>
+-              <p className="mt-2 text-xs text-foreground-500">{p.description}</p>
+-              <div className="mt-3 space-y-1 text-xs text-foreground-500">
+-                <p className="flex items-center gap-1.5">
+-                  <Check size={12} className="text-emerald-600" /> 含全部创作模式
+-                </p>
+-                <p className="flex items-center gap-1.5">
+-                  <Check size={12} className="text-emerald-600" /> 失败自动退还积分
+-                </p>
+-              </div>
+-            </div>
+-          ))}
+-        </div>
+-        <p className="mt-3 text-xs text-foreground-500">
+-          * 当前版本通过兑换码充值：请联系管理员获取兑换码后在下方兑换。在线支付通道规划中。
+-        </p>
+-        <p className="mt-2 text-xs text-foreground-500">
+-          充值即表示同意
+-          <a
+-            href="/legal/credits-rules.html"
+-            target="_blank"
+-            rel="noopener"
+-            className="text-primary-600 hover:underline"
+-          >
+-            《积分与计费规则》
+-          </a>
+-        </p>
+-      </div>
+-
+-      {/* 兑换码 */}
+-      <div className="panel p-5">
+-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground-950">
+-          <Ticket size={15} className="text-accent-600" /> 兑换码充值
+-        </h3>
+-        <div className="flex gap-3">
+-          <input
+-            className="input flex-1 uppercase tracking-wider"
+-            placeholder="输入兑换码，如 H3XXXX-XXXX-XXXX"
+-            value={code}
+-            onChange={(e) => setCode(e.target.value)}
+-            onKeyDown={(e) => e.key === "Enter" && redeem()}
+-          />
+-          <button className="btn-primary shrink-0" onClick={redeem} disabled={busy || !code.trim()}>
+-            {busy ? "兑换中…" : "立即兑换"}
+-          </button>
+-        </div>
+-        {message && (
+-          <p className={`mt-2 text-sm ${message.ok ? "text-emerald-600" : "text-rose-600"}`}>
+-            {message.text}
+-          </p>
+-        )}
+-      </div>
+-
+-      {/* 积分记录 */}
+-      <div className="panel p-5">
+-        <h3 className="mb-3 text-sm font-semibold text-foreground-950">积分记录</h3>
+-        {logs.length === 0 ? (
+-          <p className="py-6 text-center text-sm text-foreground-500">暂无记录</p>
+-        ) : (
+-          <table className="w-full text-sm">
+-            <thead>
+-              <tr className="border-b border-background-200 text-left text-xs text-foreground-500">
+-                <th className="pb-2 font-normal">时间</th>
+-                <th className="pb-2 font-normal">类型</th>
+-                <th className="pb-2 font-normal">说明</th>
+-                <th className="pb-2 text-right font-normal">积分变动</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {logs.map((l) => (
+-                <tr key={l.id} className="border-b border-background-100 last:border-0">
+-                  <td className="py-2.5 text-xs text-foreground-500">
+-                    {new Date(l.created_at).toLocaleString("zh-CN", { hour12: false })}
+-                  </td>
+-                  <td className="py-2.5 text-foreground-800">{LOG_LABEL[l.type] ?? l.type}</td>
+-                  <td className="py-2.5 text-foreground-500">{l.note}</td>
+-                  <td
+-                    className={`py-2.5 text-right font-medium ${
+-                      l.amount > 0 ? "text-emerald-600" : "text-rose-600"
+-                    }`}
+-                  >
+-                    {l.amount > 0 ? `+${l.amount}` : l.amount}
+-                  </td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
+-        )}
+-      </div>
+-    </div>
+-  );
+-}
+diff --git a/web/src/types.ts b/web/src/types.ts
+index 96fb86b..758785d 100644
+--- a/web/src/types.ts
++++ b/web/src/types.ts
+@@ -122,6 +122,8 @@ export interface Task {
+   chosen_image_url: string | null;
+   /** 本次任务已扣的广告图积分（cost_ad_image × 张数）；与视频费 task.cost 独立计。0/缺省 = 未扣或已退 */
+   ad_image_cost?: number;
++  /** 自动模式：true=候选图出完自动确认（选第 1 张）直接进视频阶段，无需人工点击 */
++  auto_confirm?: boolean;
+   created_at: string;
+   started_at: string | null;
+   finished_at: string | null;
