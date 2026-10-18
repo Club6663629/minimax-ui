@@ -32,6 +32,7 @@ from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, vide
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
+from . import quarantine as poison_guard  # POISON_GUARD: 毒丸隔离
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +326,18 @@ def _claim_generate() -> Optional[int]:
         )
         if task is None:
             return None
+        if poison_guard.enabled() and poison_guard.is_poisoned(task):
+            reason = poison_guard.poison_reason(task)
+            task.status = "failed"
+            task.error = f"熔断隔离：{reason}"[:500]
+            task.finished_at = datetime.now()
+            if task.cost > 0:
+                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
+                            note="熔断隔离退还", task_id=task.id)
+                task.cost = 0
+            db.commit()
+            logger.warning("任务 #%s 命中毒丸熔断名单，拒绝执行：%s", task.id, reason)
+            return None
         task_id, user_id = task.id, task.user_id
         if task.cost > 0:  # 重投任务已在首次派发时计费，不重复扣款；占位同步写入防再领
             task.status = "generating_768p"
@@ -388,6 +401,18 @@ def _claim_director() -> Optional[int]:
         )
         if task is None:
             return None
+        if poison_guard.enabled() and poison_guard.is_poisoned(task):
+            reason = poison_guard.poison_reason(task)
+            task.status = "failed"
+            task.error = f"熔断隔离：{reason}"[:500]
+            task.finished_at = datetime.now()
+            if task.cost > 0:
+                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
+                            note="熔断隔离退还", task_id=task.id)
+                task.cost = 0
+            db.commit()
+            logger.warning("任务 #%s 命中毒丸熔断名单，拒绝执行：%s", task.id, reason)
+            return None
         task_id, user_id = task.id, task.user_id
         if task.cost > 0:  # 重投任务已在首次派发时计费
             task.status = "generating_768p"
@@ -414,8 +439,17 @@ def _claim_director() -> Optional[int]:
 
 async def _dispatch_director(task_id: int) -> None:
     """派发导演台任务：只认 director 标签的空闲节点（独占整卡，无兜底）。"""
-    node = pool.acquire_director(task_id)
+    node, _pin_state = _acquire_with_pin(
+        task_id, "generate", lambda: pool.acquire_director(task_id), require_director=True
+    )
     if node is None:
+        if _pin_state == "fail":
+            poison_guard.pin_clear(task_id)
+            await asyncio.to_thread(
+                _fail_task, task_id,
+                "节点粘滞重试超时：目标节点长时间不可用，任务判失败（不跨节点扩散；确需换节点请人工重投）",
+            )
+            return
         await asyncio.to_thread(_uncharge, task_id)  # 暂无专用空闲槽位：退积分回队
         return
     with SessionLocal() as db:
@@ -529,8 +563,17 @@ async def _dispatch_generate(task_id: int) -> None:
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         heavy = task.duration >= 10
-    node = pool.acquire_generate(heavy, task_id)
+    node, _pin_state = _acquire_with_pin(
+        task_id, "generate", lambda: pool.acquire_generate(heavy, task_id), require_director=False
+    )
     if node is None:
+        if _pin_state == "fail":
+            poison_guard.pin_clear(task_id)
+            await asyncio.to_thread(
+                _fail_task, task_id,
+                "节点粘滞重试超时：目标节点长时间不可用，任务判失败（不跨节点扩散；确需换节点请人工重投）",
+            )
+            return
         await asyncio.to_thread(_uncharge, task_id)  # 无空闲槽位：退还积分回队
         return
     with SessionLocal() as db:
@@ -803,18 +846,89 @@ async def _run_upscale(task_id: int, node: WorkerNode) -> None:
         pool.release(node)
 
 
-# ---------------------------------------------------------------- 失败处理
-def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
-    """attempts < MAX 回退状态重投；否则失败退积分。返回是否已重投。"""
+# ------------------------------------------------- 毒丸隔离辅助（POISON_GUARD）
+def _fail_task(task_id: int, error: str) -> None:
+    """判失败并退还积分（毒丸隔离 / 粘滞超时用）。"""
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         if task is None or task.status in ("done", "failed"):
+            return
+        task.status = "failed"
+        task.error = error[:500]
+        task.finished_at = datetime.now()
+        if task.cost > 0:
+            add_credits(db, db.get(User, task.user_id), task.cost, "refund",
+                        note="失败退还", task_id=task_id)
+            task.cost = 0
+        db.commit()
+    logger.error("任务 #%s 判失败：%s", task_id, error)
+
+
+def _acquire_with_pin(task_id: int, role: str, fallback, require_director: bool = False):
+    """带节点粘滞的节点领取。返回 (node, status)。
+
+    status = "ok"   领取成功（或无粘滞记录，走原有派发逻辑）
+             "wait" 该任务被粘滞在某个节点上、该节点暂时不可用 → 稍后再派，**不换节点**
+             "fail" 粘滞等待超限 → 判失败（绝不换节点扩散）
+    """
+    if not poison_guard.enabled():
+        return fallback(), "ok"
+    url = poison_guard.pin_get(task_id)
+    if not url:
+        return fallback(), "ok"
+    node = pool.acquire_url(url, role, task_id, require_director=require_director)
+    if node is not None:
+        logger.info("任务 #%s 按粘滞回到原节点 %s", task_id, url)
+        return node, "ok"
+    if poison_guard.pin_attempts(task_id) >= poison_guard.PIN_MAX_ATTEMPTS:
+        return None, "fail"
+    poison_guard.pin_bump(task_id)
+    return None, "wait"
+
+
+# ---------------------------------------------------------------- 失败处理
+def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
+    """失败处理（POISON_GUARD：不再让一条毒任务跨节点扩散）。
+
+    - 运行中节点失联（宿主 OOM / 进程被杀）且属长任务 → 熔断该签名、直接判失败，**不重投**；
+    - 运行中节点失联但属短任务 → 只允许在**同一节点**重试（节点粘滞），不换节点；
+    - 节点存活、任务自身报错 → 沿用原逻辑（attempts < MAX_ATTEMPTS 回退重投）。
+    """
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if task is None or task.status in ("done", "failed"):
+            return False
+        failed_url = (task.worker_url or "").rstrip("/")
+        guard = poison_guard.enabled() and failed_url not in ("", "pending")
+        pool_node = pool.get_node_by_url(failed_url) if failed_url else None
+        node_lost = guard and (
+            (pool_node is not None and not pool_node.healthy) or not poison_guard.node_alive(failed_url)
+        )
+        if node_lost and poison_guard.is_long(task):
+            reason = f"{stage} 运行中节点 {failed_url} 失联（宿主 OOM/进程被杀）: {error}"[:300]
+            poison_guard.add_poison(task, reason=reason, node=failed_url,
+                                    extra={"stage": stage, "error": error[:300]})
+            task.status = "failed"
+            task.error = ("毒丸隔离：该任务运行中打爆节点（宿主内存耗尽/进程被杀），已熔断该任务签名，"
+                          "且不会重投到其它节点；请调低段数/时长后重试")
+            task.finished_at = datetime.now()
+            if task.cost > 0:
+                add_credits(db, db.get(User, task.user_id), task.cost, "refund",
+                            note="毒丸隔离退还", task_id=task_id)
+                task.cost = 0
+            db.commit()
+            logger.error("毒丸隔离 #%s：%s 已熔断，拒绝跨节点重投", task_id, failed_url)
             return False
         if task.attempts < MAX_ATTEMPTS:
             task.status = stage
             task.worker_url = ""
             db.commit()
-            logger.warning("任务 #%s 回退重投（%s，已尝试 %d 次）", task_id, stage, task.attempts)
+            if node_lost:
+                poison_guard.pin_set(task_id, failed_url)
+                logger.warning("任务 #%s 同节点重试（%s，第 %d 次，粘滞 %s）",
+                               task_id, stage, task.attempts, failed_url)
+            else:
+                logger.warning("任务 #%s 回退重投（%s，已尝试 %d 次）", task_id, stage, task.attempts)
             return True
         task.status = "failed"
         task.error = error or "执行失败"
@@ -824,7 +938,6 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
         db.commit()
     return False
-
 
 # ---------------------------------------------------------------- ② 768p 生成
 async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
