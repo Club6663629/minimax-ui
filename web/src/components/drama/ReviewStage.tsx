@@ -8,12 +8,14 @@ import {
   Film,
   History,
   Loader2,
+  Sparkles,
   ThumbsDown,
   ThumbsUp,
   X,
 } from "lucide-react";
 import { api, fileUrl } from "../../api/client";
 import type {
+  DramaAiPrecheckShot,
   DramaArtifactVersion,
   DramaEpisode,
   DramaReview,
@@ -54,6 +56,13 @@ export default function ReviewStage({
   const [rejectBusy, setRejectBusy] = useState(false);
   const [versionsFor, setVersionsFor] = useState<DramaShot | null>(null);
   const [approvingId, setApprovingId] = useState<number | null>(null);
+  /** AI 预检结果（整集）与返修意见扩写候选值 */
+  const [precheckBusy, setPrecheckBusy] = useState(false);
+  const [precheck, setPrecheck] = useState<
+    { summary: string; results: DramaAiPrecheckShot[]; imageUsed: boolean; label: string } | null
+  >(null);
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [briefCandidate, setBriefCandidate] = useState<{ brief: string; label: string } | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
 
   const load = useCallback(async () => {
@@ -108,6 +117,44 @@ export default function ReviewStage({
     }, 120);
   };
 
+  /** 整集 AI 预检：一次联系表调用，结果同时由后端写入 shot.qa.ai。 */
+  const runPrecheck = async () => {
+    setPrecheckBusy(true);
+    try {
+      const result = await api.dramaAiPrecheck(eid, { scope: "episode" });
+      setPrecheck({
+        summary: result.summary,
+        results: result.results,
+        imageUsed: result.image_used,
+        label: result.cached ? `${result.provider} 缓存` : result.provider || "AI",
+      });
+      const hits = result.results.filter((row) => row.issues.length > 0).length;
+      notify(hits ? `AI 预检完成，${hits} 镜有问题` : "AI 预检完成，未发现明显问题");
+      await load();
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setPrecheckBusy(false);
+    }
+  };
+
+  /** 把一句话返修意见扩写成可执行的重采样要求（不提交）。 */
+  const expandBrief = async () => {
+    if (!rejectTarget) return;
+    setBriefBusy(true);
+    try {
+      const result = await api.dramaAiRepairBrief(rejectTarget.id, reason.trim());
+      setBriefCandidate({
+        brief: result.brief,
+        label: result.cached ? `${result.provider} 缓存` : result.provider || "AI",
+      });
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setBriefBusy(false);
+    }
+  };
+
   const approve = async (shot: DramaShot) => {
     setApprovingId(shot.id);
     try {
@@ -142,6 +189,7 @@ export default function ReviewStage({
       });
       setRejectTarget(null);
       setReason("");
+      setBriefCandidate(null);
       if (result.run) {
         notify(
           result.cost
@@ -215,6 +263,16 @@ export default function ReviewStage({
                 联系表
               </button>
             )}
+            <button
+              type="button"
+              className="btn-ghost px-2 py-1 text-xs"
+              onClick={() => void runPrecheck()}
+              disabled={precheckBusy || shots.length === 0 || missingClip === shots.length}
+              title="用联系表看一遍整集，逐镜给出问题与返修建议"
+            >
+              <Sparkles size={12} />
+              {precheckBusy ? "预检中…" : "AI 预检"}
+            </button>
           </div>
         </div>
 
@@ -283,6 +341,62 @@ export default function ReviewStage({
         </p>
       )}
 
+      {precheck && (
+        <section className="panel space-y-2 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+              <Sparkles size={14} /> AI 预检结果
+            </h3>
+            <span className="text-[10px] text-foreground-400">（{precheck.label}）</span>
+            {!precheck.imageUsed && (
+              <span className="text-[11px] text-amber-600">未取到画面，本次仅按文字预检</span>
+            )}
+            <button
+              type="button"
+              className="ml-auto rounded-lg p-1 text-foreground-400 hover:bg-background-200"
+              onClick={() => setPrecheck(null)}
+              title="关闭"
+            >
+              <X size={13} />
+            </button>
+          </div>
+          {precheck.summary && <p className="text-xs text-foreground-700">{precheck.summary}</p>}
+          {precheck.results.filter((row) => row.issues.length > 0).length === 0 ? (
+            <p className="text-xs text-emerald-600">未发现明显问题，可继续逐镜审核。</p>
+          ) : (
+            <div className="space-y-1.5">
+              {precheck.results
+                .filter((row) => row.issues.length > 0)
+                .map((row) => (
+                  <div key={row.shot_no} className="rounded-lg bg-background-100 px-2.5 py-2">
+                    <button
+                      type="button"
+                      className={`text-xs font-medium ${row.score >= 85 ? "text-emerald-700" : "text-amber-700"}`}
+                      onClick={() =>
+                        focusShot(shots.find((shot) => shot.shot_no === row.shot_no)?.id)
+                      }
+                    >
+                      第 {row.shot_no} 镜 · {row.score} 分
+                    </button>
+                    {row.issues.map((issue, i) => (
+                      <p key={i} className="mt-0.5 text-[11px] leading-relaxed text-foreground-600">
+                        <span className="text-foreground-500">[{issue.severity}]</span>{" "}
+                        {issue.evidence}
+                        {issue.suggestion && (
+                          <span className="text-foreground-500">　→ {issue.suggestion}</span>
+                        )}
+                      </p>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          )}
+          <p className="text-[10px] text-foreground-400">
+            预检只给建议，不改变镜头状态；可直接用「返修」提交具体意见。
+          </p>
+        </section>
+      )}
+
       <section className="space-y-2">
         {shots.map((shot) => {
           const seam = seams.get(shot.shot_no);
@@ -334,6 +448,25 @@ export default function ReviewStage({
                       v{shot.version_no || 0} · {fmtSecs(shot.duration_s)}
                       {shot.repair_count > 0 && ` · 返修 ${shot.repair_count} 次`}
                     </span>
+                    {shot.qa?.ai && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] ${
+                          shot.qa.ai.stale
+                            ? "bg-background-200 text-foreground-500"
+                            : (shot.qa.ai.score ?? 0) >= 85
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-amber-100 text-amber-700"
+                        }`}
+                        title={
+                          shot.qa.ai.issues?.length
+                            ? shot.qa.ai.issues.map((item) => item.evidence).join("\n")
+                            : "AI 预检未发现问题"
+                        }
+                      >
+                        AI {shot.qa.ai.score ?? "—"}
+                        {shot.qa.ai.stale ? " · 过期" : ""}
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="ml-auto inline-flex items-center gap-0.5 text-[10px] text-foreground-500 hover:text-foreground-800"
@@ -373,6 +506,7 @@ export default function ReviewStage({
                     onClick={() => {
                       setRejectTarget(shot);
                       setReason("");
+                      setBriefCandidate(null);
                       setRerun(true);
                     }}
                     title={disabled ? "旧版镜头需重新生成后再审" : ""}
@@ -441,6 +575,50 @@ export default function ReviewStage({
               onChange={(event) => setReason(event.target.value)}
               placeholder="必填：说明要改什么（会写入重采样提示词）"
             />
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-ghost !px-2 !py-1 text-xs"
+                onClick={() => void expandBrief()}
+                disabled={briefBusy || !reason.trim()}
+                title="把一句话意见扩写成可执行的画面要求"
+              >
+                <Sparkles size={12} />
+                {briefBusy ? "扩写中…" : "AI 扩写意见"}
+              </button>
+              <span className="text-[10px] text-foreground-400">
+                先写个大概，AI 会补上保留与避免的点
+              </span>
+            </div>
+
+            {briefCandidate && (
+              <div className="space-y-2 rounded-lg bg-background-100 p-2.5">
+                <p className="text-[11px] text-foreground-500">候选（{briefCandidate.label}）</p>
+                <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground-800">
+                  {briefCandidate.brief}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary !px-2 !py-1 text-xs"
+                    onClick={() => {
+                      setReason(briefCandidate.brief);
+                      setBriefCandidate(null);
+                    }}
+                  >
+                    采用
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost !px-2 !py-1 text-xs"
+                    onClick={() => setBriefCandidate(null)}
+                  >
+                    放弃
+                  </button>
+                </div>
+              </div>
+            )}
 
             <label className="flex items-start gap-2 text-xs text-foreground-600">
               <input type="checkbox" checked disabled className="mt-0.5" />

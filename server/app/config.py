@@ -44,9 +44,19 @@ class Settings(BaseSettings):
     drama_max_shot_seconds: float = 10.0
     drama_min_shot_seconds: float = 2.0
     drama_keep_versions: int = 5          # 每镜保留版本数（P1 只记录，不清理）
+    # 已废弃：生成改走 drama_ai_timeout；保留仅为兼容旧 .env，无代码引用
     drama_llm_timeout: int = 90
-    # qwen / off（off=强制本地模板，便于无 key 联调与 smoke）
+    # qwen / off（off=强制本地模板，便于无 key 联调与 smoke），同时是 AI 辅助总开关
     drama_llm_provider: str = "qwen"
+    # AI 辅助（P0+P1）：文本默认 deepseek-flash（快、便宜、JSON 稳），视觉默认 qwen-flash；
+    # 两个 provider 会自动交叉兜底，无 key 时整体回退本地/原值
+    drama_ai_text_provider: str = "deepseek"
+    drama_ai_vision_provider: str = "qwen"
+    drama_ai_timeout: int = 60              # 单次 AI 辅助超时（秒）
+    drama_ai_max_tokens: int = 1600
+    drama_ai_max_images: int = 4            # 单次视觉调用最多图片数
+    drama_ai_rate_per_hour: int = 60        # 每用户每小时 AI 调用上限
+    drama_ai_cache_ttl: int = 1800          # 相同输入的结果缓存（秒）
     # 测试期只对管理员开放；测试完成后置 false（或 .env 加 DRAMA_ADMIN_ONLY=false）对外开放
     drama_admin_only: bool = True
     # ---- 电商广告片 advideo：商品图 → 广告图（人工确认） → 广告视频 ----

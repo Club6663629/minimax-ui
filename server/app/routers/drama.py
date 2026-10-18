@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -20,19 +21,21 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import decode_token, get_current_user
-from ..config import UPLOAD_DIR, settings
+from ..config import DRAMA_DIR, UPLOAD_DIR, settings
 from ..database import get_db
 from ..models import (
     DramaArtifact, DramaCharacter, DramaEpisode, DramaProject, DramaRun, DramaScene,
     DramaShot, Task, Upload, User,
 )
 from ..schemas import (
+    DramaAiPrecheckIn, DramaAiRepairIn, DramaAiRewriteBeatIn, DramaAiRewriteShotIn,
     DramaCharacterIn, DramaCharacterLockIn, DramaCharacterPatchIn, DramaEpisodeIn,
     DramaExtractIn, DramaProjectIn, DramaProjectPatchIn, DramaRejectIn, DramaRenderIn,
     DramaRollbackIn, DramaSceneIn, DramaScenePatchIn, DramaScriptGenerateIn,
     DramaScriptSaveIn, DramaShotIn, DramaShotsSaveIn,
 )
-from ..services import drama_composer as composer, drama_llm, drama_runner
+from ..services import drama_ai, drama_composer as composer, drama_llm, drama_runner
+from ..services.drama_agent import DramaAgentError
 from ..services.drama_runner import DramaError
 from ..services.billing import compute_director_cost
 from ..services.pool import pool
@@ -127,6 +130,21 @@ def _raise(exc: DramaError):
     raise HTTPException(exc.status_code, exc.message)
 
 
+def _ai_fail(exc: DramaAgentError):
+    """AI 辅助失败：限流转 429，其余 503（前端提示可重试，主流程不受影响）。"""
+    message = str(exc)
+    if "频繁" in message:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, message)
+    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"AI 辅助暂不可用：{message}")
+
+
+def _ai_meta(result: dict) -> dict:
+    return {
+        "source": "llm", "provider": result.get("provider", ""),
+        "model": result.get("model", ""), "cached": bool(result.get("cached")),
+    }
+
+
 # ---------------------------------------------------------------- 序列化
 def _json(raw, default):
     return composer.load_json(raw, default)
@@ -199,6 +217,11 @@ def _full_cost(db: Session, episode: DramaEpisode) -> int:
 
 
 def _serialize_shot(shot: DramaShot, clip: Optional[DramaArtifact], episode: DramaEpisode) -> dict:
+    qa = _json(shot.qa, {}) if shot.qa else {}
+    ai = qa.get("ai") if isinstance(qa, dict) else None
+    # 预检结果跟着 spec_hash 失效：分镜/角色卡改动后标 stale，前端灰显旧结论
+    if isinstance(ai, dict) and ai.get("spec_hash") and ai["spec_hash"] != episode.spec_hash:
+        qa = {**qa, "ai": {**ai, "stale": True}}
     return {
         "id": shot.id, "shot_no": shot.shot_no, "scene_no": shot.scene_no,
         "beat_id": shot.beat_id, "prompt": shot.prompt,
@@ -213,7 +236,7 @@ def _serialize_shot(shot: DramaShot, clip: Optional[DramaArtifact], episode: Dra
         "repair_cost_total": shot.repair_cost_total or 0,
         "clip_url": _artifact_url(clip),
         "stale": bool(clip and clip.spec_hash and clip.spec_hash != episode.spec_hash),
-        "qa": _json(shot.qa, {}) if shot.qa else {},
+        "qa": qa,
     }
 
 
@@ -518,6 +541,28 @@ def save_script(eid: int, body: DramaScriptSaveIn, user: User = Depends(drama_us
     return {"status": episode.status, "beats": body.beats}
 
 
+@router.post("/episodes/{eid}/ai/rewrite-beat")
+def ai_rewrite_beat(eid: int, body: DramaAiRewriteBeatIn,
+                    user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """AI 只重写指定节拍的文本字段；返回候选值，不落库。"""
+    episode = _episode(db, eid, user)
+    beats = _json(episode.beats, [])
+    index = next(
+        (i for i, beat in enumerate(beats) if str(beat.get("id") or "") == body.beat_id), -1,
+    )
+    if index < 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "节拍不存在")
+    project = db.get(DramaProject, episode.project_id)
+    try:
+        result = drama_ai.rewrite_beat(
+            project=project, episode=episode, beats=beats, index=index,
+            instruction=body.instruction, user_id=user.id,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {**_ai_meta(result), "beat_id": body.beat_id, "beat": result["data"]}
+
+
 # ---------------------------------------------------------------- 角色
 @router.post("/projects/{pid}/characters")
 def create_character(pid: int, body: DramaCharacterIn, user: User = Depends(drama_user),
@@ -651,6 +696,46 @@ def lock_character(cid: int, body: DramaCharacterLockIn, user: User = Depends(dr
     ]
     return {"locked": char.locked, "character": _serialize_character(char),
             "status": "cast_ready" if "cast_ready" in statuses else (statuses[0] if statuses else "")}
+
+
+def _card_path(db: Session, char: DramaCharacter) -> Path:
+    upload = db.get(Upload, char.card_upload_id) if char.card_upload_id else None
+    if upload is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先上传定妆图")
+    path = Path(upload.path)
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "定妆图文件缺失，请重新上传")
+    return path
+
+
+@router.post("/characters/{cid}/ai/describe")
+def ai_describe_character(cid: int, user: User = Depends(drama_user),
+                          db: Session = Depends(get_db)):
+    """按定妆图反填外形/服装（候选值，用户确认后走 PATCH /characters）。"""
+    char = _character(db, cid, user)
+    path = _card_path(db, char)
+    project = db.get(DramaProject, char.project_id)
+    try:
+        result = drama_ai.describe_character(
+            char=char, image_path=path,
+            project_style=project.style_bible if project else "", user_id=user.id,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {**_ai_meta(result), "character_id": cid, "fields": result["data"]}
+
+
+@router.post("/characters/{cid}/ai/check")
+def ai_check_character(cid: int, user: User = Depends(drama_user),
+                       db: Session = Depends(get_db)):
+    """校验定妆图与角色文字是否一致（只给差异，不改库）。"""
+    char = _character(db, cid, user)
+    path = _card_path(db, char)
+    try:
+        result = drama_ai.check_character(char=char, image_path=path, user_id=user.id)
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {**_ai_meta(result), "character_id": cid, **result["data"]}
 
 
 def _maybe_advance_cast(db: Session, project_id: int) -> None:
@@ -887,8 +972,14 @@ def plan_shots(eid: int, body: Optional[dict] = None, user: User = Depends(drama
     mode = str((body or {}).get("mode") or "replace")
     result = drama_llm.plan_shots(
         beats,
-        [{"id": c.id, "name": c.name, "role": c.role} for c in characters],
-        [{"scene_no": s.scene_no, "name": s.name, "location": s.location} for s in scenes],
+        [{
+            "id": c.id, "name": c.name, "role": c.role,
+            "appearance": c.appearance, "costume": c.costume,
+        } for c in characters],
+        [{
+            "scene_no": s.scene_no, "name": s.name, "location": s.location,
+            "time_of_day": s.time_of_day, "description": s.description,
+        } for s in scenes],
         settings.drama_max_shots,
     )
     drafts = result["shots"]
@@ -965,6 +1056,33 @@ def save_shots(eid: int, body: DramaShotsSaveIn, user: User = Depends(drama_user
         "status": episode.status,
         "shots": [_serialize_shot(s, clips.get(s.id), episode) for s in shots],
     }
+
+
+@router.post("/shots/{sid}/ai/rewrite")
+def ai_rewrite_shot(sid: int, body: DramaAiRewriteShotIn,
+                    user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """改写单镜画面提示词（返回候选值，用户采纳后走 PUT /shots 落库）。"""
+    shot = _shot(db, sid, user)
+    episode = db.get(DramaEpisode, shot.episode_id)
+    project = db.get(DramaProject, episode.project_id)
+    scene = (
+        db.query(DramaScene)
+        .filter(DramaScene.episode_id == episode.id, DramaScene.scene_no == shot.scene_no)
+        .first()
+    )
+    ids = _json(shot.character_ids, []) or []
+    characters = (
+        db.query(DramaCharacter).filter(DramaCharacter.id.in_(ids)).all() if ids else []
+    )
+    try:
+        result = drama_ai.rewrite_shot(
+            project=project, episode=episode, shot=shot, scene=scene,
+            characters=characters, mode=body.mode, instruction=body.instruction,
+            user_id=user.id,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {**_ai_meta(result), "shot": result["data"]}
 
 
 @router.get("/episodes/{eid}/checklist")
@@ -1092,6 +1210,116 @@ def reject_shot(sid: int, body: DramaRejectIn, user: User = Depends(drama_user),
     }
 
 
+@router.post("/shots/{sid}/ai/repair-brief")
+def ai_repair_brief(sid: int, body: DramaAiRepairIn,
+                    user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """把用户一句话意见扩写成可执行的返修要求（不提交返修）。"""
+    shot = _shot(db, sid, user)
+    episode = db.get(DramaEpisode, shot.episode_id)
+    project = db.get(DramaProject, episode.project_id)
+    scene = (
+        db.query(DramaScene)
+        .filter(DramaScene.episode_id == episode.id, DramaScene.scene_no == shot.scene_no)
+        .first()
+    )
+    ids = _json(shot.character_ids, []) or []
+    characters = (
+        db.query(DramaCharacter).filter(DramaCharacter.id.in_(ids)).all() if ids else []
+    )
+    siblings = (
+        db.query(DramaShot).filter(DramaShot.episode_id == episode.id)
+        .order_by(DramaShot.shot_no).all()
+    )
+    index = next((i for i, item in enumerate(siblings) if item.id == shot.id), -1)
+    prev_shot = siblings[index - 1] if index > 0 else None
+    next_shot = siblings[index + 1] if 0 <= index < len(siblings) - 1 else None
+    try:
+        result = drama_ai.repair_brief(
+            shot=shot, project=project, scene=scene, characters=characters,
+            prev_shot=prev_shot, next_shot=next_shot, reason=body.reason, user_id=user.id,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {
+        **_ai_meta(result), "shot_id": sid,
+        "brief": result["data"]["brief"],
+        "keep": result["data"]["keep"], "avoid": result["data"]["avoid"],
+    }
+
+
+@router.post("/episodes/{eid}/ai/precheck")
+def ai_precheck(eid: int, body: DramaAiPrecheckIn,
+                user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """审片 AI 预检：整集用联系表一次看完，单镜抽首/中/尾三帧。结果写入 shot.qa.ai。"""
+    episode = _episode(db, eid, user)
+    _guard_writing(db, episode.project_id)
+    shots = (
+        db.query(DramaShot).filter(DramaShot.episode_id == eid)
+        .order_by(DramaShot.shot_no).all()
+    )
+    if not shots:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "还没有分镜")
+    scenes = db.query(DramaScene).filter(DramaScene.episode_id == eid).all()
+    characters = (
+        db.query(DramaCharacter).filter(DramaCharacter.project_id == episode.project_id).all()
+    )
+    clips = _clips_by_shot(db, eid)
+
+    images: list = []
+    target = shots
+    if body.scope == "shot":
+        shot = db.get(DramaShot, body.shot_id) if body.shot_id else None
+        if shot is None or shot.episode_id != eid:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "镜头不存在")
+        clip = clips.get(shot.id)
+        if clip is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"第 {shot.shot_no} 镜还没有成片")
+        out = DRAMA_DIR / "ai" / f"precheck_e{eid}_s{shot.id}.jpg"
+        images = [p for p in [drama_ai.shot_sheet(clip.path, out, 3)] if p]
+        target = [shot]
+    else:
+        sheet = drama_runner.current_sheet(db, episode)
+        if sheet is not None and Path(sheet.path).exists():
+            images = [sheet.path]
+        else:
+            paths = [clips[s.id].path for s in shots if s.id in clips and clips[s.id].path]
+            if not paths:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "还没有成片，无法预检")
+            out = DRAMA_DIR / "ai" / f"precheck_e{eid}.jpg"
+            images = [p for p in [drama_ai.episode_sheet(paths, out)] if p]
+
+    try:
+        result = drama_ai.precheck(
+            episode=episode, shots=target, scenes=scenes, characters=characters,
+            image_paths=images, scope=body.scope, user_id=user.id, force=body.force,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+
+    by_no = {row["shot_no"]: row for row in result["data"]["results"]}
+    now = datetime.now().isoformat(timespec="seconds")
+    for shot in target:
+        row = by_no.get(shot.shot_no)
+        if row is None:
+            continue
+        qa = _json(shot.qa, {}) if shot.qa else {}
+        qa["ai"] = {
+            "spec_hash": episode.spec_hash, "scope": body.scope,
+            "score": row["score"], "issues": row["issues"], "at": now,
+        }
+        shot.qa = json.dumps(qa, ensure_ascii=False)
+    db.commit()
+
+    payload = {
+        **_ai_meta(result), "scope": body.scope, "spec_hash": episode.spec_hash,
+        "summary": result["data"]["summary"], "results": result["data"]["results"],
+        "image_used": bool(images),
+    }
+    if body.scope == "shot" and target:
+        payload["shot"] = _serialize_shot(target[0], clips.get(target[0].id), episode)
+    return payload
+
+
 def _review_warnings(db: Session, episode: DramaEpisode, bundle: dict) -> list:
     warnings = []
     full_cost = bundle["stats"]["full_cost"] or 0
@@ -1146,6 +1374,25 @@ def review_episode(eid: int, user: User = Depends(drama_user), db: Session = Dep
         "sheet_url": _artifact_url(sheet) or "",
         "warnings": _review_warnings(db, episode, bundle),
     }
+
+
+@router.post("/episodes/{eid}/ai/deliver-copy")
+def ai_deliver_copy(eid: int, user: User = Depends(drama_user),
+                    db: Session = Depends(get_db)):
+    """交付文案（标题/简介/梗概/封面提示词）：只返回展示，不写库。"""
+    episode = _episode(db, eid, user)
+    project = db.get(DramaProject, episode.project_id)
+    shots = (
+        db.query(DramaShot).filter(DramaShot.episode_id == eid)
+        .order_by(DramaShot.shot_no).all()
+    )
+    try:
+        result = drama_ai.deliver_copy(
+            project=project, episode=episode, shots=shots, user_id=user.id,
+        )
+    except DramaAgentError as exc:
+        _ai_fail(exc)
+    return {**_ai_meta(result), "copy": result["data"]}
 
 
 @router.post("/episodes/{eid}/finish")

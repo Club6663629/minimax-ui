@@ -7,11 +7,20 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ShieldCheck,
+  Sparkles,
   Trash2,
   UserRound,
+  Wand2,
 } from "lucide-react";
 import { api, fileUrl } from "../../api/client";
-import type { DramaCharacter, DramaEpisode, DramaScene } from "../../types";
+import type {
+  DramaAiCharacterDiff,
+  DramaAiCharacterFields,
+  DramaCharacter,
+  DramaEpisode,
+  DramaScene,
+} from "../../types";
 import { errText } from "./labels";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -24,6 +33,19 @@ function roleTone(role: string): string {
   if (role === "main") return "bg-primary-100 text-primary-700";
   if (role === "support") return "bg-sky-100 text-sky-700";
   return "bg-background-200 text-foreground-600";
+}
+
+const FIELD_LABEL: Record<string, string> = {
+  appearance: "外形",
+  costume: "服装",
+  gender: "性别",
+  age: "年龄",
+};
+
+function severityTone(severity: string): string {
+  if (severity === "high") return "text-rose-600";
+  if (severity === "mid") return "text-amber-600";
+  return "text-foreground-500";
 }
 
 function CharacterCard({
@@ -42,6 +64,13 @@ function CharacterCard({
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiBusy, setAiBusy] = useState<"" | "describe" | "check">("");
+  const [aiFields, setAiFields] = useState<DramaAiCharacterFields | null>(null);
+  const [aiFieldsLabel, setAiFieldsLabel] = useState("");
+  const [aiDiff, setAiDiff] = useState<
+    { consistent: boolean; summary: string; diffs: DramaAiCharacterDiff[]; label: string } | null
+  >(null);
   const [draft, setDraft] = useState({
     name: character.name,
     appearance: character.appearance,
@@ -114,6 +143,52 @@ function CharacterCard({
     } finally {
       setBusy(false);
     }
+  };
+
+  /** 按定妆图反填外形/服装：只得到候选值，套用到编辑框后仍需手动保存。 */
+  const describe = async () => {
+    setAiOpen(true);
+    setAiBusy("describe");
+    try {
+      const result = await api.dramaAiDescribeCharacter(character.id);
+      setAiFields(result.fields);
+      setAiFieldsLabel(result.cached ? `${result.provider} 缓存` : result.provider || "AI");
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setAiBusy("");
+    }
+  };
+
+  /** 校验文字描述与定妆图是否一致，只报告差异，不改库。 */
+  const check = async () => {
+    setAiOpen(true);
+    setAiBusy("check");
+    try {
+      const result = await api.dramaAiCheckCharacter(character.id);
+      setAiDiff({
+        consistent: result.consistent,
+        summary: result.summary,
+        diffs: result.diffs,
+        label: result.cached ? `${result.provider} 缓存` : result.provider || "AI",
+      });
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setAiBusy("");
+    }
+  };
+
+  const applyFields = () => {
+    if (!aiFields) return;
+    setDraft({
+      ...draft,
+      appearance: aiFields.appearance || draft.appearance,
+      costume: aiFields.costume || draft.costume,
+    });
+    setAiFields(null);
+    setEditing(true);
+    notify("已填入候选文字，确认后点保存");
   };
 
   return (
@@ -245,6 +320,15 @@ function CharacterCard({
           </button>
           <button
             type="button"
+            className="btn-ghost px-2 py-1 text-xs"
+            onClick={() => setAiOpen((value) => !value)}
+            disabled={busy || disabled || !character.card_upload_id}
+            title={!character.card_upload_id ? "请先上传定妆图" : "看定妆图反填文字 / 校验图文一致"}
+          >
+            <Wand2 size={12} /> AI
+          </button>
+          <button
+            type="button"
             className="btn-ghost px-2 py-1 text-xs text-rose-600 disabled:text-foreground-400"
             onClick={remove}
             disabled={busy || !canDelete}
@@ -252,6 +336,97 @@ function CharacterCard({
           >
             <Trash2 size={12} /> 删除
           </button>
+        </div>
+      )}
+
+      {aiOpen && !editing && (
+        <div className="space-y-2 rounded-xl border border-primary-200 bg-primary-50/40 p-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-foreground-600">AI 辅助（基于定妆图）</span>
+            <button
+              type="button"
+              className="btn-ghost !px-2 !py-1 text-xs"
+              onClick={describe}
+              disabled={aiBusy !== "" || busy || disabled}
+            >
+              <Sparkles size={12} />
+              {aiBusy === "describe" ? "看图中…" : "按图补全文字"}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost !px-2 !py-1 text-xs"
+              onClick={check}
+              disabled={aiBusy !== "" || busy || disabled}
+            >
+              <ShieldCheck size={12} />
+              {aiBusy === "check" ? "检查中…" : "校验图文一致"}
+            </button>
+          </div>
+
+          {aiFields && (
+            <div className="space-y-1.5 rounded-lg bg-background-100 p-2">
+              <p className="text-[11px] text-foreground-500">候选（{aiFieldsLabel}）</p>
+              <p className="text-xs leading-relaxed text-foreground-800">
+                外形：{aiFields.appearance || "（未识别）"}
+              </p>
+              <p className="text-xs leading-relaxed text-foreground-800">
+                服装：{aiFields.costume || "（未识别）"}
+              </p>
+              <p className="text-[11px] text-foreground-500">
+                性别：{aiFields.gender || "—"} · 年龄：{aiFields.age || "—"}
+              </p>
+              <div className="flex gap-2 pt-0.5">
+                <button type="button" className="btn-primary !px-2 !py-1 text-xs" onClick={applyFields}>
+                  填入编辑框
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost !px-2 !py-1 text-xs"
+                  onClick={() => setAiFields(null)}
+                >
+                  放弃
+                </button>
+              </div>
+            </div>
+          )}
+
+          {aiDiff && (
+            <div className="space-y-1.5 rounded-lg bg-background-100 p-2">
+              <p
+                className={`text-xs ${aiDiff.consistent ? "text-emerald-600" : "text-amber-600"}`}
+              >
+                {aiDiff.consistent ? "图文一致" : "发现图文差异"}
+                {aiDiff.summary ? `：${aiDiff.summary}` : ""}
+                <span className="ml-1 text-[10px] text-foreground-400">（{aiDiff.label}）</span>
+              </p>
+              {aiDiff.diffs.map((diff, i) => (
+                <p key={i} className="text-[11px] leading-relaxed text-foreground-700">
+                  <span className="font-medium">{FIELD_LABEL[diff.field] || diff.field}</span>：
+                  图中「{diff.in_image || "—"}」/ 文字「{diff.in_text || "—"}」
+                  <span className={`ml-1 ${severityTone(diff.severity)}`}>（{diff.severity}）</span>
+                </p>
+              ))}
+              <div className="flex flex-wrap gap-2 pt-0.5">
+                {!aiDiff.consistent && (
+                  <button
+                    type="button"
+                    className="btn-ghost !px-2 !py-1 text-xs"
+                    onClick={describe}
+                    disabled={aiBusy !== ""}
+                  >
+                    <Sparkles size={12} /> 按图重写文字
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-ghost !px-2 !py-1 text-xs"
+                  onClick={() => setAiDiff(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </article>

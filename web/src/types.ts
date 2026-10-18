@@ -378,6 +378,87 @@ export interface DramaSeamMetric {
   level?: "ok" | "warn" | "fail" | string;
 }
 
+// ---- AI 辅助（P0+P1）----
+/** 所有 AI 接口共用的来源信息。 */
+export interface DramaAiMeta {
+  source: string;
+  provider: string;
+  model: string;
+  cached: boolean;
+}
+
+/** 剧本节拍局部重写的候选值（不落库）。 */
+export interface DramaAiBeatCandidate {
+  title: string;
+  summary: string;
+  mood: string;
+  location: string;
+  dialogue_hint: string;
+}
+
+/** 单镜提示词改写候选值（不落库）。 */
+export interface DramaAiShotRewrite {
+  prompt: string;
+  continuity_note: string;
+  audio_note: string;
+  dialogue: string;
+  changes: string[];
+}
+
+/** 按定妆图反填的角色字段候选值。 */
+export interface DramaAiCharacterFields {
+  appearance: string;
+  costume: string;
+  gender: string;
+  age: string;
+}
+
+export interface DramaAiCharacterDiff {
+  field: string;
+  in_image: string;
+  in_text: string;
+  severity: "high" | "mid" | "low" | string;
+}
+
+export type DramaAiIssueType =
+  | "identity"
+  | "artifact"
+  | "text"
+  | "composition"
+  | "lighting"
+  | "continuity";
+
+export interface DramaAiPrecheckIssue {
+  type: DramaAiIssueType | string;
+  severity: "high" | "mid" | "low" | string;
+  evidence: string;
+  suggestion: string;
+}
+
+export interface DramaAiPrecheckShot {
+  shot_no: number;
+  score: number;
+  issues: DramaAiPrecheckIssue[];
+}
+
+/** 落在 `shot.qa.ai` 里的预检结果；spec_hash 变化后由后端标 stale。 */
+export interface DramaAiShotQa {
+  spec_hash?: string;
+  scope?: "episode" | "shot" | string;
+  score?: number;
+  issues?: DramaAiPrecheckIssue[];
+  at?: string;
+  stale?: boolean;
+}
+
+/** 交付文案候选值。 */
+export interface DramaAiCopy {
+  title: string;
+  logline: string;
+  synopsis: string;
+  cover_prompt: string;
+}
+
 export interface DramaShot {
   id: number;
   shot_no: number;
@@ -399,7 +480,7 @@ export interface DramaShot {
   repair_cost_total: number;
   clip_url: string | null;
   stale: boolean;
-  qa: { in?: DramaSeamMetric; out?: DramaSeamMetric };
+  qa: { in?: DramaSeamMetric; out?: DramaSeamMetric; ai?: DramaAiShotQa };
 }
 
 /** `/shots/plan` 响应与 `PUT /shots` 入参共用的草稿字段。 */

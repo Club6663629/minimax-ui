@@ -11,7 +11,14 @@ import {
   Wand2,
 } from "lucide-react";
 import { api } from "../../api/client";
-import type { DramaCharacter, DramaEpisode, DramaScene, DramaShotDraft } from "../../types";
+import type {
+  DramaAiShotRewrite,
+  DramaCharacter,
+  DramaEpisode,
+  DramaScene,
+  DramaShot,
+  DramaShotDraft,
+} from "../../types";
 import { errText, fmtSecs, shotDraftFromShot } from "./labels";
 
 const FPS = 24;
@@ -124,6 +131,13 @@ export default function ShotStage({
     setDrafts((rows) => rows.map((row, i) => (i === index ? { ...row, ...next } : row)));
     setDirty(true);
   };
+
+  /** 已保存镜头按镜号索引：AI 改写只能基于库内版本，未保存的新草稿不给入口。 */
+  const savedByNo = useMemo(() => {
+    const map = new Map<number, DramaShot>();
+    episode.shots.forEach((shot) => map.set(shot.shot_no, shot));
+    return map;
+  }, [episode.shots]);
 
   const stats = useMemo(() => {
     const preview = planPreview(drafts.map((draft) => draft.duration_s));
@@ -318,6 +332,8 @@ export default function ShotStage({
                     frames={frames}
                     characters={characters}
                     scenes={scenes}
+                    saved={savedByNo.get(draft.shot_no)}
+                    notify={notify}
                     minShot={minShot}
                     maxShot={maxShot}
                     onToggleExpand={() => setExpanded(open ? null : index)}
@@ -351,6 +367,8 @@ function FragmentRow({
   frames,
   characters,
   scenes,
+  saved,
+  notify,
   minShot,
   maxShot,
   onToggleExpand,
@@ -365,6 +383,8 @@ function FragmentRow({
   frames: number;
   characters: DramaCharacter[];
   scenes: DramaScene[];
+  saved?: DramaShot;
+  notify: (message: string) => void;
   minShot: number;
   maxShot: number;
   onToggleExpand: () => void;
@@ -372,6 +392,11 @@ function FragmentRow({
   onToggleCharacter: (cid: number) => void;
   onRemove: () => void;
 }) {
+  /** 只有草稿与已保存版本一致时才允许 AI 改写，避免拿旧内容生成候选。 */
+  const synced = Boolean(
+    saved && JSON.stringify(shotDraftFromShot(saved)) === JSON.stringify(draft),
+  );
+
   return (
     <>
       <tr className={`border-b border-background-100 align-top last:border-0 ${issues.length ? "bg-rose-50/30" : ""}`}>
@@ -503,49 +528,182 @@ function FragmentRow({
         <tr className="border-b border-background-100 bg-background-50/60">
           <td />
           <td colSpan={9} className="px-2 py-3">
-            <div className="grid gap-2 md:grid-cols-2">
-              <label className="space-y-1 text-[11px] text-foreground-500">
-                <span>提示词（画面、动作、光线；建议 20 字以上）</span>
-                <textarea
-                  className="input min-h-[92px] resize-y text-xs"
-                  value={draft.prompt}
-                  onChange={(event) => onPatch({ prompt: event.target.value })}
-                  placeholder="例如：雨夜便利店门口，女主撑伞回头，霓虹在水面反光，中景缓慢推近。"
-                />
-              </label>
-              <div className="space-y-2">
-                <label className="block space-y-1 text-[11px] text-foreground-500">
-                  <span>衔接说明（与上一镜的动作/视线关系）</span>
-                  <input
-                    className="input text-xs"
-                    value={draft.continuity_note}
-                    onChange={(event) => onPatch({ continuity_note: event.target.value })}
-                    placeholder="承接上一镜的回头动作"
+            <div className="space-y-2">
+              {saved ? (
+                synced ? (
+                  <ShotAiPanel
+                    shotId={saved.id}
+                    notify={notify}
+                    onApply={(value) =>
+                      onPatch({
+                        prompt: value.prompt,
+                        continuity_note: value.continuity_note,
+                        audio_note: value.audio_note,
+                        dialogue: value.dialogue,
+                      })
+                    }
+                  />
+                ) : (
+                  <p className="rounded-lg bg-background-200/60 px-2.5 py-1.5 text-[11px] text-foreground-500">
+                    AI 改写基于已保存的镜头；本行有未保存修改，请先保存分镜。
+                  </p>
+                )
+              ) : (
+                <p className="rounded-lg bg-background-200/60 px-2.5 py-1.5 text-[11px] text-foreground-500">
+                  新增镜头先保存分镜，之后可用 AI 改写提示词。
+                </p>
+              )}
+              <div className="grid gap-2 md:grid-cols-2">
+                <label className="space-y-1 text-[11px] text-foreground-500">
+                  <span>提示词（画面、动作、光线；建议 20 字以上）</span>
+                  <textarea
+                    className="input min-h-[92px] resize-y text-xs"
+                    value={draft.prompt}
+                    onChange={(event) => onPatch({ prompt: event.target.value })}
+                    placeholder="例如：雨夜便利店门口，女主撑伞回头，霓虹在水面反光，中景缓慢推近。"
                   />
                 </label>
-                <label className="block space-y-1 text-[11px] text-foreground-500">
-                  <span>声音提示</span>
-                  <input
-                    className="input text-xs"
-                    value={draft.audio_note}
-                    onChange={(event) => onPatch({ audio_note: event.target.value })}
-                    placeholder="雨声、远处电话铃"
-                  />
-                </label>
-                <label className="block space-y-1 text-[11px] text-foreground-500">
-                  <span>台词</span>
-                  <input
-                    className="input text-xs"
-                    value={draft.dialogue}
-                    onChange={(event) => onPatch({ dialogue: event.target.value })}
-                    placeholder="角色台词或旁白"
-                  />
-                </label>
+                <div className="space-y-2">
+                  <label className="block space-y-1 text-[11px] text-foreground-500">
+                    <span>衔接说明（与上一镜的动作/视线关系）</span>
+                    <input
+                      className="input text-xs"
+                      value={draft.continuity_note}
+                      onChange={(event) => onPatch({ continuity_note: event.target.value })}
+                      placeholder="承接上一镜的回头动作"
+                    />
+                  </label>
+                  <label className="block space-y-1 text-[11px] text-foreground-500">
+                    <span>声音提示</span>
+                    <input
+                      className="input text-xs"
+                      value={draft.audio_note}
+                      onChange={(event) => onPatch({ audio_note: event.target.value })}
+                      placeholder="雨声、远处电话铃"
+                    />
+                  </label>
+                  <label className="block space-y-1 text-[11px] text-foreground-500">
+                    <span>台词</span>
+                    <input
+                      className="input text-xs"
+                      value={draft.dialogue}
+                      onChange={(event) => onPatch({ dialogue: event.target.value })}
+                      placeholder="角色台词或旁白"
+                    />
+                  </label>
+                </div>
               </div>
             </div>
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** 单镜 AI 改写：只产出候选值，采纳后写回当前草稿，仍需用户保存。 */
+function ShotAiPanel({
+  shotId,
+  notify,
+  onApply,
+}: {
+  shotId: number;
+  notify: (message: string) => void;
+  onApply: (value: DramaAiShotRewrite) => void;
+}) {
+  const [mode, setMode] = useState<"polish" | "h3">("polish");
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [candidate, setCandidate] = useState<DramaAiShotRewrite | null>(null);
+  const [label, setLabel] = useState("");
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const result = await api.dramaAiRewriteShot(shotId, {
+        mode,
+        instruction: instruction.trim(),
+      });
+      setCandidate(result.shot);
+      setLabel(result.cached ? `${result.provider} 缓存` : result.provider || "AI");
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-xl border border-primary-200 bg-primary-50/40 p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-foreground-600">AI 改写提示词</span>
+        <select
+          className="input w-32 px-2 py-1 text-xs"
+          value={mode}
+          onChange={(event) => setMode(event.target.value === "h3" ? "h3" : "polish")}
+        >
+          <option value="polish">润色（保留原意）</option>
+          <option value="h3">H3 结构化重写</option>
+        </select>
+        <input
+          className="input min-w-[180px] flex-1 text-xs"
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          maxLength={500}
+          placeholder="补充要求（可留空），如：雨更大一些，女主要低头"
+        />
+        <button
+          type="button"
+          className="btn-primary !px-3 !py-1.5 text-xs"
+          onClick={run}
+          disabled={busy}
+        >
+          <Sparkles size={13} />
+          {busy ? "改写中…" : "生成候选"}
+        </button>
+      </div>
+      {candidate && (
+        <div className="space-y-2 rounded-lg bg-background-100 p-2.5">
+          <p className="text-[11px] text-foreground-500">候选（{label}）</p>
+          <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground-800">
+            {candidate.prompt}
+          </p>
+          {(candidate.continuity_note || candidate.audio_note || candidate.dialogue) && (
+            <div className="space-y-1 text-[11px] text-foreground-600">
+              {candidate.continuity_note && <p>衔接：{candidate.continuity_note}</p>}
+              {candidate.audio_note && <p>声音：{candidate.audio_note}</p>}
+              {candidate.dialogue && <p>台词：{candidate.dialogue}</p>}
+            </div>
+          )}
+          {candidate.changes.length > 0 && (
+            <ul className="list-inside list-disc text-[11px] text-foreground-500">
+              {candidate.changes.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-primary !px-3 !py-1.5 text-xs"
+              onClick={() => {
+                onApply(candidate);
+                setCandidate(null);
+                notify("已采纳 AI 提示词，记得保存分镜");
+              }}
+            >
+              采纳
+            </button>
+            <button
+              type="button"
+              className="btn-ghost !px-3 !py-1.5 text-xs"
+              onClick={() => setCandidate(null)}
+            >
+              放弃
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

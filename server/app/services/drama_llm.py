@@ -8,9 +8,8 @@ import logging
 import re
 from typing import Optional
 
-import httpx
-
 from ..config import settings
+from . import drama_agent
 
 logger = logging.getLogger(__name__)
 
@@ -23,42 +22,16 @@ _LOCATION_FALLBACK = ["主场景"]
 
 # ---------------------------------------------------------------- 通用
 def llm_available() -> bool:
-    provider = str(getattr(settings, "drama_llm_provider", "qwen") or "qwen").strip().lower()
-    return provider not in ("off", "local", "none") and bool(settings.qwen_api_key)
+    """剧本/角色/分镜生成是否可用（文本通道，受 drama_llm_provider 总闸控制）。"""
+    return drama_agent.available(use_vision=False)
 
 
-def _extract_json(text: str) -> dict:
-    """从模型输出中提取第一个 JSON 对象（容忍 ```json 围栏与前后说明）。"""
-    raw = (text or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("LLM 输出不含 JSON 对象")
-    return json.loads(raw[start:end + 1])
-
-
-def _chat_json(system: str, user: str) -> dict:
-    base = str(settings.qwen_api_base or "").rstrip("/")
-    url = f"{base}/chat/completions"
-    payload = {
-        "model": settings.qwen_llm_model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.7,
-        "response_format": {"type": "json_object"},
-    }
-    headers = {"Authorization": f"Bearer {settings.qwen_api_key}"}
-    with httpx.Client(timeout=settings.drama_llm_timeout) as client:
-        resp = client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-    content = data["choices"][0]["message"]["content"]
-    return _extract_json(content)
+def _chat_json(system: str, user: str, kind: str = "drama_generate") -> dict:
+    """走统一底座；生成类调用强制新鲜结果（不吃缓存）。"""
+    result = drama_agent.chat_json(
+        kind=kind, system=system, user=user, temperature=0.7, force=True,
+    )
+    return result["data"]
 
 
 def _safe_str(value, limit: int = 2000) -> str:
@@ -366,14 +339,21 @@ def plan_shots(beats: list, characters: list, scenes: list, max_shots: int) -> d
     system = (
         "你是短剧分镜师。只输出严格 JSON。每个 beat 生成 1–3 镜，单镜 2–10 秒，"
         "总镜数不超过上限；镜号从 1 连续；scene_no 必须来自给定场景；"
-        "character_ids 必须来自给定角色 id。"
+        "character_ids 必须来自给定角色 id。prompt 只写画面可见内容（人物、动作、环境、光线、构图），"
+        "角色外形/服装必须与给定角色卡一致；不要写台词、字幕、水印、镜头编号，也不要写“多角度/拼贴”类要求。"
     )
     user = json.dumps({
         "任务": "规划分镜表",
         "镜数上限": max_shots,
         "beats": beats,
-        "characters": [{"id": c["id"], "name": c["name"], "role": c["role"]} for c in characters],
-        "scenes": [{"scene_no": s["scene_no"], "name": s["name"], "location": s["location"]} for s in scenes],
+        "characters": [{
+            "id": c["id"], "name": c["name"], "role": c["role"],
+            "appearance": c.get("appearance", ""), "costume": c.get("costume", ""),
+        } for c in characters],
+        "scenes": [{
+            "scene_no": s["scene_no"], "name": s["name"], "location": s["location"],
+            "time_of_day": s.get("time_of_day", ""), "description": s.get("description", ""),
+        } for s in scenes],
         "输出格式": {"shots": [{
             "shot_no": 1, "scene_no": 1, "beat_id": "b1", "prompt": "画面与动作",
             "duration_s": 5, "shot_size": "中景", "camera": "平视", "movement": "固定",

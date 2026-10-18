@@ -6,6 +6,13 @@ import type {
   DedupPreview,
   DedupResult,
   DramaArtifactVersion,
+  DramaAiBeatCandidate,
+  DramaAiCharacterDiff,
+  DramaAiCharacterFields,
+  DramaAiCopy,
+  DramaAiMeta,
+  DramaAiPrecheckShot,
+  DramaAiShotRewrite,
   DramaBeat,
   DramaCharacter,
   DramaChecklist,
@@ -377,5 +384,64 @@ export const api = {
     request<{ episode: DramaEpisode; shot?: DramaShot }>(`/api/drama/episodes/${eid}/rollback`, {
       method: "POST",
       body: JSON.stringify({ artifact_id: artifactId }),
+    }),
+
+  // ---- AI 辅助（P0+P1）：除预检外均只返回候选值，写库仍走原有接口 ----
+  dramaAiRewriteBeat: (eid: number, body: { beat_id: string; instruction?: string }) =>
+    request<DramaAiMeta & { beat_id: string; beat: DramaAiBeatCandidate }>(
+      `/api/drama/episodes/${eid}/ai/rewrite-beat`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  dramaAiRewriteShot: (
+    sid: number,
+    body: { mode?: "polish" | "h3"; instruction?: string } = {},
+  ) =>
+    request<DramaAiMeta & { shot: DramaAiShotRewrite }>(`/api/drama/shots/${sid}/ai/rewrite`, {
+      method: "POST",
+      body: JSON.stringify({ mode: body.mode || "polish", instruction: body.instruction || "" }),
+    }),
+  dramaAiRepairBrief: (sid: number, reason: string) =>
+    request<DramaAiMeta & { shot_id: number; brief: string; keep: string[]; avoid: string[] }>(
+      `/api/drama/shots/${sid}/ai/repair-brief`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    ),
+  dramaAiDescribeCharacter: (cid: number) =>
+    request<DramaAiMeta & { character_id: number; fields: DramaAiCharacterFields }>(
+      `/api/drama/characters/${cid}/ai/describe`,
+      { method: "POST" },
+    ),
+  dramaAiCheckCharacter: (cid: number) =>
+    request<
+      DramaAiMeta & {
+        character_id: number;
+        consistent: boolean;
+        summary: string;
+        diffs: DramaAiCharacterDiff[];
+      }
+    >(`/api/drama/characters/${cid}/ai/check`, { method: "POST" }),
+  dramaAiPrecheck: (
+    eid: number,
+    body: { scope?: "episode" | "shot"; shot_id?: number; force?: boolean } = {},
+  ) =>
+    request<
+      DramaAiMeta & {
+        scope: string;
+        spec_hash: string;
+        summary: string;
+        results: DramaAiPrecheckShot[];
+        image_used: boolean;
+        shot?: DramaShot;
+      }
+    >(`/api/drama/episodes/${eid}/ai/precheck`, {
+      method: "POST",
+      body: JSON.stringify({
+        scope: body.scope || "episode",
+        shot_id: body.shot_id,
+        force: Boolean(body.force),
+      }),
+    }),
+  dramaAiDeliverCopy: (eid: number) =>
+    request<DramaAiMeta & { copy: DramaAiCopy }>(`/api/drama/episodes/${eid}/ai/deliver-copy`, {
+      method: "POST",
     }),
 };

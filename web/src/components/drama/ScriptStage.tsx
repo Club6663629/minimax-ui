@@ -1,8 +1,8 @@
 /** S1 剧本：生成/编辑节拍与剧本正文，保存后进入角色阶段。 */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { api } from "../../api/client";
-import type { DramaBeat, DramaEpisode } from "../../types";
+import type { DramaAiBeatCandidate, DramaBeat, DramaEpisode } from "../../types";
 import { errText, fmtSecs } from "./labels";
 
 function splitNames(value: string): string[] {
@@ -49,12 +49,22 @@ export default function ScriptStage({
   const [busy, setBusy] = useState(false);
   const [source, setSource] = useState("");
   const [showScript, setShowScript] = useState(false);
+  /** AI 重写：展开的节拍 id、正在重写的节拍 id、用户补充要求、候选值 */
+  const [aiOpen, setAiOpen] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState<string | null>(null);
+  const [aiHint, setAiHint] = useState("");
+  const [aiCandidate, setAiCandidate] = useState<
+    { beatId: string; beat: DramaAiBeatCandidate; label: string } | null
+  >(null);
   const dirtyRef = useRef(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     setBeats(episode.beats || []);
     setScript(episode.script || "");
+    setAiOpen(null);
+    setAiCandidate(null);
+    setAiHint("");
     dirtyRef.current = false;
     setDirty(false);
   }, [episode.id, episode.updated_at]);
@@ -85,6 +95,42 @@ export default function ScriptStage({
   const patchBeat = (index: number, patch: Partial<DramaBeat>) => {
     const next = beats.map((beat, i) => (i === index ? { ...beat, ...patch } : beat));
     markDirty(next);
+  };
+
+  /** 调 AI 重写这一拍；只拿候选值，采纳后才写入本地草稿。 */
+  const rewriteBeat = async (index: number) => {
+    const beat = beats[index];
+    setAiBusy(beat.id);
+    try {
+      const result = await api.dramaAiRewriteBeat(eid, {
+        beat_id: beat.id,
+        instruction: aiHint.trim(),
+      });
+      const label = result.cached
+        ? `${result.provider} 缓存`
+        : result.provider || "AI";
+      setAiCandidate({ beatId: beat.id, beat: result.beat, label });
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  /** 采纳候选值：只覆盖文本字段，时长与角色名单保持原样。 */
+  const adoptBeat = (index: number) => {
+    if (!aiCandidate) return;
+    const { beat } = aiCandidate;
+    patchBeat(index, {
+      title: beat.title,
+      summary: beat.summary,
+      mood: beat.mood,
+      location: beat.location,
+      dialogue_hint: beat.dialogue_hint,
+    });
+    setAiCandidate(null);
+    setAiHint("");
+    notify("已采纳 AI 节拍，记得保存剧本");
   };
 
   const generate = async () => {
@@ -211,6 +257,18 @@ export default function ScriptStage({
                 />
                 <button
                   type="button"
+                  className="mt-1 rounded-lg p-1 text-foreground-400 hover:bg-primary-50 hover:text-primary-600"
+                  title="AI 重写这一拍"
+                  onClick={() => {
+                    setAiHint("");
+                    setAiCandidate(null);
+                    setAiOpen((prev) => (prev === beat.id ? null : beat.id));
+                  }}
+                >
+                  <Wand2 size={14} />
+                </button>
+                <button
+                  type="button"
                   className="mt-1 rounded-lg p-1 text-foreground-400 hover:bg-rose-50 hover:text-rose-600"
                   title="删除节拍"
                   onClick={() => markDirty(beats.filter((_, i) => i !== index))}
@@ -270,6 +328,75 @@ export default function ScriptStage({
                 onChange={(event) => patchBeat(index, { dialogue_hint: event.target.value })}
                 placeholder="台词提示（可选）"
               />
+
+              {aiOpen === beat.id && (
+                <div className="space-y-2 rounded-xl border border-primary-200 bg-primary-50/40 p-2.5">
+                  <textarea
+                    className="input min-h-[46px] resize-y text-xs"
+                    value={aiHint}
+                    onChange={(event) => setAiHint(event.target.value)}
+                    maxLength={500}
+                    placeholder="想怎么改？可留空，AI 会参考前后拍重写（不改时长与角色名单）"
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary !px-3 !py-1.5 text-xs"
+                      onClick={() => rewriteBeat(index)}
+                      disabled={aiBusy === beat.id}
+                    >
+                      <Sparkles size={13} />
+                      {aiBusy === beat.id ? "重写中…" : "生成候选"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost !px-3 !py-1.5 text-xs"
+                      onClick={() => {
+                        setAiOpen(null);
+                        setAiCandidate(null);
+                      }}
+                    >
+                      收起
+                    </button>
+                  </div>
+                  {aiCandidate?.beatId === beat.id && (
+                    <div className="space-y-2 rounded-lg bg-background-100 p-2.5">
+                      <p className="text-[11px] text-foreground-500">候选（{aiCandidate.label}）</p>
+                      <p className="text-xs font-medium text-foreground-800">
+                        {aiCandidate.beat.title}
+                        <span className="ml-2 font-normal text-foreground-500">
+                          {aiCandidate.beat.mood}
+                          {aiCandidate.beat.location ? ` · ${aiCandidate.beat.location}` : ""}
+                        </span>
+                      </p>
+                      <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground-700">
+                        {aiCandidate.beat.summary}
+                      </p>
+                      {aiCandidate.beat.dialogue_hint && (
+                        <p className="text-xs text-foreground-600">
+                          台词：{aiCandidate.beat.dialogue_hint}
+                        </p>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="btn-primary !px-3 !py-1.5 text-xs"
+                          onClick={() => adoptBeat(index)}
+                        >
+                          采纳
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost !px-3 !py-1.5 text-xs"
+                          onClick={() => setAiCandidate(null)}
+                        >
+                          放弃
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </article>
           ))}
         </section>

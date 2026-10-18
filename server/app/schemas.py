@@ -345,6 +345,27 @@ class DramaRollbackIn(BaseModel):
     artifact_id: int
 
 
+# ---- 短剧 AI 辅助（P0+P1）----
+class DramaAiRewriteBeatIn(BaseModel):
+    beat_id: str = Field(min_length=1, max_length=32)
+    instruction: str = Field(default="", max_length=500)
+
+
+class DramaAiRewriteShotIn(BaseModel):
+    mode: Literal["polish", "h3"] = "polish"
+    instruction: str = Field(default="", max_length=500)
+
+
+class DramaAiRepairIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class DramaAiPrecheckIn(BaseModel):
+    scope: Literal["episode", "shot"] = "episode"
+    shot_id: Optional[int] = None
+    force: bool = False
+
+
 # ---- 管理后台 ----
 class AdminAdjustIn(BaseModel):
     amount: int = Field(ge=-100000, le=100000)

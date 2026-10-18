@@ -1,8 +1,8 @@
 /** S7 交付：成片播放与下载、消耗汇总、确认交付 / 重新编辑。 */
 import { useState } from "react";
-import { CheckCircle2, Copy, Download, Film, RotateCcw } from "lucide-react";
-import { fileUrl } from "../../api/client";
-import type { DramaEpisode } from "../../types";
+import { CheckCircle2, Copy, Download, Film, RotateCcw, Sparkles } from "lucide-react";
+import { api, fileUrl } from "../../api/client";
+import type { DramaAiCopy, DramaEpisode } from "../../types";
 import { errText, fmtSecs } from "./labels";
 
 export default function DeliverStage({
@@ -19,6 +19,9 @@ export default function DeliverStage({
   onGoReview: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copy, setCopy] = useState<DramaAiCopy | null>(null);
+  const [copyLabel, setCopyLabel] = useState("");
   const done = episode.status === "done";
   const finalStale = episode.final_stale;
   const canFinish =
@@ -58,6 +61,33 @@ export default function DeliverStage({
       notify(errText(exc));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 发行文案只展示，不写入项目；需要时手动复制。 */
+  const runCopy = async () => {
+    setCopyBusy(true);
+    try {
+      const result = await api.dramaAiDeliverCopy(episode.id);
+      setCopy(result.copy);
+      setCopyLabel(result.cached ? `${result.provider} 缓存` : result.provider || "AI");
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setCopyBusy(false);
+    }
+  };
+
+  const copyField = async (label: string, text: string) => {
+    if (!text) {
+      notify(`${label}为空`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      notify(`${label}已复制`);
+    } catch {
+      notify(text);
     }
   };
 
@@ -136,6 +166,59 @@ export default function DeliverStage({
           </p>
           <p className="mt-0.5 text-sm text-foreground-900">{episode.version_count}</p>
         </div>
+      </section>
+
+      <section className="panel space-y-2 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+            <Sparkles size={14} /> 发行文案
+          </h3>
+          {copy && <span className="text-[10px] text-foreground-400">（{copyLabel}）</span>}
+          <button
+            type="button"
+            className="ml-auto btn-ghost px-2 py-1 text-xs"
+            onClick={() => void runCopy()}
+            disabled={copyBusy || !episode.final_url}
+            title={!episode.final_url ? "先生成成片" : "按本集剧本与镜头写标题/简介/梗概/封面提示词"}
+          >
+            <Sparkles size={12} />
+            {copyBusy ? "生成中…" : copy ? "重新生成" : "AI 生成文案"}
+          </button>
+        </div>
+
+        {copy ? (
+          <div className="space-y-2">
+            {[
+              { key: "title", label: "标题", value: copy.title },
+              { key: "logline", label: "一句话简介", value: copy.logline },
+              { key: "synopsis", label: "梗概", value: copy.synopsis },
+              { key: "cover", label: "封面提示词", value: copy.cover_prompt },
+            ].map((field) => (
+              <div key={field.key} className="group rounded-lg bg-background-100 px-2.5 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-foreground-500">{field.label}</span>
+                  <button
+                    type="button"
+                    className="ml-auto inline-flex items-center gap-0.5 text-[10px] text-foreground-400 hover:text-foreground-700"
+                    onClick={() => void copyField(field.label, field.value)}
+                  >
+                    <Copy size={10} /> 复制
+                  </button>
+                </div>
+                <p className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed text-foreground-800">
+                  {field.value || "—"}
+                </p>
+              </div>
+            ))}
+            <p className="text-[10px] text-foreground-400">
+              文案由 AI 根据剧本与分镜生成，发布前请人工校对事实与尺度。
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-foreground-500">
+            一键生成标题、一句话简介、梗概与封面提示词；只展示，不写入项目。
+          </p>
+        )}
       </section>
 
       <section className="panel p-4">
