@@ -2,7 +2,7 @@
 export function humanizeError(raw: string, fallback = "生成未成功，请稍后重试。"): string {
   const s = (raw || "").trim();
   if (!s) return fallback;
-  if (/积分不足|402/.test(s)) return "积分不足，请先充值。";
+  if (/积分不足|402/.test(s)) return "积分不足，请联系管理员。";
   if (/Invalid image file|无法读取|decode|PIL/i.test(s)) return "商品图无法识别，请更换图片后重试。";
   if (/prompt_outputs_failed_validation|node_errors|validation|校验/i.test(s))
     return "生成未通过内容校验，请调整文字描述后重试。";

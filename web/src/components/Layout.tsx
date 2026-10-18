@@ -39,7 +39,6 @@ export default function Layout() {
 
           <nav className="flex items-center gap-1">
             <NavItem to="/" icon={<Clapperboard size={15} />} label="创作" />
-            <NavItem to="/recharge" icon={<Coins size={15} />} label="充值" />
             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
             {user?.role === "admin" && (
               <NavItem to="/admin" icon={<ShieldCheck size={15} />} label="管理" />
@@ -48,7 +47,7 @@ export default function Layout() {
 
           <div className="ml-auto flex items-center gap-3">
             <NavLink
-              to="/recharge"
+              to="/ledger"
               className="inline-flex items-center gap-1.5 rounded-full border border-primary-300/40 bg-primary-100 px-3 py-1 text-sm text-primary-700 transition hover:bg-primary-200"
             >
               <Coins size={14} />

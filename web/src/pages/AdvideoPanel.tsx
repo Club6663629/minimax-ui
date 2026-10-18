@@ -573,8 +573,8 @@ export default function AdvideoPanel({
                 候选广告图 {imageCount}×{imageUnit} = <Coins size={13} className="text-amber-500" /> {imageCost} 积分
               </span>
               {(user?.credits ?? 0) < imageCost && (
-                <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
-                  去充值
+                <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
+                  积分明细
                 </Link>
               )}
               {(product.length > 0 || refs.length > 0 || scenario.trim().length > 0) && (
@@ -688,8 +688,8 @@ export default function AdvideoPanel({
               />
               <span className="text-xs text-foreground-500">确认并生成广告片将消耗 {taskCost} 积分</span>
               {(user?.credits ?? 0) < taskCost && (
-                <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
-                  去充值
+                <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
+                  积分明细
                 </Link>
               )}
               <div className="ml-auto flex items-center gap-2">

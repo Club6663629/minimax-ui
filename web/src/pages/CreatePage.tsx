@@ -1323,8 +1323,8 @@ export default function CreatePage() {
                   <Coins size={15} className="text-amber-500" /> {cost}
                 </span>
                 {(user?.credits ?? 0) < cost && (
-                  <Link to="/recharge" className="text-xs text-primary-600 hover:underline">
-                    去充值
+                  <Link to="/ledger" className="text-xs text-primary-600 hover:underline">
+                    积分明细
                   </Link>
                 )}
                 <button onClick={submit} disabled={submitting} className="btn-primary !rounded-full">

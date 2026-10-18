@@ -4,7 +4,6 @@ import AdminPage from "./pages/AdminPage";
 import AuthPage from "./pages/AuthPage";
 import CreatePage from "./pages/CreatePage";
 import LedgerPage from "./pages/LedgerPage";
-import RechargePage from "./pages/RechargePage";
 import { AuthProvider, useAuth } from "./state/auth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -34,7 +33,7 @@ export default function App() {
             }
           >
             <Route path="/" element={<CreatePage />} />
-            <Route path="/recharge" element={<RechargePage />} />
+            <Route path="/recharge" element={<Navigate to="/ledger" replace />} />
             <Route path="/ledger" element={<LedgerPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Route>
