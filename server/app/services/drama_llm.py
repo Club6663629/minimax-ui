@@ -155,7 +155,7 @@ def generate_script(brief: str, logline: str, style: str, beat_count: int, targe
         return {
             "source": "llm",
             "beats": clean,
-            "script": _safe_str(data.get("script"), 8000) or "\n\n".join(b["summary"] for b in clean),
+            "script": _safe_str(data.get("script"), 30000) or "\n\n".join(b["summary"] for b in clean),
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("短剧剧本 LLM 失败，回退本地模板: %s", exc)
@@ -332,10 +332,9 @@ def _fallback_shots(beats: list, characters: list, scenes: list, max_shots: int)
     return {"source": "local", "shots": rows[:max_shots]}
 
 
-def plan_shots(beats: list, characters: list, scenes: list, max_shots: int) -> dict:
-    """按 beats 规划镜头表（不落库）；LLM 失败回退本地模板。"""
-    if not llm_available():
-        return _fallback_shots(beats, characters, scenes, max_shots)
+def _plan_shots_batch(beats: list, characters: list, scenes: list, max_shots: int,
+                      tail: str = "") -> list:
+    """单批分镜：镜号从 1 连续（由 plan_shots 合并时重排）；LLM 失败抛异常。"""
     system = (
         "你是短剧分镜师。只输出严格 JSON。每个 beat 生成 1–3 镜，单镜 2–10 秒，"
         "总镜数不超过上限；镜号从 1 连续；scene_no 必须来自给定场景；"
@@ -345,6 +344,7 @@ def plan_shots(beats: list, characters: list, scenes: list, max_shots: int) -> d
     user = json.dumps({
         "任务": "规划分镜表",
         "镜数上限": max_shots,
+        "上一批结尾": tail or "（无，这是本集开头）",
         "beats": beats,
         "characters": [{
             "id": c["id"], "name": c["name"], "role": c["role"],
@@ -365,37 +365,67 @@ def plan_shots(beats: list, characters: list, scenes: list, max_shots: int) -> d
         shots = data.get("shots") or []
         if not shots:
             raise ValueError("分镜为空")
-        valid_chars = {c["id"] for c in characters}
-        valid_scenes = {s["scene_no"] for s in scenes}
-        clean = []
-        for i, shot in enumerate(shots[:max_shots]):
-            scene_no = int(shot.get("scene_no") or 1)
-            if scene_no not in valid_scenes:
-                scene_no = min(valid_scenes) if valid_scenes else 1
-            char_ids = [int(cid) for cid in (shot.get("character_ids") or []) if int(cid) in valid_chars]
-            clean.append({
-                "shot_no": i + 1,
-                "scene_no": scene_no,
-                "beat_id": _safe_str(shot.get("beat_id"), 16),
-                "prompt": _safe_str(shot.get("prompt"), 2000),
-                "duration_s": _clamp_seconds(
-                    shot.get("duration_s"),
-                    settings.drama_min_shot_seconds,
-                    settings.drama_max_shot_seconds,
-                    5.0,
-                ),
-                "shot_size": _safe_str(shot.get("shot_size"), 24),
-                "camera": _safe_str(shot.get("camera"), 24),
-                "movement": _safe_str(shot.get("movement"), 24),
-                "character_ids": char_ids,
-                "ref_upload_ids": [],
-                "continuity_note": _safe_str(shot.get("continuity_note"), 500),
-                "dialogue": _safe_str(shot.get("dialogue"), 500),
-                "audio_note": _safe_str(shot.get("audio_note"), 500),
-            })
-        if not clean:
-            raise ValueError("分镜清洗后为空")
-        return {"source": "llm", "shots": clean}
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"分镜批次生成失败：{exc}") from exc
+    valid_chars = {c["id"] for c in characters}
+    valid_scenes = {s["scene_no"] for s in scenes}
+    clean = []
+    for i, shot in enumerate(shots[:max_shots]):
+        scene_no = int(shot.get("scene_no") or 1)
+        if scene_no not in valid_scenes:
+            scene_no = min(valid_scenes) if valid_scenes else 1
+        char_ids = [int(cid) for cid in (shot.get("character_ids") or []) if int(cid) in valid_chars]
+        clean.append({
+            "shot_no": i + 1,
+            "scene_no": scene_no,
+            "beat_id": _safe_str(shot.get("beat_id"), 16),
+            "prompt": _safe_str(shot.get("prompt"), 2000),
+            "duration_s": _clamp_seconds(
+                shot.get("duration_s"),
+                settings.drama_min_shot_seconds,
+                settings.drama_max_shot_seconds,
+                5.0,
+            ),
+            "shot_size": _safe_str(shot.get("shot_size"), 24),
+            "camera": _safe_str(shot.get("camera"), 24),
+            "movement": _safe_str(shot.get("movement"), 24),
+            "character_ids": char_ids,
+            "ref_upload_ids": [],
+            "continuity_note": _safe_str(shot.get("continuity_note"), 500),
+            "dialogue": _safe_str(shot.get("dialogue"), 500),
+            "audio_note": _safe_str(shot.get("audio_note"), 500),
+        })
+    if not clean:
+        raise ValueError("分镜清洗后为空")
+    return clean
+
+
+def plan_shots(beats: list, characters: list, scenes: list, max_shots: int) -> dict:
+    """按 beats 分批规划镜头表（不落库）；长集避免一次排 200 镜，失败整集回退模板。"""
+    if not llm_available():
+        return _fallback_shots(beats, characters, scenes, max_shots)
+    size = max(1, int(settings.drama_plan_batch_beats or 6))
+    groups = [beats[i:i + size] for i in range(0, len(beats), size)] or [[]]
+    try:
+        merged: list = []
+        tail = ""
+        for group in groups:
+            if len(merged) >= max_shots:
+                break
+            part = _plan_shots_batch(
+                group, characters, scenes, max_shots - len(merged), tail,
+            )
+            for shot in part:
+                shot["shot_no"] = len(merged) + 1
+                merged.append(shot)
+            last = part[-1]
+            tail = (
+                f"{last['prompt'][:80]}（{last['shot_size'] or '中景'}·"
+                f"{last['movement'] or '固定'}）"
+            )
+        if not merged:
+            raise ValueError("分镜合并后为空")
+        return {"source": "llm", "shots": merged[:max_shots]}
     except Exception as exc:  # noqa: BLE001
         logger.warning("短剧分镜 LLM 失败，回退本地模板: %s", exc)
         return _fallback_shots(beats, characters, scenes, max_shots)

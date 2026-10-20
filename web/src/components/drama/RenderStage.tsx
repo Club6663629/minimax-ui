@@ -1,18 +1,21 @@
-/** S5 生成：阶段条、已耗时、失败动作（重试 / 修复后处理 / 取消）。 */
+/** S5 生成：段进度、当前段 run 阶段条、失败动作（重试 / 修复后处理 / 取消）。 */
 import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   Circle,
   Clock3,
   Download,
+  Layers,
   Loader2,
+  PlayCircle,
   RotateCcw,
   Wrench,
   XCircle,
 } from "lucide-react";
 import type { DramaEpisode, DramaRun } from "../../types";
 import { fileUrl } from "../../api/client";
-import { RUN_PHASE_LABEL, fmtTime } from "./labels";
+import { RUN_PHASE_LABEL, fmtSecs, fmtTime } from "./labels";
+import SegmentCards from "./SegmentCards";
 
 const STEPS = [
   { key: "queued", label: "排队" },
@@ -45,6 +48,8 @@ export default function RenderStage({
   onRepair,
   onRetry,
   onReuse,
+  onRenderMissing,
+  onRenderSegment,
   onGoReady,
   onGoShots,
   notify,
@@ -55,6 +60,8 @@ export default function RenderStage({
   onRepair: () => void | Promise<void>;
   onRetry: () => void | Promise<void>;
   onReuse: () => void | Promise<void>;
+  onRenderMissing: () => void | Promise<void>;
+  onRenderSegment: (segmentId: number, force: boolean) => void | Promise<void>;
   onGoReady: () => void;
   onGoShots: () => void;
   notify: (message: string) => void;
@@ -68,19 +75,98 @@ export default function RenderStage({
     return () => window.clearInterval(timer);
   }, [run]);
 
+  const segments = episode.segments || [];
+  const readyCount = segments.filter((item) => !item.stale).length;
+  const missing = segments.filter((item) => item.stale);
+  const locked = Boolean(episode.active_run);
+  const segment = run?.segment_id
+    ? segments.find((item) => item.id === run.segment_id) || null
+    : null;
+
+  const guard = async (action: () => void | Promise<void>) => {
+    setBusy(true);
+    try {
+      await action();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const section = (
+    <section className="panel space-y-3 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+          <Layers size={15} /> 段落进度
+        </h2>
+        <span className="text-xs text-foreground-500">
+          {readyCount} / {segments.length} 段就绪
+          {missing.length > 0 && ` · 待生成 ${missing.length} 段`}
+        </span>
+        {missing.length > 0 && !locked && (
+          <button
+            type="button"
+            className="btn-primary ml-auto px-3 py-1.5 text-xs"
+            disabled={busy}
+            onClick={() => void guard(onRenderMissing)}
+            title="按段顺序提交，前一段完成后自动续下一段"
+          >
+            <PlayCircle size={14} /> 生成缺失段
+          </button>
+        )}
+      </div>
+      <SegmentCards
+        segments={segments}
+        selectedId={segment?.id ?? null}
+        renderActions={(item) => (
+          <>
+            {item.stale && (
+              <button
+                type="button"
+                className="btn-ghost px-2 py-1 text-[11px]"
+                disabled={busy || locked}
+                onClick={() => void guard(() => onRenderSegment(item.id, false))}
+              >
+                生成本段
+              </button>
+            )}
+            {item.cut_url && (
+              <a
+                className="btn-ghost px-2 py-1 text-[11px]"
+                href={fileUrl(item.cut_url)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                看段成片
+              </a>
+            )}
+          </>
+        )}
+      />
+      <p className="text-xs leading-relaxed text-foreground-500">
+        按段顺序生成：每段完成会自动提交下一段；某段失败只停在该段，前面已完成的段不受影响。
+        每段约 {segments[0] ? fmtSecs(Math.max(1, segments[0].target_seconds)) : "60.0s"}。
+      </p>
+    </section>
+  );
+
   if (!run) {
     return (
-      <div className="panel flex flex-col items-center gap-3 px-6 py-14 text-center">
-        <Clock3 size={22} className="text-foreground-400" />
-        <p className="text-sm text-foreground-700">当前没有进行中的生成</p>
-        <p className="text-xs text-foreground-500">到「就绪」阶段提交整集，或在「审片」里对单镜发起返修。</p>
-        <div className="flex gap-2">
-          <button type="button" className="btn-primary" onClick={onGoReady}>
-            去「就绪」生成整集
-          </button>
-          <button type="button" className="btn-ghost" onClick={onGoShots}>
-            回分镜
-          </button>
+      <div className="space-y-3">
+        {section}
+        <div className="panel flex flex-col items-center gap-3 px-6 py-12 text-center">
+          <Clock3 size={22} className="text-foreground-400" />
+          <p className="text-sm text-foreground-700">当前没有进行中的生成</p>
+          <p className="text-xs text-foreground-500">
+            到「就绪」提交生成，或在上方直接生成某个缺失段；审片页可对单镜发起返修。
+          </p>
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary" onClick={onGoReady}>
+              去「就绪」生成
+            </button>
+            <button type="button" className="btn-ghost" onClick={onGoShots}>
+              回分镜
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -93,21 +179,18 @@ export default function RenderStage({
   const canRepair = run.phase === "failed" && run.task_status === "done";
   const hasOldFinal = Boolean(episode.final_url);
 
-  const guard = async (action: () => void | Promise<void>) => {
-    setBusy(true);
-    try {
-      await action();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="space-y-3">
+      {section}
       <section className="panel space-y-4 p-5">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-sm font-medium text-foreground-900">
-            {run.mode === "patch" ? "单镜返修" : "整集生成"} · run #{run.id}
+            {run.mode === "patch"
+              ? "单镜返修"
+              : segment
+                ? `第 ${segment.segment_no} 段生成`
+                : "整集生成"}{" "}
+            · run #{run.id}
           </h2>
           <span
             className={`rounded-md px-2 py-0.5 text-xs ${
@@ -158,9 +241,17 @@ export default function RenderStage({
           </ol>
         )}
 
+        {segment && (
+          <p className="text-xs leading-relaxed text-foreground-600">
+            {segment.title || `第 ${segment.segment_no} 段`} · {segment.shot_count} 镜 ·{" "}
+            {fmtSecs(segment.duration)} · 场 {segment.scene_nos.join("、") || "-"} ·{" "}
+            {segment.entry_mode === "continue" ? "承接上段（桥接帧）" : "硬切"}
+          </p>
+        )}
+
         {!failed && (
           <p className="text-xs leading-relaxed text-foreground-500">
-            导演台独占整卡；生成中不可取消。页面可以离开，回来会自动从本集活跃批次恢复。
+            导演台独占整卡；生成中不可取消。页面可以离开，回来会自动从本段活跃批次恢复。
             创作消耗 {run.cost > 0 ? `${run.cost} 积分` : "0 积分"}；失败自动退还。
           </p>
         )}
@@ -176,6 +267,11 @@ export default function RenderStage({
             </p>
             {run.task_error && run.error && run.task_error !== run.error && (
               <p className="text-[11px] text-rose-600/80">任务错误：{run.task_error}</p>
+            )}
+            {segment && run.mode === "segment" && (
+              <p className="text-[11px] text-rose-600/80">
+                重试只重跑第 {segment.segment_no} 段，不会影响其他段。
+              </p>
             )}
           </div>
         )}
@@ -237,7 +333,8 @@ export default function RenderStage({
           )}
           {run.phase === "done" && (
             <span className="text-xs text-emerald-700">
-              生成与后处理完成，正在刷新审片数据…
+              {run.mode === "patch" ? "本镜返修完成" : "本段生成与后处理完成"}
+              ，正在刷新审片数据…
             </span>
           )}
           <button type="button" className="btn-ghost ml-auto" onClick={onGoShots} disabled={busy}>

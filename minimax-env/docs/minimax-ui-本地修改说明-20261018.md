@@ -117,8 +117,9 @@ git am -3 am/*.patch
 | `ADVIDEO_AUTO_CONFIRM` | bool | `true` | 广告片自动模式总开关。设 `false` 即回到“出图后等人工确认”的老行为（**若不想改变现网行为，务必先设 false**） |
 | `ADVIDEO_AUTO_CONFIRM_INDEX` | int | `0` | 自动模式默认选第几张候选图（0 起，越界吸附最后一张） |
 | `POISON_GUARD` | 字符串开关 | `1` | 毒丸隔离总开关（`0/false/no/off` 关闭） |
-| `POISON_RAM_ADMISSION` | 字符串开关 | `1` | 长任务按宿主可用内存准入过滤 |
-| `POISON_RAM_MIN_GB` | float | `60` | 长任务准入的最低宿主可用内存（GB） |
+| ~~`POISON_RAM_ADMISSION`~~ | — | — | **2026-10-20 已移除**：内存准入会导致所有任务都派发不出去；改为导演台长任务自动拆分（≤30s/块）+ 拼接 |
+| ~~`POISON_RAM_MIN_GB`~~ | — | — | **2026-10-20 已移除**，同上 |
+| `DIRECTOR_CHUNK_SECONDS` | float | `30` | 导演台单块生成时长上限（秒）；超过按段边界拆分生成再 ffmpeg 拼接 |
 | `POISON_GUARD_FILE` | path | `<data>/data/poison_tasks.json` | 熔断名单落盘路径（可选覆盖） |
 | `POISON_GUARD_EVENTS` | path | `<data>/data/poison_events.jsonl` | 事件流落盘路径（可选覆盖） |
 | `MINIMAX_DATA_DIR` | path | `/data/workspace/minimax-ui/server/data` | 上面两个默认路径的根目录 |

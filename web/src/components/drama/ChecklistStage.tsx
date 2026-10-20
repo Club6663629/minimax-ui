@@ -1,4 +1,4 @@
-/** S4 就绪：清单分组、提交预览、成本确认与整集生成入口。 */
+/** S4 就绪：清单分组、分段预览、成本确认与按段生成入口。 */
 import { useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { DramaChecklist, DramaEpisode, DramaIssue } from "../../types";
 import { fmtSecs } from "./labels";
+import SegmentCards from "./SegmentCards";
 
 const GROUPS: { code: string; label: string; codes: string[] }[] = [
   {
@@ -110,8 +111,8 @@ export default function ChecklistStage({
           </span>
         )}
         <span className="text-xs text-foreground-500">
-          {checklist?.shots ?? 0} 镜 · {fmtSecs(checklist?.total_seconds ?? 0)} ·{" "}
-          {checklist?.plan?.total_frames ?? 0} 帧
+          {checklist?.shots ?? 0} 镜 · {checklist?.segments ?? episode.segments.length} 段 ·{" "}
+          {fmtSecs(checklist?.total_seconds ?? 0)} · {checklist?.plan?.total_frames ?? 0} 帧
         </span>
         <button
           type="button"
@@ -172,6 +173,24 @@ export default function ChecklistStage({
         })}
       </div>
 
+      <section className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-medium text-foreground-900">分段与预估</h3>
+          <span className="text-xs text-foreground-500">
+            {episode.segments.length} 段，逐段生成、逐段审；段边界在分镜页可调。
+          </span>
+        </div>
+        <SegmentCards
+          segments={episode.segments}
+          renderActions={(segment) => (
+            <span className="text-[10px] text-foreground-500">
+              {segment.shot_count} 镜 · 预估 {segment.estimate_cost} 积分
+              {segment.stale ? " · 待生成" : " · 已就绪"}
+            </span>
+          )}
+        />
+      </section>
+
       <section className="panel p-4">
         <button
           type="button"
@@ -182,15 +201,17 @@ export default function ChecklistStage({
           提交预览（先确认后花钱）
           {checklist?.plan && (
             <span className="text-xs font-normal text-foreground-500">
-              {checklist.plan.segments.length} 段 · {checklist.plan.fps}fps
+              {checklist.plan.segments.length} 镜 · {checklist.plan.fps}fps · 最大段{" "}
+              {checklist.plan.max_segment_frames} 帧
             </span>
           )}
         </button>
         {showPlan && checklist?.plan && (
           <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[720px] text-xs">
+            <table className="w-full min-w-[780px] text-xs">
               <thead>
                 <tr className="border-b border-background-200 text-left text-[11px] text-foreground-500">
+                  <th className="py-1.5 pr-3 font-normal">段</th>
                   <th className="py-1.5 pr-3 font-normal">镜号</th>
                   <th className="py-1.5 pr-3 font-normal">提交时长</th>
                   <th className="py-1.5 pr-3 font-normal">可见时长</th>
@@ -200,10 +221,13 @@ export default function ChecklistStage({
                 </tr>
               </thead>
               <tbody>
-                {checklist.plan.segments.map((segment) => {
+                {checklist.plan.segments.map((segment, index) => {
                   const window = checklist.plan?.windows.find((item) => item.shot_no === segment.shot_no);
+                  const segmentFirst =
+                    index === 0 || checklist.plan!.segments[index - 1].segment_no !== segment.segment_no;
                   return (
                     <tr key={segment.shot_no} className="border-b border-background-100 last:border-0">
+                      <td className="py-1.5 pr-3 text-foreground-600">{segment.segment_no}</td>
                       <td className="py-1.5 pr-3">{segment.shot_no}</td>
                       <td className="py-1.5 pr-3">{fmtSecs(segment.frames / checklist.plan!.fps)}</td>
                       <td className="py-1.5 pr-3">
@@ -211,9 +235,9 @@ export default function ChecklistStage({
                       </td>
                       <td className="py-1.5 pr-3">
                         {segment.frames}
-                        {segment.shot_no > 1 && (
-                          <span className="ml-1 text-[10px] text-foreground-400">含 39 帧交叠</span>
-                        )}
+                        <span className="ml-1 text-[10px] text-foreground-400">
+                          {segmentFirst ? "段首" : "含 39 帧交叠"}
+                        </span>
                       </td>
                       <td className="py-1.5 pr-3">{segment.ref_count}</td>
                       <td className="max-w-[340px] py-1.5 text-foreground-600">
@@ -334,13 +358,14 @@ export default function ChecklistStage({
                   void submit(false);
                 }}
               >
-                <Rocket size={15} /> {busy ? "提交中…" : "生成整集"}
+                <Rocket size={15} /> {busy ? "提交中…" : "生成整集（按段）"}
               </button>
             </>
           )}
         </div>
         <p className="text-[11px] text-foreground-500">
-          导演台独占整张显卡；提交后可在「生成」页离开再回来。生成失败会自动退还积分。
+          提交后按段顺序生成：本段完成自动续下一段，每段完成即可审。
+          导演台独占整张显卡；可离开页面再回来，失败自动退还积分。
         </p>
       </section>
     </div>

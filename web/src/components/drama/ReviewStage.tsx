@@ -1,13 +1,14 @@
-/** S6 审片：成片播放、逐镜通过/返修、接缝指标与版本回滚。 */
+/** S6 审片：段标签页 + 段播放器、逐镜通过/返修、接缝指标与版本回滚。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
   Clock3,
   Download,
-  Film,
   History,
+  Layers,
   Loader2,
+  RefreshCw,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -20,9 +21,19 @@ import type {
   DramaEpisode,
   DramaReview,
   DramaRun,
+  DramaSegment,
   DramaShot,
 } from "../../types";
-import { errText, fmtSecs, fmtTime, SHOT_STATUS_LABEL, SHOT_STATUS_TONE } from "./labels";
+import {
+  SEGMENT_ENTRY_LABEL,
+  SEGMENT_STATUS_LABEL,
+  SEGMENT_STATUS_TONE,
+  errText,
+  fmtSecs,
+  fmtTime,
+  SHOT_STATUS_LABEL,
+  SHOT_STATUS_TONE,
+} from "./labels";
 import SeamBadge from "./SeamBadge";
 
 export default function ReviewStage({
@@ -32,6 +43,7 @@ export default function ReviewStage({
   activePatchRun,
   notify,
   onPatchStarted,
+  onSegmentStarted,
   onChanged,
   onGoShots,
   onGoDeliver,
@@ -42,6 +54,7 @@ export default function ReviewStage({
   activePatchRun: DramaRun | null;
   notify: (message: string) => void;
   onPatchStarted: (run: DramaRun) => void;
+  onSegmentStarted: (run: DramaRun) => void;
   onChanged: () => void | Promise<void>;
   onGoShots: () => void;
   onGoDeliver: () => void;
@@ -55,6 +68,9 @@ export default function ReviewStage({
   const [rerun, setRerun] = useState(true);
   const [rejectBusy, setRejectBusy] = useState(false);
   const [versionsFor, setVersionsFor] = useState<DramaShot | null>(null);
+  const [segmentVersionsFor, setSegmentVersionsFor] = useState<DramaSegment | null>(null);
+  const [selectedSegmentId, setSelectedSegmentId] = useState<number | null>(null);
+  const [segmentBusy, setSegmentBusy] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<number | null>(null);
   /** AI 预检结果（整集）与返修意见扩写候选值 */
   const [precheckBusy, setPrecheckBusy] = useState(false);
@@ -91,24 +107,45 @@ export default function ReviewStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [rejectTarget]);
 
+  const shots = review?.shots || [];
+  const segments = review?.segments || episode.segments || [];
+  const selectedSegment = selectedSegmentId
+    ? segments.find((segment) => segment.id === selectedSegmentId) || null
+    : null;
+  const visibleShots = selectedSegment
+    ? shots.filter((shot) => shot.segment_id === selectedSegment.id)
+    : shots;
+
   const seams = useMemo(() => {
     const map = new Map<number, DramaReview["seams"][number]>();
-    for (const seam of review?.seams || []) map.set(seam.between[0], seam);
+    const visible = new Set(visibleShots.map((shot) => shot.shot_no));
+    for (const seam of review?.seams || []) {
+      if (visible.has(seam.between[0]) && visible.has(seam.between[1])) {
+        map.set(seam.between[0], seam);
+      }
+    }
     return map;
-  }, [review]);
+    // visibleShots 随所选段变化；用 id 作为稳定依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [review, selectedSegment?.id]);
 
-  const shots = review?.shots || [];
   const staleCount = shots.filter((shot) => shot.stale).length;
   const rejected = shots.filter((shot) => shot.status === "rejected").length;
   const rendered = shots.filter((shot) => shot.status === "rendered").length;
   const missingClip = shots.filter((shot) => !shot.clip_url).length;
   const finalStale = Boolean(review?.episode.final_stale ?? episode.final_stale);
   const canDeliver =
-    shots.length > 0 && rejected === 0 && staleCount === 0 && missingClip === 0 && !finalStale;
+    shots.length > 0 &&
+    segments.length > 0 &&
+    segments.every((segment) => !segment.stale) &&
+    rejected === 0 &&
+    staleCount === 0 &&
+    missingClip === 0 &&
+    !finalStale &&
+    Boolean(review?.episode.final_url);
+  const generationCost = review?.stats.generation_cost ?? 0;
   const repairRatio =
-    review && review.stats.full_cost > 0
-      ? review.stats.repair_cost_total / review.stats.full_cost
-      : 0;
+    generationCost > 0 ? (review?.stats.repair_cost_total ?? 0) / generationCost : 0;
 
   const focusShot = (shotId: number | undefined) => {
     if (!shotId) return;
@@ -174,6 +211,56 @@ export default function ReviewStage({
     }
   };
 
+  const renderSegment = async (segment: DramaSegment, force: boolean) => {
+    setSegmentBusy(segment.id);
+    try {
+      const result = await api.dramaRenderSegment(segment.id, { force });
+      if (result.reused) {
+        notify(`第 ${segment.segment_no} 段命中复用，本次 0 积分`);
+        await load();
+        await onChanged();
+      } else if (result.run) {
+        notify(`第 ${segment.segment_no} 段已提交，预估 ${result.cost} 积分`);
+        onSegmentStarted(result.run);
+      }
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setSegmentBusy(null);
+    }
+  };
+
+  const approveSegment = async (segment: DramaSegment) => {
+    setSegmentBusy(segment.id);
+    try {
+      await api.dramaApproveSegment(segment.id);
+      await load();
+      await onChanged();
+      notify(`第 ${segment.segment_no} 段已通过`);
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setSegmentBusy(null);
+    }
+  };
+
+  const rejectSegment = async (segment: DramaSegment) => {
+    if (!window.confirm(`驳回第 ${segment.segment_no} 段？段内已通过的镜头会退回待审（不扣费）。`)) {
+      return;
+    }
+    setSegmentBusy(segment.id);
+    try {
+      await api.dramaRejectSegment(segment.id);
+      await load();
+      await onChanged();
+      notify(`第 ${segment.segment_no} 段已驳回`);
+    } catch (exc) {
+      notify(errText(exc));
+    } finally {
+      setSegmentBusy(null);
+    }
+  };
+
   const submitReject = async () => {
     if (!rejectTarget) return;
     if (!reason.trim()) {
@@ -233,17 +320,25 @@ export default function ReviewStage({
       {activePatchRun && (
         <section className="panel flex items-center gap-2 border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
           <Loader2 size={14} className="animate-spin" />
-          返修生成中（run #{activePatchRun.id} · {activePatchRun.phase}），完成后自动刷新。
+          {activePatchRun.mode === "patch"
+            ? "返修生成中"
+            : activePatchRun.segment_no
+              ? `第 ${activePatchRun.segment_no} 段生成中`
+              : "生成中"}
+          （run #{activePatchRun.id} · {activePatchRun.phase}），完成后自动刷新。
         </section>
       )}
 
       <section className="panel space-y-3 p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
-            <Film size={15} /> 本集成片
+            <Layers size={15} /> 分段审片
           </h2>
-          <div className="flex items-center gap-2">
-            {review.episode.final_url && (
+          <span className="text-xs text-foreground-500">
+            {segments.length} 段 · {segments.filter((segment) => !segment.stale).length} 段成片就绪
+          </span>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {!selectedSegment && review.episode.final_url && (
               <a
                 className="btn-ghost px-2 py-1 text-xs"
                 href={fileUrl(review.episode.final_url)}
@@ -253,7 +348,7 @@ export default function ReviewStage({
                 在新窗口播放
               </a>
             )}
-            {review.sheet_url && (
+            {!selectedSegment && review.sheet_url && (
               <button
                 type="button"
                 className="btn-ghost px-2 py-1 text-xs"
@@ -263,48 +358,196 @@ export default function ReviewStage({
                 联系表
               </button>
             )}
-            <button
-              type="button"
-              className="btn-ghost px-2 py-1 text-xs"
-              onClick={() => void runPrecheck()}
-              disabled={precheckBusy || shots.length === 0 || missingClip === shots.length}
-              title="用联系表看一遍整集，逐镜给出问题与返修建议"
-            >
-              <Sparkles size={12} />
-              {precheckBusy ? "预检中…" : "AI 预检"}
-            </button>
+            {!selectedSegment && (
+              <button
+                type="button"
+                className="btn-ghost px-2 py-1 text-xs"
+                onClick={() => void runPrecheck()}
+                disabled={precheckBusy || shots.length === 0 || missingClip === shots.length}
+                title="用联系表看一遍整集，逐镜给出问题与返修建议"
+              >
+                <Sparkles size={12} />
+                {precheckBusy ? "预检中…" : "AI 预检"}
+              </button>
+            )}
           </div>
         </div>
 
-        {review.episode.final_url ? (
-          <video
-            key={review.episode.final_url}
-            src={fileUrl(review.episode.final_url)}
-            controls
-            className="max-h-[360px] w-full rounded-xl bg-black"
-          />
-        ) : (
-          <div className="rounded-xl bg-background-200 px-4 py-10 text-center text-xs text-foreground-500">
-            还没有成片，请回「就绪」提交整集。
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSelectedSegmentId(null)}
+            className={`rounded-lg px-2 py-1 text-[11px] transition ${
+              selectedSegmentId === null
+                ? "bg-primary-100 text-primary-700"
+                : "bg-background-100 text-foreground-600 hover:bg-background-200"
+            }`}
+          >
+            整集（{shots.length} 镜）
+          </button>
+          {segments.map((segment) => (
+            <button
+              key={segment.id}
+              type="button"
+              onClick={() => setSelectedSegmentId(segment.id)}
+              className={`rounded-lg px-2 py-1 text-[11px] transition ${
+                selectedSegmentId === segment.id
+                  ? "bg-primary-100 text-primary-700"
+                  : "bg-background-100 text-foreground-600 hover:bg-background-200"
+              }`}
+            >
+              段{segment.segment_no} · {SEGMENT_STATUS_LABEL[segment.status]}
+              {segment.stale ? " · 旧版" : ""}
+            </button>
+          ))}
+        </div>
+
+        {selectedSegment ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium text-foreground-900">
+                {selectedSegment.title || `第 ${selectedSegment.segment_no} 段`}
+              </span>
+              <span className={`rounded px-1.5 py-0.5 text-[10px] ${SEGMENT_STATUS_TONE[selectedSegment.status]}`}>
+                {SEGMENT_STATUS_LABEL[selectedSegment.status]}
+              </span>
+              <span className="text-foreground-500">
+                {selectedSegment.shot_count} 镜 · {fmtSecs(selectedSegment.duration)} ·{" "}
+                {SEGMENT_ENTRY_LABEL[selectedSegment.entry_mode] || selectedSegment.entry_mode} · 预估{" "}
+                {selectedSegment.estimate_cost} 积分
+              </span>
+              <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className="btn-ghost px-2 py-1 text-xs"
+                  disabled={
+                    segmentBusy === selectedSegment.id ||
+                    selectedSegment.stale ||
+                    !selectedSegment.cut_url ||
+                    selectedSegment.status === "approved" ||
+                    Boolean(selectedSegment.active_run) ||
+                    Boolean(activePatchRun)
+                  }
+                  onClick={() => void approveSegment(selectedSegment)}
+                  title={
+                    selectedSegment.stale ? "段成片缺失或已过旧，请先重新生成本段" : "通过本段并批量通过段内待审镜头"
+                  }
+                >
+                  <ThumbsUp size={12} />
+                  {segmentBusy === selectedSegment.id
+                    ? "…"
+                    : selectedSegment.status === "approved"
+                      ? "已通过"
+                      : "通过本段"}
+                </button>
+                {selectedSegment.status === "approved" && (
+                  <button
+                    type="button"
+                    className="btn-ghost px-2 py-1 text-xs text-rose-600"
+                    disabled={segmentBusy === selectedSegment.id || Boolean(activePatchRun)}
+                    onClick={() => void rejectSegment(selectedSegment)}
+                  >
+                    <ThumbsDown size={12} /> 驳回本段
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-ghost px-2 py-1 text-xs"
+                  disabled={segmentBusy === selectedSegment.id || Boolean(activePatchRun)}
+                  onClick={() => {
+                    if (
+                      !window.confirm(
+                        `重新生成第 ${selectedSegment.segment_no} 段会重新扣费，其余段不受影响。确认继续？`,
+                      )
+                    ) {
+                      return;
+                    }
+                    void renderSegment(selectedSegment, true);
+                  }}
+                >
+                  <RefreshCw size={12} /> 重新生成本段
+                </button>
+                {selectedSegment.cut_url && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-ghost px-2 py-1 text-xs"
+                      onClick={() => setSegmentVersionsFor(selectedSegment)}
+                    >
+                      <History size={12} /> 段版本
+                    </button>
+                    <a
+                      className="btn-ghost px-2 py-1 text-xs"
+                      href={fileUrl(`${selectedSegment.cut_url}?download=1`)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Download size={12} /> 下载段成片
+                    </a>
+                  </>
+                )}
+              </div>
+            </div>
+            {selectedSegment.stale && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                该段成片缺失或已过旧（分镜已改动），请重新生成本段后再审。
+              </p>
+            )}
+            {selectedSegment.entry_mode === "continue" && (
+              <p className="text-[11px] text-foreground-500">
+                承接段：
+                {selectedSegment.bridge_url
+                  ? "桥接帧已建立（上一段末帧已注入首镜参考图）"
+                  : "生成时自动从上一段末帧建立桥接"}
+                {selectedSegment.bridge_note ? ` · ${selectedSegment.bridge_note}` : ""}
+              </p>
+            )}
+            {selectedSegment.cut_url ? (
+              <video
+                key={selectedSegment.cut_url}
+                src={fileUrl(selectedSegment.cut_url)}
+                controls
+                className="max-h-[320px] w-full rounded-xl bg-black"
+              />
+            ) : (
+              <div className="rounded-xl bg-background-200 px-4 py-8 text-center text-xs text-foreground-500">
+                该段还没有段成片，请先「生成本段」。
+              </div>
+            )}
           </div>
-        )}
+        ) : (
+          <>
+            {review.episode.final_url ? (
+              <video
+                key={review.episode.final_url}
+                src={fileUrl(review.episode.final_url)}
+                controls
+                className="max-h-[360px] w-full rounded-xl bg-black"
+              />
+            ) : (
+              <div className="rounded-xl bg-background-200 px-4 py-10 text-center text-xs text-foreground-500">
+                还没有集成片；每段生成后可以先逐段审，全部段就绪会自动拼成整集。
+              </div>
+            )}
 
-        {finalStale && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            成片已过旧（分镜或角色卡已改动），当前仅可查看，交付前需要重新生成整集。
-          </p>
-        )}
+            {finalStale && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                集成片已过旧（分镜或角色卡已改动），交付前需要重新生成受影响段。
+              </p>
+            )}
 
-        {showSheet && review.sheet_url && (
-          <img
-            src={fileUrl(review.sheet_url)}
-            alt="联系表"
-            className="w-full rounded-xl border border-background-200"
-          />
+            {showSheet && review.sheet_url && (
+              <img
+                src={fileUrl(review.sheet_url)}
+                alt="联系表"
+                className="w-full rounded-xl border border-background-200"
+              />
+            )}
+          </>
         )}
       </section>
 
-      <section className="panel grid grid-cols-2 gap-3 px-4 py-3 text-xs md:grid-cols-6">
+      <section className="panel grid grid-cols-2 gap-3 px-4 py-3 text-xs md:grid-cols-4 xl:grid-cols-7">
         <div>
           <p className="text-foreground-500">待审</p>
           <p className="mt-0.5 text-sm text-sky-700">{review.stats.rendered}</p>
@@ -324,9 +567,15 @@ export default function ReviewStage({
           <p className="mt-0.5 text-sm text-foreground-700">{review.stats.stale}</p>
         </div>
         <div>
+          <p className="text-foreground-500">段成片</p>
+          <p className="mt-0.5 text-sm text-foreground-800">
+            {segments.filter((segment) => !segment.stale).length} / {segments.length}
+          </p>
+        </div>
+        <div>
           <p className="text-foreground-500">返修成本</p>
           <p className={`mt-0.5 text-sm ${repairRatio > 0.4 ? "text-rose-700" : "text-foreground-800"}`}>
-            {review.stats.repair_cost_total} / {review.stats.full_cost} 积分
+            {review.stats.repair_cost_total} / {generationCost} 积分
           </p>
         </div>
         <div>
@@ -337,7 +586,7 @@ export default function ReviewStage({
 
       {repairRatio > 0.4 && (
         <p className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
-          已返修成本占整集 {Math.round(repairRatio * 100)}%，建议整集重跑（可能更省）。
+          已返修成本占本集生成成本 {Math.round(repairRatio * 100)}%，建议重生成对应段（可能更省）。
         </p>
       )}
 
@@ -398,9 +647,17 @@ export default function ReviewStage({
       )}
 
       <section className="space-y-2">
-        {shots.map((shot) => {
+        {selectedSegment && (
+          <p className="text-xs text-foreground-500">
+            当前只显示第 {selectedSegment.segment_no} 段的 {visibleShots.length} 个镜头；切回「整集」看全部。
+          </p>
+        )}
+        {visibleShots.map((shot) => {
           const seam = seams.get(shot.shot_no);
-          const disabled = shot.stale;
+          const shotSegment = segments.find((item) => item.id === shot.segment_id);
+          const segmentOpen =
+            !shotSegment || shotSegment.status === "review" || shotSegment.status === "approved";
+          const disabled = shot.stale || !segmentOpen;
           return (
             <div key={shot.id} ref={(node) => {
               if (node) rowRefs.current.set(shot.id, node);
@@ -436,6 +693,11 @@ export default function ReviewStage({
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${SHOT_STATUS_TONE[shot.status]}`}>
                       {SHOT_STATUS_LABEL[shot.status]}
                     </span>
+                    {shot.segment_no !== null && (
+                      <span className="rounded bg-background-200 px-1.5 py-0.5 text-[10px] text-foreground-500">
+                        段{shot.segment_no}
+                      </span>
+                    )}
                     {shot.stale && (
                       <span
                         className="rounded bg-background-200 px-1.5 py-0.5 text-[10px] text-foreground-500"
@@ -494,7 +756,13 @@ export default function ReviewStage({
                     className="btn-ghost px-2 py-1 text-xs"
                     disabled={disabled || approvingId === shot.id || shot.status === "approved" || !shot.clip_url}
                     onClick={() => void approve(shot)}
-                    title={disabled ? "旧版镜头需重新生成后再审" : ""}
+                    title={
+                      disabled
+                        ? segmentOpen
+                          ? "旧版镜头需重新生成后再审"
+                          : "该镜所属段还没生成完成"
+                        : ""
+                    }
                   >
                     <ThumbsUp size={12} />
                     {approvingId === shot.id ? "…" : shot.status === "approved" ? "已通过" : "通过"}
@@ -509,7 +777,13 @@ export default function ReviewStage({
                       setBriefCandidate(null);
                       setRerun(true);
                     }}
-                    title={disabled ? "旧版镜头需重新生成后再审" : ""}
+                    title={
+                      disabled
+                        ? segmentOpen
+                          ? "旧版镜头需重新生成后再审"
+                          : "该镜所属段不在审片阶段"
+                        : ""
+                    }
                   >
                     <ThumbsDown size={12} />
                     {shot.status === "rejected" ? "重新返修" : "返修"}
@@ -537,12 +811,17 @@ export default function ReviewStage({
           </span>
         )}
         {staleCount > 0 && (
-          <span className="text-xs text-rose-600">有 {staleCount} 个旧版镜头，需重新生成整集。</span>
+          <span className="text-xs text-rose-600">
+            有 {staleCount} 个旧版镜头 / {segments.filter((segment) => segment.stale).length} 个旧版段，需重新生成对应段。
+          </span>
         )}
         {rejected > 0 && (
           <span className="text-xs text-rose-600">还有 {rejected} 镜待返修，不能交付。</span>
         )}
-        {finalStale && <span className="text-xs text-rose-600">成片过旧，不能交付。</span>}
+        {finalStale && <span className="text-xs text-rose-600">集成片过旧，不能交付。</span>}
+        {segments.length > 0 && segments.some((segment) => segment.stale) && (
+          <span className="text-xs text-rose-600">还有段未生成或已过旧，交付前需全部就绪。</span>
+        )}
         <div className="ml-auto flex gap-2">
           <button type="button" className="btn-ghost" onClick={onGoShots}>
             回分镜
@@ -657,6 +936,21 @@ export default function ReviewStage({
         </div>
       )}
 
+      {segmentVersionsFor && (
+        <VersionDrawer
+          episodeId={eid}
+          segment={segmentVersionsFor}
+          onClose={() => setSegmentVersionsFor(null)}
+          onRolledBack={async () => {
+            setSegmentVersionsFor(null);
+            await load();
+            await onChanged();
+            notify("段成片已回滚，并重新拼接集成片（0 成本）");
+          }}
+          notify={notify}
+        />
+      )}
+
       {versionsFor && (
         <VersionDrawer
           episodeId={eid}
@@ -678,12 +972,14 @@ export default function ReviewStage({
 function VersionDrawer({
   episodeId,
   shot,
+  segment,
   notify,
   onClose,
   onRolledBack,
 }: {
   episodeId: number;
-  shot: DramaShot;
+  shot?: DramaShot;
+  segment?: DramaSegment;
   notify: (message: string) => void;
   onClose: () => void;
   onRolledBack: () => void | Promise<void>;
@@ -695,10 +991,14 @@ function VersionDrawer({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    api
-      .dramaShotArtifacts(shot.id)
-      .then((result) => {
-        if (alive) setVersions(result.artifacts);
+    const load = segment
+      ? api.dramaSegmentArtifacts(segment.id).then((result) => result.artifacts)
+      : shot
+        ? api.dramaShotArtifacts(shot.id).then((result) => result.artifacts)
+        : Promise.resolve([] as DramaArtifactVersion[]);
+    load
+      .then((rows) => {
+        if (alive) setVersions(rows);
       })
       .catch((exc) => notify(errText(exc)))
       .finally(() => {
@@ -707,7 +1007,7 @@ function VersionDrawer({
     return () => {
       alive = false;
     };
-  }, [shot.id, notify]);
+  }, [shot?.id, segment?.id, notify]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -718,7 +1018,8 @@ function VersionDrawer({
   }, [onClose]);
 
   const rollback = async (artifact: DramaArtifactVersion) => {
-    if (!window.confirm(`回滚到 v${artifact.version_no}？将重新拼接成片，0 成本。`)) return;
+    const label = segment ? `第 ${segment.segment_no} 段` : `第 ${shot?.shot_no ?? "-"} 镜`;
+    if (!window.confirm(`把${label}回滚到 v${artifact.version_no}？将重新拼接，0 成本。`)) return;
     setBusyId(artifact.id);
     try {
       await api.dramaRollback(episodeId, artifact.id);
@@ -738,7 +1039,9 @@ function VersionDrawer({
       >
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium text-foreground-900">
-            第 {shot.shot_no} 镜 · 历史版本
+            {segment
+              ? `第 ${segment.segment_no} 段 · 段成片历史`
+              : `第 ${shot?.shot_no ?? "-"} 镜 · 历史版本`}
           </h3>
           <button
             type="button"

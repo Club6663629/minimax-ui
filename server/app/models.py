@@ -176,6 +176,36 @@ class DramaEpisode(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DramaSegment(Base):
+    """短剧段：一次 director 任务 / 一次审片 / 一次返修的单位。
+
+    一段 30–120s、6–12 镜；段内沿用 39 帧交叠，段间用上一段末帧桥接。
+    集仍是剧本与交付容器，段只负责生成、审片、版本与回滚。
+    """
+
+    __tablename__ = "drama_segments"
+    __table_args__ = (UniqueConstraint("episode_id", "segment_no", name="uq_drama_segment_no"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    episode_id: Mapped[int] = mapped_column(ForeignKey("drama_episodes.id"), index=True)
+    segment_no: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    target_seconds: Mapped[float] = mapped_column(Float, default=60.0)
+    scene_nos: Mapped[str] = mapped_column(Text, default="[]")
+    # cut=硬切；continue=承接上一段（需要桥接帧）
+    entry_mode: Mapped[str] = mapped_column(String(12), default="cut")
+    bridge_upload_id: Mapped[Optional[int]] = mapped_column(Integer)
+    bridge_note: Mapped[str] = mapped_column(Text, default="")
+    # ready | rendering | review | approved
+    status: Mapped[str] = mapped_column(String(16), default="ready")
+    spec_hash: Mapped[str] = mapped_column(String(40), default="")
+    cut_artifact_id: Mapped[Optional[int]] = mapped_column(Integer)
+    active_run_id: Mapped[Optional[int]] = mapped_column(Integer)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class DramaCharacter(Base):
     """短剧角色（项目级）：跨集复用同一张脸，locked 后 extract 不覆盖。"""
 
@@ -224,6 +254,7 @@ class DramaShot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     episode_id: Mapped[int] = mapped_column(ForeignKey("drama_episodes.id"), index=True)
+    segment_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
     shot_no: Mapped[int] = mapped_column(Integer, default=1)
     scene_no: Mapped[int] = mapped_column(Integer, default=1)
     beat_id: Mapped[str] = mapped_column(String(16), default="")
@@ -249,14 +280,15 @@ class DramaShot(Base):
 
 
 class DramaArtifact(Base):
-    """短剧产物：clip / final / master / sheet，version_no=run.id。"""
+    """短剧产物：clip / segment / final / master / sheet，version_no=run.id。"""
 
     __tablename__ = "drama_artifacts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     episode_id: Mapped[int] = mapped_column(ForeignKey("drama_episodes.id"), index=True)
     shot_id: Mapped[Optional[int]] = mapped_column(ForeignKey("drama_shots.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(12), index=True)  # clip | final | master | sheet
+    segment_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String(12), index=True)  # clip | segment | final | master | sheet
     version_no: Mapped[int] = mapped_column(Integer, default=0)
     path: Mapped[str] = mapped_column(String(512), default="")
     duration: Mapped[float] = mapped_column(Float, default=0.0)
@@ -269,14 +301,15 @@ class DramaArtifact(Base):
 
 
 class DramaRun(Base):
-    """短剧生成批次：full=整集，patch=单镜返修；1:1 对应 tasks。"""
+    """短剧生成批次：segment=分段生成，patch=单镜返修；1:1 对应 tasks。"""
 
     __tablename__ = "drama_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     episode_id: Mapped[int] = mapped_column(ForeignKey("drama_episodes.id"), index=True)
+    segment_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), unique=True, index=True)
-    mode: Mapped[str] = mapped_column(String(8), default="full")  # full | patch
+    mode: Mapped[str] = mapped_column(String(8), default="segment")  # segment | patch
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     shot_ids: Mapped[str] = mapped_column(Text, default="[]")
     plan: Mapped[str] = mapped_column(Text, default="")

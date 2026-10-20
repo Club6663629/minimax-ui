@@ -256,8 +256,8 @@ class DramaEpisodeIn(BaseModel):
 
 
 class DramaScriptGenerateIn(BaseModel):
-    beat_count: int = Field(default=6, ge=3, le=12)
-    target_seconds: int = Field(default=60, ge=15, le=180)
+    beat_count: int = Field(default=6, ge=3, le=24)
+    target_seconds: int = Field(default=60, ge=15, le=900)
     regenerate: bool = False
 
 
@@ -311,7 +311,7 @@ class DramaScenePatchIn(BaseModel):
 
 
 class DramaShotIn(BaseModel):
-    shot_no: int = Field(ge=1, le=64)
+    shot_no: int = Field(ge=1, le=300)
     scene_no: int = Field(default=1, ge=1, le=64)
     beat_id: str = Field(default="", max_length=16)
     prompt: str = Field(default="", max_length=4000)
@@ -330,9 +330,32 @@ class DramaShotsSaveIn(BaseModel):
     shots: list[DramaShotIn]
 
 
-class DramaRenderIn(BaseModel):
-    mode: Literal["full"] = "full"
+class DramaSegmentPlanIn(BaseModel):
+    target_seconds: float = Field(default=60.0, ge=20, le=120)
     force: bool = False
+
+
+class DramaSegmentIn(BaseModel):
+    segment_no: int = Field(ge=1, le=60)
+    title: str = Field(default="", max_length=120)
+    shot_ids: list[int] = Field(default_factory=list)
+
+
+class DramaSegmentsSaveIn(BaseModel):
+    segments: list[DramaSegmentIn]
+
+
+class DramaSegmentRenderIn(BaseModel):
+    force: bool = False
+    chain: bool = False
+
+
+class DramaRenderIn(BaseModel):
+    # missing=提交下一个缺失段；full 保留为兼容旧前端，语义同 missing
+    mode: Literal["missing", "full"] = "missing"
+    force: bool = False
+    # 连续生成：当前段完成后自动提交下一段（桥接帧需要上一段已成片）
+    chain: bool = True
 
 
 class DramaRejectIn(BaseModel):

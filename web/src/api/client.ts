@@ -25,6 +25,9 @@ import type {
   DramaReview,
   DramaRun,
   DramaScene,
+  DramaSegment,
+  DramaSegmentDraft,
+  DramaSegmentRenderResult,
   DramaShot,
   DramaShotDraft,
   DramaStatus,
@@ -349,10 +352,34 @@ export const api = {
     }),
   dramaChecklist: (eid: number) =>
     request<DramaChecklist>(`/api/drama/episodes/${eid}/checklist`),
-  dramaRender: (eid: number, force = false) =>
+  // ---- 分段（集 → 段 → 镜头）----
+  dramaPlanSegments: (eid: number, body: { target_seconds?: number; force?: boolean } = {}) =>
+    request<DramaEpisode>(`/api/drama/episodes/${eid}/segments/plan`, {
+      method: "POST",
+      body: JSON.stringify({ force: Boolean(body.force), target_seconds: body.target_seconds }),
+    }),
+  dramaSaveSegments: (eid: number, segments: DramaSegmentDraft[]) =>
+    request<DramaEpisode>(`/api/drama/episodes/${eid}/segments`, {
+      method: "PUT",
+      body: JSON.stringify({ segments }),
+    }),
+  dramaRenderSegment: (sid: number, body: { force?: boolean; chain?: boolean } = {}) =>
+    request<DramaSegmentRenderResult>(`/api/drama/segments/${sid}/render`, {
+      method: "POST",
+      body: JSON.stringify({ force: Boolean(body.force), chain: Boolean(body.chain) }),
+    }),
+  dramaApproveSegment: (sid: number) =>
+    request<DramaEpisode>(`/api/drama/segments/${sid}/approve`, { method: "POST" }),
+  dramaRejectSegment: (sid: number) =>
+    request<DramaEpisode>(`/api/drama/segments/${sid}/reject`, { method: "POST" }),
+  dramaSegmentArtifacts: (sid: number) =>
+    request<{ segment_no: number; artifacts: DramaArtifactVersion[] }>(
+      `/api/drama/segments/${sid}/artifacts`,
+    ),
+  dramaRender: (eid: number, force = false, chain = true) =>
     request<DramaRenderResult>(`/api/drama/episodes/${eid}/render`, {
       method: "POST",
-      body: JSON.stringify({ mode: "full", force }),
+      body: JSON.stringify({ mode: "missing", force, chain }),
     }),
   dramaRun: (rid: number) => request<DramaRun>(`/api/drama/runs/${rid}`),
   dramaCancelRun: (rid: number) =>

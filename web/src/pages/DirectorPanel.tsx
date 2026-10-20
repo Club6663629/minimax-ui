@@ -1,7 +1,7 @@
-/** 分镜模式（导演台）：整体风格 + 分镜卡片列表，一次提交跑完全部段。
+/** 分镜模式（导演台）：整体风格 + 分镜卡片列表。
  *
  * 对接后端 mode=director API：segments 每段带提示词/时长/参考图（≤9 张），
- * 提交后由后端吸附帧数并独占整卡生成。 */
+ * 提交后由后端吸附帧数并独占整卡生成；总时长超过 30 秒会自动分块生成再拼接成片。 */
 import {
   Coins,
   Film,
@@ -169,6 +169,7 @@ export default function DirectorPanel({ pricing, onSubmitted }: DirectorPanelPro
   const idRef = useRef(1);
 
   const totalSecs = scenes.reduce((sum, s) => sum + s.duration, 0);
+  const chunkCount = Math.max(1, Math.ceil(totalSecs / 30));
   const estCost = pricing
     ? Math.max(1, Math.ceil(totalSecs / 5)) * pricing.cost_768p_5s
     : 0;
@@ -320,8 +321,10 @@ export default function DirectorPanel({ pricing, onSubmitted }: DirectorPanelPro
           <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-2 text-base font-semibold text-foreground-950">确认生成完整视频</h3>
             <p className="mb-4 text-xs leading-relaxed text-foreground-500">
-              共 {scenes.length} 段、合计 {totalSecs} 秒，导演台将独占一张卡一次性生成全部片段
-              （长视频耗时较长，请耐心等待）。
+              共 {scenes.length} 段、合计 {totalSecs} 秒。
+              {chunkCount > 1
+                ? ` 超过 30 秒将自动拆成 ${chunkCount} 块顺序生成，再拼接成片（长视频耗时较长，请耐心等待）。`
+                : " 导演台将独占一张卡生成全部片段（请耐心等待）。"}
             </p>
             <div className="mb-4 flex items-center justify-between rounded-lg bg-background-200 px-3 py-2.5 text-sm">
               <span className="text-foreground-600">预计消耗</span>

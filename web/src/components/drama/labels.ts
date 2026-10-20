@@ -1,5 +1,5 @@
 /** 短剧文案与轻量格式化工具：各阶段组件共用，避免文案漂移。 */
-import type { DramaEpisodeStatus, DramaShotStatus } from "../../types";
+import type { DramaEpisodeStatus, DramaSegmentStatus, DramaShotStatus } from "../../types";
 
 export const EPISODE_STATUS_LABEL: Record<DramaEpisodeStatus, string> = {
   draft: "草稿",
@@ -33,6 +33,25 @@ export const SHOT_STATUS_TONE: Record<DramaShotStatus, string> = {
   rendered: "bg-sky-100 text-sky-700",
   approved: "bg-emerald-100 text-emerald-700",
   rejected: "bg-rose-100 text-rose-700",
+};
+
+export const SEGMENT_STATUS_LABEL: Record<DramaSegmentStatus, string> = {
+  ready: "待生成",
+  rendering: "生成中",
+  review: "待审",
+  approved: "已通过",
+};
+
+export const SEGMENT_STATUS_TONE: Record<DramaSegmentStatus, string> = {
+  ready: "bg-background-200 text-foreground-600",
+  rendering: "bg-amber-100 text-amber-700",
+  review: "bg-sky-100 text-sky-700",
+  approved: "bg-emerald-100 text-emerald-700",
+};
+
+export const SEGMENT_ENTRY_LABEL: Record<string, string> = {
+  cut: "硬切",
+  continue: "承接上段",
 };
 
 export const RUN_PHASE_LABEL: Record<string, string> = {

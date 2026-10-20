@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
-from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, videollm
+from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, drama_media, videollm
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
@@ -475,21 +475,85 @@ async def _dispatch_director(task_id: int) -> None:
     asyncio.get_event_loop().create_task(_run_director(task_id, node))
 
 
+# ---------------------------------------------------------------- 导演台分块（>30s 自动拆分）
+def _director_state_path(task_id: int) -> Path:
+    return STAGING_DIR / f"{task_id}_director_state.json"
+
+
+def _director_chunk_path(task_id: int, index: int) -> Path:
+    return STAGING_DIR / f"{task_id}_director_c{int(index):02d}.mp4"
+
+
+def _load_director_state(task_id: int) -> dict:
+    try:
+        data = json.loads(_director_state_path(task_id).read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_director_state(task_id: int, state: dict) -> None:
+    path = _director_state_path(task_id)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1))
+    tmp.replace(path)
+
+
+def _drop_director_chunks(task_id: int) -> None:
+    """删除分块临时产物（不含成片、不含状态文件）。"""
+    for path in STAGING_DIR.glob(f"{task_id}_director_c*.mp4"):
+        path.unlink(missing_ok=True)
+
+
+def _clear_director_state(task_id: int, keep_final: bool = False) -> None:
+    """清理分块状态；失败/取消时连 staging 成片一并删除。"""
+    _director_state_path(task_id).unlink(missing_ok=True)
+    _drop_director_chunks(task_id)
+    if not keep_final:
+        (STAGING_DIR / f"{task_id}_director.mp4").unlink(missing_ok=True)
+
+
+def _director_reset_current(task_id: int) -> None:
+    """重试前丢掉失效的在跑分块（prompt 已随失败丢失），已完成分块保留续用。"""
+    state = _load_director_state(task_id)
+    if state.get("current"):
+        state["current"] = None
+        state["final_ready"] = False
+        _save_director_state(task_id, state)
+
+
+def _concat_director_chunks(task_id: int, chunks: list, out_path: Path) -> Path:
+    """把分块产物裁掉块间重复交叠帧后拼接成成片。
+
+    每个分块先统一重编码（libx264/yuv420p/AAC 48k），保证 concat 参数一致；
+    非首块头部 trim_head_frames 帧与上一块重复，裁剪后再拼接。
+    """
+    fps = int(chunks[0]["fps"]) if chunks else 24
+    parts = []
+    try:
+        for chunk in chunks:
+            src = _director_chunk_path(task_id, chunk["chunk_index"])
+            if not src.exists():
+                raise RuntimeError(f"导演台分块产物缺失：{src.name}")
+            dst = STAGING_DIR / f"{task_id}_director_c{int(chunk['chunk_index']):02d}_trim.mp4"
+            drama_media.slice_frames(
+                src, dst,
+                int(chunk.get("trim_head_frames") or 0),
+                int(chunk["total_frames"]),
+                fps=fps,
+            )
+            parts.append(dst)
+        drama_media.concat_clips(parts, out_path, fps=fps)
+    finally:
+        for path in parts:
+            Path(path).unlink(missing_ok=True)
+    return out_path
+
+
 async def _run_director(task_id: int, node: WorkerNode) -> None:
     try:
         staging = await _generate_director(task_id, node)
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            if task is None or task.status != "generating_768p":
-                return
-            final_path = OUTPUT_DIR / f"{task_id}.mp4"
-            shutil.move(str(staging), final_path)
-            task.video_path = str(final_path)
-            task.status = "done"
-            task.finished_at = datetime.now()
-            db.commit()
-            logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
-        await asyncio.to_thread(_notify_drama, task_id)
+        await _finalize_director(task_id, staging)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -497,6 +561,23 @@ async def _run_director(task_id: int, node: WorkerNode) -> None:
         await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p", str(exc)[:500])
     finally:
         pool.release(node)
+
+
+async def _finalize_director(task_id: int, staging: Path) -> None:
+    """把 staging 成片移入 output、置 done，通知短剧执行器并清理分块状态。"""
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if task is None or task.status != "generating_768p":
+            return
+        final_path = OUTPUT_DIR / f"{task_id}.mp4"
+        shutil.move(str(staging), final_path)
+        task.video_path = str(final_path)
+        task.status = "done"
+        task.finished_at = datetime.now()
+        db.commit()
+    logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
+    _clear_director_state(task_id)
+    await asyncio.to_thread(_notify_drama, task_id)
 
 
 def _probe_image_size(path) -> tuple:
@@ -515,7 +596,12 @@ def _probe_image_size(path) -> tuple:
 
 
 async def _generate_director(task_id: int, node: WorkerNode) -> Path:
-    """长视频导演台：按段清单一次提交 director_api.json，产物落 staging。"""
+    """长视频导演台：按段清单分块提交（单块 ≤ DIRECTOR_CHUNK_SECONDS），ffmpeg 拼接成片。
+
+    超过 30s 的任务不再一次 latent 采样跑完：按段边界拆成多块顺序提交同一节点，
+    每块完成后落 staging，最后由 ffmpeg 裁掉块间重复交叠帧并拼接。
+    分块进度写 staging/{task_id}_director_state.json，后端重启/重试可续跑。
+    """
     global _DIRECTOR_RUNNING
     out_path = STAGING_DIR / f"{task_id}_director.mp4"
     with SessionLocal() as db:
@@ -553,6 +639,24 @@ async def _generate_director(task_id: int, node: WorkerNode) -> Path:
             plan["total_frames"] / plan["fps"],
         )
         return out_path
+
+    chunks = comfyui.split_director_plan(plan)
+    signature = {
+        "seed": seed,
+        "total_frames": int(plan["total_frames"]),
+        "fps": int(plan["fps"]),
+        "overlap_frames": int(plan["overlap_frames"]),
+        "chunk_frames": [int(c["total_frames"]) for c in chunks],
+    }
+    state = _load_director_state(task_id)
+    if state.get("signature") != signature:
+        _clear_director_state(task_id)  # 段清单/种子/分块方式变化：旧进度不可复用
+        state = {"signature": signature, "completed": [], "current": None, "final_ready": False}
+        _save_director_state(task_id, state)
+    if state.get("final_ready") and out_path.exists():
+        logger.info("导演台任务 #%s 成片已存在，跳过生成", task_id)
+        return out_path
+
     client = comfyui.ComfyUIClient(node.url)
     images, uploaded = [], {}
     for uid, up in uploads.items():
@@ -564,26 +668,68 @@ async def _generate_director(task_id: int, node: WorkerNode) -> Path:
         uploaded[uid] = {"id": f"u{uid}", "file": name, "name": p.name, "width": w, "height": h}
         images.append(uploaded[uid])
 
-    workflow = comfyui.load_workflow("director")
-    comfyui.inject_director(workflow, plan, images, seed, unet_name=node.unet_for("director"))
     _DIRECTOR_RUNNING = True
     try:
-        prompt_id = await client.submit(workflow)
-        with SessionLocal() as db:
-            db.get(Task, task_id).comfy_prompt_id = prompt_id
-            db.commit()
-        logger.info(
-            "导演台任务 #%s 已提交节点 %s：%d 段 / 总 %d 帧（%.3fs）/ 交叠 %d 帧 / seed=%s",
-            task_id, node.url, len(plan["segments"]), plan["total_frames"],
-            plan["total_frames"] / plan["fps"], plan["overlap_frames"], seed,
-        )
-        file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
-        content = await client.fetch_file(
-            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
-        )
-        out_path.write_bytes(content)
+        for chunk in chunks:
+            index = int(chunk["chunk_index"])
+            total = len(chunks)
+            chunk_path = _director_chunk_path(task_id, index)
+            if index in state.get("completed", []) and chunk_path.exists():
+                continue
+
+            current = state.get("current") or {}
+            prompt_id = current.get("prompt_id") if current.get("index") == index else None
+            if prompt_id:
+                # 重启后续跑：节点上 prompt 已丢失则重投本块，避免空等 1 小时
+                prompt_state = await client.prompt_state(prompt_id)
+                if prompt_state == "missing":
+                    logger.warning("导演台任务 #%s 分块 %d/%d 的 prompt 已丢失，重新提交",
+                                   task_id, index + 1, total)
+                    prompt_id = None
+                elif prompt_state == "error":
+                    raise comfyui.ComfyUIError(f"ComfyUI 执行出错（分块 {index + 1}/{total}）")
+            if not prompt_id:
+                workflow = comfyui.load_workflow("director")
+                comfyui.inject_director(
+                    workflow, chunk, images, seed + index, unet_name=node.unet_for("director")
+                )
+                prompt_id = await client.submit(workflow)
+                state["current"] = {"index": index, "prompt_id": prompt_id}
+                _save_director_state(task_id, state)
+                with SessionLocal() as db:
+                    db.get(Task, task_id).comfy_prompt_id = prompt_id
+                    db.commit()
+                logger.info(
+                    "导演台任务 #%s 分块 %d/%d 已提交节点 %s：%d 帧（%.2fs）",
+                    task_id, index + 1, total, node.url, chunk["total_frames"],
+                    chunk["total_frames"] / chunk["fps"],
+                )
+
+            file_info = await client.wait_result(
+                prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS
+            )
+            content = await client.fetch_file(
+                file_info["filename"], file_info.get("subfolder", ""),
+                file_info.get("type", "output"),
+            )
+            chunk_path.write_bytes(content)
+            state["completed"] = sorted(set(state.get("completed", [])) | {index})
+            state["current"] = None
+            _save_director_state(task_id, state)
+            logger.info("导演台任务 #%s 分块 %d/%d 已落盘：%s",
+                        task_id, index + 1, total, chunk_path.name)
     finally:
         _DIRECTOR_RUNNING = False
+
+    if len(chunks) == 1:
+        shutil.move(str(_director_chunk_path(task_id, 0)), str(out_path))
+    else:
+        logger.info("导演台任务 #%s 开始拼接 %d 个分块（总 %d 帧）",
+                    task_id, len(chunks), plan["total_frames"])
+        await asyncio.to_thread(_concat_director_chunks, task_id, chunks, out_path)
+    state["final_ready"] = True
+    _save_director_state(task_id, state)
+    _drop_director_chunks(task_id)
     logger.info("导演台任务 #%s 产物已落盘: %s", task_id, out_path)
     return out_path
 
@@ -752,40 +898,34 @@ async def _resume_generate(task_id: int, node: WorkerNode) -> None:
 
 
 async def _resume_director(task_id: int, node: WorkerNode) -> None:
-    """恢复已派发到节点的导演台任务：轮询 prompt_id 并落盘，完成后通知短剧执行器。"""
-    global _DIRECTOR_RUNNING
-    out_path = STAGING_DIR / f"{task_id}_director.mp4"
+    """恢复后端重启前已派发的导演台任务。
+
+    新版分块任务（存在 state 文件）交给 _generate_director 续跑：已完成分块跳过、
+    在跑分块重挂轮询、节点上已丢失的分块重投；旧版单次提交任务沿用 prompt_id 轮询。
+    """
     try:
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             if task is None or task.status != "generating_768p":
                 return
             prompt_id = task.comfy_prompt_id
+        if _load_director_state(task_id):
+            staging = await _generate_director(task_id, node)
+            await _finalize_director(task_id, staging)
+            return
         if not prompt_id:
             await asyncio.to_thread(_requeue_or_fail, task_id, "generating_768p")
             return
+        # ---- 旧版单次提交任务：轮询已有 prompt_id 并落盘 ----
+        out_path = STAGING_DIR / f"{task_id}_director.mp4"
         client = comfyui.ComfyUIClient(node.url)
-        _DIRECTOR_RUNNING = True
-        try:
-            file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
-            content = await client.fetch_file(
-                file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
-            )
-        finally:
-            _DIRECTOR_RUNNING = False
+        file_info = await client.wait_result(prompt_id, timeout_seconds=DIRECTOR_TIMEOUT_SECONDS)
+        content = await client.fetch_file(
+            file_info["filename"], file_info.get("subfolder", ""), file_info.get("type", "output")
+        )
         out_path.write_bytes(content)
-        with SessionLocal() as db:
-            task = db.get(Task, task_id)
-            if task is None or task.status != "generating_768p":
-                return
-            final_path = OUTPUT_DIR / f"{task_id}.mp4"
-            shutil.move(str(out_path), final_path)
-            task.video_path = str(final_path)
-            task.status = "done"
-            task.finished_at = datetime.now()
-            db.commit()
-        logger.info("孤儿导演台任务 #%s 恢复完成: %s", task_id, final_path)
-        await asyncio.to_thread(_notify_drama, task_id)
+        await _finalize_director(task_id, out_path)
+        logger.info("孤儿导演台任务 #%s 恢复完成", task_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -940,6 +1080,7 @@ def _fail_task(task_id: int, error: str) -> None:
         db.commit()
     logger.error("任务 #%s 判失败：%s", task_id, error)
     if is_director:
+        _clear_director_state(task_id)  # 分块状态/临时分块一并清理
         _notify_drama(task_id)
 
 
@@ -999,12 +1140,16 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             db.commit()
             logger.error("毒丸隔离 #%s：%s 已熔断，拒绝跨节点重投", task_id, failed_url)
             if is_director:
+                _clear_director_state(task_id)
                 _notify_drama(task_id)
             return False
         if task.attempts < MAX_ATTEMPTS:
             task.status = stage
             task.worker_url = ""
             db.commit()
+            if is_director:
+                # 失败分块的 prompt 已失效：重试时从该块重新提交，已完成分块保留
+                _director_reset_current(task_id)
             if node_lost:
                 poison_guard.pin_set(task_id, failed_url)
                 logger.warning("任务 #%s 同节点重试（%s，第 %d 次，粘滞 %s）",
@@ -1020,6 +1165,7 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             add_credits(db, user, task.cost, "refund", note="生成失败退还", task_id=task_id)
         db.commit()
         if is_director:
+            _clear_director_state(task_id)  # 最终判失败：分块状态/临时分块一并清理
             _notify_drama(task_id)
     return False
 

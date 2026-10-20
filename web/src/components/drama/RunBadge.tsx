@@ -26,7 +26,12 @@ export default function RunBadge({
       <div className="flex items-center justify-between gap-2">
         <span className="text-foreground-500">{label || "当前批次"}</span>
         <span className={`rounded-md px-1.5 py-0.5 ${tone}`}>
-          {run.mode === "patch" ? "返修" : "整集"} · #{run.id}
+          {run.mode === "patch"
+            ? "返修"
+            : run.mode === "segment" && run.segment_no
+              ? `第 ${run.segment_no} 段`
+              : "整集"}{" "}
+          · #{run.id}
         </span>
       </div>
       <div className="flex items-center justify-between text-foreground-700">

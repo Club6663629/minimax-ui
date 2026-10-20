@@ -36,13 +36,21 @@ class Settings(BaseSettings):
     upscale_enabled: bool = True          # 本地超分池开关（关闭后 1K/2K 档不可提交）
     # 长视频导演台（TimelineDirector，director_api.json）后端入口开关；默认关，拍板后置 true
     director_enabled: bool = False
+    # 导演台单次提交的时长上限（秒）：超过按段边界拆成多次生成，再用 ffmpeg 拼接。
+    # 单次 latent 采样时长越长，宿主内存占用越高，超过 30s 在 4090/A100 上易触发 kernel OOM。
+    director_chunk_seconds: float = 30.0
     # ---- 短剧流水线（七阶段：剧本→角色→分镜→就绪→生成→审片→交付）----
     # 总开关；上线时显式置 true（还需 director_enabled 与带 director 标签的节点）
     drama_enabled: bool = False
-    drama_max_shots: int = 24
-    drama_max_episode_seconds: int = 180
+    drama_max_shots: int = 240            # 集内镜头总数（15 分钟约 150–200 镜）
+    drama_max_episode_seconds: int = 900  # 集时长上限（15 分钟）
     drama_max_shot_seconds: float = 10.0
     drama_min_shot_seconds: float = 2.0
+    # 分段生成：段 = 一次 director 任务 = 一次审片/返修
+    drama_segment_target_seconds: float = 60.0
+    drama_segment_max_seconds: float = 120.0
+    drama_segment_max_shots: int = 12
+    drama_plan_batch_beats: int = 6       # 分镜规划每批拍数（长集避免一次排 200 镜）
     drama_keep_versions: int = 5          # 每镜保留版本数（P1 只记录，不清理）
     # 已废弃：生成改走 drama_ai_timeout；保留仅为兼容旧 .env，无代码引用
     drama_llm_timeout: int = 90

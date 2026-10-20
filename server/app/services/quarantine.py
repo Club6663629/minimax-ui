@@ -236,17 +236,3 @@ def node_alive(url: str, timeout: float = 3.0) -> bool:
     except Exception:
         return False
 
-
-# ------------------------------------------------------------------ 长任务内存准入
-def ram_admission_enabled() -> bool:
-    """长任务内存准入开关（POISON_RAM_ADMISSION=0 关闭）。"""
-    return enabled() and os.getenv("POISON_RAM_ADMISSION", "1").strip().lower() not in (
-        "0", "false", "no", "off")
-
-
-def long_task_ram_min_gb() -> float:
-    """长任务派发前要求节点宿主可用内存下限（GB，默认 60）。"""
-    try:
-        return float(os.getenv("POISON_RAM_MIN_GB", "60"))
-    except Exception:
-        return 60.0

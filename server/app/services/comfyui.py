@@ -163,6 +163,66 @@ def plan_director_segments(segments, aspect_ratio: str = "16:9", fps: int = 24,
     }
 
 
+def split_director_plan(plan: dict, max_seconds: Optional[float] = None) -> list:
+    """把已排版的段清单按单次时长上限切成多个 chunk（超过 30s 自动拆分）。
+
+    切分点只落在段边界，每个 chunk 仍是独立合法的 timeline（段窗口从 0 起算）：
+    - chunk 内保留原段间交叠（overlap）作为续写引导；
+    - 非首块头部有 overlap 帧与上一块重复，拼接时由调用方裁掉；
+    - 各块总帧数相加减去重复帧 = 原 plan 的总帧数，成片时长不变。
+
+    返回 [{"segments", "total_frames", "width", "height", "fps", "overlap_frames",
+           "chunk_index", "chunk_count", "trim_head_frames"}, ...]
+    """
+    if max_seconds is None:
+        max_seconds = float(getattr(settings, "director_chunk_seconds", 30) or 30)
+    max_seconds = max(1.0, float(max_seconds))
+    fps = int(plan["fps"])
+    overlap = int(plan.get("overlap_frames") or 0)
+
+    groups: List[list] = []
+    cur: list = []
+    for seg in plan["segments"]:
+        if not cur:
+            cur = [seg]
+            continue
+        # 若并入当前块，块 timeline 跨度（首段起点 → 本段终点）是否仍在上限内
+        span = int(seg["end_frame"]) - int(cur[0]["start_frame"])
+        if span / fps <= max_seconds + 1e-6:
+            cur.append(seg)
+        else:
+            groups.append(cur)
+            cur = [seg]
+    if cur:
+        groups.append(cur)
+
+    chunks = []
+    for i, group in enumerate(groups):
+        base = int(group[0]["start_frame"])
+        segs = [
+            {
+                **seg,
+                "index": j,
+                "start_frame": int(seg["start_frame"]) - base,
+                "end_frame": int(seg["end_frame"]) - base,
+            }
+            for j, seg in enumerate(group)
+        ]
+        chunks.append({
+            "segments": segs,
+            "total_frames": int(segs[-1]["end_frame"]),
+            "width": plan["width"],
+            "height": plan["height"],
+            "fps": fps,
+            "overlap_frames": overlap,
+            "chunk_index": i,
+            "chunk_count": len(groups),
+            # 拼接时从本块头部裁掉的重复帧数（首块为 0）
+            "trim_head_frames": 0 if i == 0 else overlap,
+        })
+    return chunks
+
+
 def build_director_timeline(plan: dict, images, global_prompt: str = "") -> str:
     """组装 TimelinePlanner 的 timeline_data（结构对齐已跑通实例的提交体）。"""
     fps = plan["fps"]
@@ -736,6 +796,35 @@ class ComfyUIClient:
                                 return f
                 raise ComfyUIError("任务完成但未找到视频产物，请检查工作流输出节点")
         raise ComfyUIError(f"ComfyUI 任务超时（{settings.comfyui_timeout_minutes} 分钟）")
+
+    async def prompt_state(self, prompt_id: str) -> str:
+        """查询 prompt 当前状态：done / running / error / missing（重启续跑用）。
+
+        /history 与 /queue 都没有记录时返回 missing，调用方据此重投而不是空等超时。
+        """
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                r = await client.get(f"{self.base}/history/{prompt_id}")
+                if r.status_code == 200:
+                    entry = (r.json() or {}).get(prompt_id)
+                    if entry:
+                        status_info = entry.get("status") or {}
+                        if status_info.get("status_str") == "error":
+                            return "error"
+                        return "done" if status_info.get("completed") else "running"
+            except httpx.HTTPError:
+                return "running"  # 网络抖动不当作丢失，交给 wait_result 继续轮询
+            try:
+                q = await client.get(f"{self.base}/queue")
+                if q.status_code == 200:
+                    data = q.json() or {}
+                    ids = [item[1] for item in (data.get("queue_running") or [])]
+                    ids += [item[1] for item in (data.get("queue_pending") or [])]
+                    if prompt_id in ids:
+                        return "running"
+            except httpx.HTTPError:
+                return "running"
+        return "missing"
 
     async def wait_image_result(self, prompt_id: str) -> dict:
         """等待出图任务完成，返回首个图片产物文件信息。

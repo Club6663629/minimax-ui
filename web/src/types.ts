@@ -328,7 +328,15 @@ export interface DramaStatus {
   director_enabled: boolean;
   director_node_available: boolean;
   pricing: { cost_768p_5s: number; block_seconds: number };
-  limits: { max_shots: number; max_seconds: number; min_shot: number; max_shot: number };
+  limits: {
+    max_shots: number;
+    max_seconds: number;
+    min_shot: number;
+    max_shot: number;
+    segment_target_seconds: number;
+    segment_max_seconds: number;
+    segment_max_shots: number;
+  };
 }
 
 export interface DramaBeat {
@@ -463,6 +471,9 @@ export interface DramaShot {
   id: number;
   shot_no: number;
   scene_no: number;
+  /** 所属段；分镜改动后未重新分段时为空 */
+  segment_id: number | null;
+  segment_no: number | null;
   beat_id: string;
   prompt: string;
   duration_s: number;
@@ -502,13 +513,44 @@ export interface DramaShotDraft {
 
 export interface DramaEpisodeStats {
   shots: number;
+  segments: number;
   total_seconds: number;
   rendered: number;
   approved: number;
   rejected: number;
   stale: number;
+  /** 段成片与最新分镜一致的段数 */
+  segments_ready: number;
   repair_cost_total: number;
-  full_cost: number;
+  /** 各段最近一次成功生成的实际消耗合计 */
+  generation_cost: number;
+}
+
+/** ready | rendering | review | approved */
+export type DramaSegmentStatus = "ready" | "rendering" | "review" | "approved";
+
+/** 段 = 一次 director 任务 = 一次审片/返修/版本回滚；集只是剧本与交付容器。 */
+export interface DramaSegment {
+  id: number;
+  episode_id: number;
+  segment_no: number;
+  title: string;
+  scene_nos: number[];
+  /** cut=硬切；continue=承接上一段（自动抽取上一段末帧做桥接） */
+  entry_mode: "cut" | "continue";
+  status: DramaSegmentStatus;
+  target_seconds: number;
+  duration: number;
+  shot_count: number;
+  shot_ids: number[];
+  estimate_cost: number;
+  cut_url: string | null;
+  bridge_url: string | null;
+  bridge_note: string;
+  /** 段成片缺失或与最新分镜不一致 */
+  stale: boolean;
+  active_run: { id: number; status: string } | null;
+  last_error: string;
 }
 
 export interface DramaEpisode {
@@ -531,6 +573,7 @@ export interface DramaEpisode {
   run_count: number;
   /** 当前镜头版本去重数量 */
   version_count: number;
+  segments: DramaSegment[];
   shots: DramaShot[];
   active_run: { id: number; status: string } | null;
   created_at: string | null;
@@ -578,6 +621,7 @@ export interface DramaEpisodeDetail {
 
 export interface DramaRunShot {
   shot_no: number;
+  segment_no: number | null;
   clip_url: string | null;
   version_no: number;
   status: DramaShotStatus;
@@ -586,10 +630,13 @@ export interface DramaRunShot {
 
 export interface DramaRun {
   id: number;
-  mode: "full" | "patch";
+  mode: "segment" | "full" | "patch";
   status: DramaRunStatus;
   /** 展示用派生阶段：queued / generating / postprocess / done / failed / cancelled */
   phase: string;
+  /** 段级 run 的所属段；旧兼容 full run 可能为空 */
+  segment_id: number | null;
+  segment_no: number | null;
   task_id: number;
   task_status: string;
   task_error: string;
@@ -607,9 +654,12 @@ export interface DramaIssue {
   code: string;
   message: string;
   shot_no?: number;
+  shot_nos?: number[];
+  segment_nos?: number[];
 }
 
 export interface DramaPlanSegment {
+  segment_no: number;
   shot_no: number;
   frames: number;
   visible_frames: number;
@@ -620,6 +670,7 @@ export interface DramaPlanSegment {
 export interface DramaChecklist {
   ready: boolean;
   shots: number;
+  segments: number;
   total_seconds: number;
   est_cost: number;
   balance: number;
@@ -629,6 +680,7 @@ export interface DramaChecklist {
   plan: {
     total_frames: number;
     fps: number;
+    max_segment_frames: number;
     segments: DramaPlanSegment[];
     windows: { shot_no: number; frames: number; duration: number }[];
   } | null;
@@ -646,6 +698,7 @@ export interface DramaReview {
   episode: DramaEpisode;
   stats: DramaEpisodeStats;
   shots: DramaShot[];
+  segments: DramaSegment[];
   seams: DramaSeam[];
   sheet_url: string;
   warnings: DramaIssue[];
@@ -664,7 +717,27 @@ export interface DramaArtifactVersion {
 
 export interface DramaRenderResult {
   reused: boolean;
-  run: DramaRun;
+  /** 全部段已就绪时 reused=true 且没有新 run */
+  run: DramaRun | null;
   cost: number;
+  /** 本次提交的段号；无缺口时为空 */
+  segment_no: number | null;
+  /** 本段之后还有多少缺口段（链式续跑） */
+  remaining: number;
+}
+
+/** `POST /segments/{sid}/render` 的响应（不链式）。 */
+export interface DramaSegmentRenderResult {
+  reused: boolean;
+  run: DramaRun | null;
+  cost: number;
+  segment_no: number;
+}
+
+/** `PUT /episodes/{eid}/segments` 的入参项。 */
+export interface DramaSegmentDraft {
+  segment_no: number;
+  title: string;
+  shot_ids: number[];
 }
 

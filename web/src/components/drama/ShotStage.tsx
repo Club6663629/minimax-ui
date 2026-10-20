@@ -1,25 +1,38 @@
-/** S3 分镜：表格行内编辑、AI 规划、帧数吸附预览与保存。 */
-import { useEffect, useMemo, useState } from "react";
+/** S3 分镜：表格行内编辑、AI 规划、帧数吸附预览、按段分组与保存。 */
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
+  Layers,
+  Merge,
+  PlayCircle,
   Plus,
   Save,
   Sparkles,
   Trash2,
   Wand2,
 } from "lucide-react";
-import { api } from "../../api/client";
+import { api, fileUrl } from "../../api/client";
 import type {
   DramaAiShotRewrite,
   DramaCharacter,
   DramaEpisode,
   DramaScene,
+  DramaSegment,
+  DramaSegmentDraft,
   DramaShot,
   DramaShotDraft,
 } from "../../types";
-import { errText, fmtSecs, shotDraftFromShot } from "./labels";
+import {
+  SEGMENT_ENTRY_LABEL,
+  SEGMENT_STATUS_LABEL,
+  SEGMENT_STATUS_TONE,
+  errText,
+  fmtSecs,
+  shotDraftFromShot,
+} from "./labels";
+import SegmentCards from "./SegmentCards";
 
 const FPS = 24;
 const OVERLAP = 39;
@@ -99,9 +112,14 @@ export default function ShotStage({
   maxSeconds,
   minShot = 2,
   maxShot = 10,
+  segmentMaxShots = 12,
+  segmentMaxSeconds = 120,
   notify,
   onSaved,
   onNext,
+  onPlanSegments,
+  onSaveSegments,
+  onRenderSegment,
 }: {
   episode: DramaEpisode;
   characters: DramaCharacter[];
@@ -110,9 +128,14 @@ export default function ShotStage({
   maxSeconds: number;
   minShot?: number;
   maxShot?: number;
+  segmentMaxShots?: number;
+  segmentMaxSeconds?: number;
   notify: (message: string) => void;
   onSaved: () => void | Promise<void>;
   onNext: () => void;
+  onPlanSegments: (force: boolean) => void | Promise<void>;
+  onSaveSegments: (segments: DramaSegmentDraft[]) => void | Promise<void>;
+  onRenderSegment: (segmentId: number) => void | Promise<void>;
 }) {
   const [drafts, setDrafts] = useState<DramaShotDraft[]>(
     episode.shots.map((shot) => shotDraftFromShot(shot)),
@@ -231,6 +254,76 @@ export default function ShotStage({
     }
   };
 
+  /** 已保存镜头按段分组：仅当草稿与库内镜号一致时展示段头，避免未保存改动错位。 */
+  const segmentGroups = useMemo(() => {
+    const byNo = new Map<number, DramaSegment>();
+    episode.segments.forEach((segment) => byNo.set(segment.segment_no, segment));
+    return drafts.map((draft, index) => {
+      const saved = episode.shots[index];
+      if (!saved || saved.shot_no !== draft.shot_no || saved.segment_no === null) return null;
+      return byNo.get(saved.segment_no) || null;
+    });
+  }, [drafts, episode.segments, episode.shots]);
+
+  const planSegments = async () => {
+    if (dirty) {
+      notify("分镜有未保存修改，请先保存再重新分段");
+      return;
+    }
+    const force = episode.segments.length > 0;
+    if (force && !window.confirm("重新分段会重建段结构，已有段成片会被标为旧版（不删文件）。确认继续？")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await onPlanSegments(force);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 合并到上一段：段头操作，保存后已有段成片会因镜头归属变化而标旧。 */
+  const mergePrev = async (index: number) => {
+    const current = episode.segments[index];
+    const prev = episode.segments[index - 1];
+    if (!current || !prev) return;
+    if (dirty) {
+      notify("分镜有未保存修改，请先保存再调整分段");
+      return;
+    }
+    if (
+      !window.confirm(
+        `把第 ${current.segment_no} 段（${current.shot_count} 镜）并入第 ${prev.segment_no} 段？`,
+      )
+    ) {
+      return;
+    }
+    const items: DramaSegmentDraft[] = [];
+    episode.segments.forEach((segment, i) => {
+      if (i === index) return;
+      if (i === index - 1) {
+        items.push({
+          segment_no: items.length + 1,
+          title: segment.title,
+          shot_ids: [...segment.shot_ids, ...current.shot_ids],
+        });
+        return;
+      }
+      items.push({
+        segment_no: items.length + 1,
+        title: segment.title,
+        shot_ids: [...segment.shot_ids],
+      });
+    });
+    setBusy(true);
+    try {
+      await onSaveSegments(items);
+      notify("已合并到上一段");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <section className="panel flex flex-wrap items-center gap-4 px-4 py-3 text-xs">
@@ -265,6 +358,59 @@ export default function ShotStage({
           {dirty ? "有未保存修改" : "已同步"}
           {source === "local" && " · 本地模板规划"}
         </span>
+      </section>
+
+      <section className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+            <Layers size={15} /> 分段
+          </h2>
+          <span className="text-xs text-foreground-500">
+            {episode.segments.length} 段 · 每段 ≤{segmentMaxShots} 镜 / ≤{segmentMaxSeconds}s；跨场硬切，同场承接
+          </span>
+          <button
+            type="button"
+            className="btn-ghost ml-auto px-2 py-1 text-xs"
+            disabled={busy || !episode.shots.length}
+            onClick={() => void planSegments()}
+          >
+            {episode.segments.length ? "重新分段" : "自动分段"}
+          </button>
+        </div>
+        {dirty && (
+          <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700">
+            分镜有未保存修改：保存后会按场自动重新分段。
+          </p>
+        )}
+        <SegmentCards
+          segments={episode.segments}
+          renderActions={(item) => {
+            const index = episode.segments.findIndex((row) => row.id === item.id);
+            return (
+              <>
+                <button
+                  type="button"
+                  className="btn-ghost px-2 py-1 text-[11px]"
+                  disabled={busy || Boolean(item.active_run) || Boolean(episode.active_run)}
+                  onClick={() => void onRenderSegment(item.id)}
+                  title={item.stale ? "生成本段" : "已就绪，重新生成会再扣费"}
+                >
+                  <PlayCircle size={11} /> {item.stale ? "生成本段" : "重生成"}
+                </button>
+                {index > 0 && (
+                  <button
+                    type="button"
+                    className="btn-ghost px-2 py-1 text-[11px]"
+                    disabled={busy || Boolean(item.active_run) || Boolean(episode.active_run)}
+                    onClick={() => void mergePrev(index)}
+                  >
+                    <Merge size={11} /> 并入上一段
+                  </button>
+                )}
+              </>
+            );
+          }}
+        />
       </section>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -322,25 +468,64 @@ export default function ShotStage({
                 const issues = rowIssues(draft, characters, scenes, minShot, maxShot);
                 const frames = stats.visible[index] ?? 0;
                 const open = expanded === index;
+                const group = segmentGroups[index];
+                const prevGroup = index > 0 ? segmentGroups[index - 1] : null;
+                const showGroup = Boolean(group) && group?.id !== prevGroup?.id;
                 return (
-                  <FragmentRow
-                    key={index}
-                    draft={draft}
-                    index={index}
-                    open={open}
-                    issues={issues}
-                    frames={frames}
-                    characters={characters}
-                    scenes={scenes}
-                    saved={savedByNo.get(draft.shot_no)}
-                    notify={notify}
-                    minShot={minShot}
-                    maxShot={maxShot}
-                    onToggleExpand={() => setExpanded(open ? null : index)}
-                    onPatch={(next) => patch(index, next)}
-                    onToggleCharacter={(cid) => toggleCharacter(index, cid)}
-                    onRemove={() => removeRow(index)}
-                  />
+                  <Fragment key={index}>
+                    {showGroup && group && (
+                      <tr className="border-y border-background-200 bg-background-100/80">
+                        <td colSpan={10} className="px-2 py-1.5">
+                          <span className="flex flex-wrap items-center gap-2 text-[11px]">
+                            <span className="font-medium text-foreground-800">
+                              第 {group.segment_no} 段
+                            </span>
+                            <span className={`rounded px-1.5 py-0.5 text-[10px] ${SEGMENT_STATUS_TONE[group.status]}`}>
+                              {SEGMENT_STATUS_LABEL[group.status]}
+                            </span>
+                            {group.stale && (
+                              <span className="rounded bg-background-200 px-1.5 py-0.5 text-[10px] text-foreground-500">
+                                旧版
+                              </span>
+                            )}
+                            <span className="text-foreground-500">
+                              {group.shot_count} 镜 · {fmtSecs(group.duration || group.target_seconds)}
+                            </span>
+                            <span className="text-foreground-400">
+                              {SEGMENT_ENTRY_LABEL[group.entry_mode] || group.entry_mode}
+                            </span>
+                            {group.cut_url && (
+                              <a
+                                className="text-primary-600 hover:underline"
+                                href={fileUrl(group.cut_url)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                看段成片
+                              </a>
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    <FragmentRow
+                      draft={draft}
+                      index={index}
+                      open={open}
+                      issues={issues}
+                      frames={frames}
+                      characters={characters}
+                      scenes={scenes}
+                      saved={savedByNo.get(draft.shot_no)}
+                      notify={notify}
+                      minShot={minShot}
+                      maxShot={maxShot}
+                      onToggleExpand={() => setExpanded(open ? null : index)}
+                      onPatch={(next) => patch(index, next)}
+                      onToggleCharacter={(cid) => toggleCharacter(index, cid)}
+                      onRemove={() => removeRow(index)}
+                    />
+                  </Fragment>
                 );
               })}
             </tbody>

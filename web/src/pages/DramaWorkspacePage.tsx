@@ -25,6 +25,7 @@ import type {
   DramaChecklist,
   DramaEpisodeDetail,
   DramaRun,
+  DramaSegmentDraft,
   DramaStatus,
 } from "../types";
 
@@ -56,7 +57,7 @@ export default function DramaWorkspacePage() {
   const [error, setError] = useState("");
   const [run, setRun] = useState<DramaRun | null>(null);
   const [runId, setRunId] = useState<number | null>(null);
-  const [runKind, setRunKind] = useState<"full" | "patch" | null>(null);
+  const [runKind, setRunKind] = useState<"segment" | "full" | "patch" | null>(null);
   const [scriptDirty, setScriptDirty] = useState(false);
 
   const loadDetail = useCallback(async () => {
@@ -117,18 +118,19 @@ export default function DramaWorkspacePage() {
   const applyTerminal = useCallback(
     async (next: DramaRun) => {
       setRunId(null);
+      let latest: DramaEpisodeDetail | null = null;
       try {
-        await loadDetail();
+        latest = await loadDetail();
       } catch {
         /* 刷新失败时保留轮询结果，用户可手动刷新 */
       }
       void refreshChecklist(true);
-      setRunKind(null);
       if (next.mode === "patch") {
+        setRunKind(null);
         setStage("review");
         if (next.status === "done") {
           setRun(null);
-          notify("返修完成，已重新拼接成片（0 额外拼接成本）");
+          notify("返修完成，已重新拼接段成片与集成片（0 额外拼接成本）");
         } else {
           setRun(next);
           notify("返修失败，积分已退还，镜头状态已恢复");
@@ -136,14 +138,37 @@ export default function DramaWorkspacePage() {
         return;
       }
       if (next.status === "done") {
+        const chained = latest?.episode.active_run ?? null;
+        if (chained) {
+          try {
+            const nextRun = await api.dramaRun(chained.id);
+            setRun(nextRun);
+            setRunId(nextRun.id);
+            setRunKind(nextRun.mode);
+            setStage("render");
+          } catch {
+            setRun(null);
+          }
+          notify(
+            next.segment_no
+              ? `第 ${next.segment_no} 段完成，已自动提交下一段`
+              : "本段完成，已自动提交下一段",
+          );
+          return;
+        }
         setRun(null);
-        setStage("review");
-        notify("整集生成完成，进入审片");
-      } else {
-        setRun(next);
-        setStage("render");
-        notify(next.status === "cancelled" ? "生成已取消" : "生成失败，积分已退还");
+        setRunKind(null);
+        setStage(latest?.episode.status === "review" ? "review" : "render");
+        notify(
+          next.segment_no
+            ? `第 ${next.segment_no} 段完成，已进入审片`
+            : "整集生成完成，进入审片",
+        );
+        return;
       }
+      setRun(next);
+      setStage("render");
+      notify(next.status === "cancelled" ? "生成已取消" : "生成失败，积分已退还");
     },
     [loadDetail, notify, refreshChecklist],
   );
@@ -192,6 +217,10 @@ export default function DramaWorkspacePage() {
     0,
   );
 
+  const segmentsReady =
+    Boolean(episode?.segments.length) &&
+    (episode?.segments || []).every((segment) => !segment.stale);
+
   const canDeliver = useMemo(() => {
     if (!episode) return false;
     return (
@@ -199,9 +228,10 @@ export default function DramaWorkspacePage() {
       !episode.final_stale &&
       episode.stats.rejected === 0 &&
       episode.stats.stale === 0 &&
+      segmentsReady &&
       episode.shots.every((shot) => Boolean(shot.clip_url))
     );
-  }, [episode]);
+  }, [episode, segmentsReady]);
 
   const maxUnlocked = useMemo(() => {
     if (!episode) return 0;
@@ -210,7 +240,10 @@ export default function DramaWorkspacePage() {
     if (g2Ready) max = 2;
     if (episode.shots.length > 0) max = 3;
     if (checklist?.ready) max = 4;
-    if (episode.status === "rendering") max = runKind === "patch" ? 5 : 4;
+    if (episode.status === "rendering") {
+      // 段顺序生成：先完成的段可以直接审，返修也回审片
+      max = runKind === "patch" || episode.stats.segments_ready > 0 ? 5 : 4;
+    }
     if (episode.status === "review" || episode.status === "done") max = 5;
     if (episode.status === "done" || (episode.status === "review" && canDeliver)) max = 6;
     return max;
@@ -221,8 +254,8 @@ export default function DramaWorkspacePage() {
     shots: g2Ready ? "" : "需先锁定主要角色",
     checklist: episode?.shots.length ? "" : "需先保存分镜",
     render: checklist?.ready ? "" : "需先通过就绪检查",
-    review: episode?.final_url ? "" : "需先生成整集",
-    deliver: canDeliver ? "" : "需完成审片且成片非旧版",
+    review: episode?.final_url ? "" : "需先完成第一段生成",
+    deliver: canDeliver ? "" : "需所有段就绪且集成片非旧版",
   };
 
   const jump = (target: DramaStageKey) => {
@@ -263,18 +296,105 @@ export default function DramaWorkspacePage() {
   const render = async (force: boolean) => {
     try {
       const result = await api.dramaRender(episodeId, force);
+      if (!result.run) {
+        notify("所有段都已就绪，本次 0 积分");
+        const data = await loadDetail();
+        void refreshChecklist(true);
+        setRun(null);
+        setRunKind(null);
+        setStage(
+          data.episode.segments.length > 0 &&
+            data.episode.segments.every((segment) => !segment.stale)
+            ? "review"
+            : "render",
+        );
+        return;
+      }
       if (result.reused) {
-        notify(`命中复用，本次 0 积分（run #${result.run.id}）`);
+        notify(
+          result.segment_no
+            ? `第 ${result.segment_no} 段命中复用，本次 0 积分`
+            : "命中复用，本次 0 积分",
+        );
         await loadDetail();
         void refreshChecklist(true);
-        setStage("review");
         return;
       }
       setRun(result.run);
       setRunId(result.run.id);
-      setRunKind("full");
+      setRunKind(result.run.mode);
       setStage("render");
-      notify(`整集已提交，预估 ${result.cost} 积分`);
+      notify(
+        result.segment_no
+          ? `第 ${result.segment_no} 段已提交，预估 ${result.cost} 积分${
+              result.remaining > 0 ? `，后续还有 ${result.remaining} 段` : ""
+            }`
+          : `整集已提交，预估 ${result.cost} 积分`,
+      );
+      void loadDetail();
+    } catch (exc) {
+      notify(errText(exc));
+    }
+  };
+
+  const renderSegment = async (segmentId: number, force: boolean) => {
+    try {
+      const result = await api.dramaRenderSegment(segmentId, { force });
+      if (result.reused) {
+        notify(`第 ${result.segment_no} 段命中复用，本次 0 积分`);
+        await loadDetail();
+        void refreshChecklist(true);
+        return;
+      }
+      if (!result.run) {
+        notify(`第 ${result.segment_no} 段已就绪`);
+        await loadDetail();
+        return;
+      }
+      setRun(result.run);
+      setRunId(result.run.id);
+      setRunKind("segment");
+      setStage("render");
+      notify(`第 ${result.segment_no} 段已提交，预估 ${result.cost} 积分`);
+      void loadDetail();
+    } catch (exc) {
+      notify(errText(exc));
+    }
+  };
+
+  /** 失败重试：单镜返修回审片重驳，段失败只重跑该段，集级失败按缺口段继续。 */
+  const retryRun = async () => {
+    if (run?.mode === "patch") {
+      notify("返修失败：到审片页重新驳回该镜即可重试（积分已退还）");
+      setStage("review");
+      return;
+    }
+    if (run?.segment_id) {
+      await renderSegment(run.segment_id, true);
+      return;
+    }
+    await render(true);
+  };
+
+  const planSegments = async (force: boolean) => {
+    try {
+      const data = await api.dramaPlanSegments(episodeId, { force });
+      setDetail((current) => (current ? { ...current, episode: data } : current));
+      await loadDetail();
+      void refreshChecklist(true);
+      notify(`已按 ${data.segments.length} 段排版`);
+    } catch (exc) {
+      notify(errText(exc));
+    }
+  };
+
+  const saveSegments = async (items: DramaSegmentDraft[]) => {
+    try {
+      const data = await api.dramaSaveSegments(episodeId, items);
+      setDetail((current) => (current ? { ...current, episode: data } : current));
+      await loadDetail();
+      void refreshChecklist(true);
+      notify(`已保存 ${data.segments.length} 段`);
     } catch (exc) {
       notify(errText(exc));
     }
@@ -309,6 +429,14 @@ export default function DramaWorkspacePage() {
     setRunId(next.id);
     setRunKind("patch");
     setStage("review");
+    void loadDetail();
+  };
+
+  /** 从审片直接重生成某段：留在审片页看进度徽标，不打断对比。 */
+  const segmentStarted = (next: DramaRun) => {
+    setRun(next);
+    setRunId(next.id);
+    setRunKind("segment");
     void loadDetail();
   };
 
@@ -347,7 +475,8 @@ export default function DramaWorkspacePage() {
             {detail.project.title} · 第 {episode.episode_no} 集
           </h1>
           <p className="mt-0.5 text-[11px] text-foreground-500">
-            {episode.title} · {detail.project.aspect_ratio} · {episode.stats.shots} 镜 · 目标{" "}
+            {episode.title} · {detail.project.aspect_ratio} · {episode.stats.shots} 镜
+            {episode.stats.segments > 0 ? ` · ${episode.stats.segments} 段` : ""} · 目标{" "}
             {episode.stats.total_seconds.toFixed(1)}s
           </p>
         </div>
@@ -432,7 +561,12 @@ export default function DramaWorkspacePage() {
               maxSeconds={status?.limits.max_seconds ?? 180}
               minShot={status?.limits.min_shot ?? 2}
               maxShot={status?.limits.max_shot ?? 10}
+              segmentMaxShots={status?.limits.segment_max_shots ?? 12}
+              segmentMaxSeconds={status?.limits.segment_max_seconds ?? 120}
               notify={notify}
+              onPlanSegments={planSegments}
+              onSaveSegments={saveSegments}
+              onRenderSegment={(segmentId) => renderSegment(segmentId, false)}
               onSaved={async () => {
                 await loadDetail();
                 await refreshChecklist(true);
@@ -468,8 +602,10 @@ export default function DramaWorkspacePage() {
                 run={run}
                 onCancel={cancelRun}
                 onRepair={repairRun}
-                onRetry={() => render(true)}
+                onRetry={retryRun}
                 onReuse={() => render(false)}
+                onRenderMissing={() => render(false)}
+                onRenderSegment={renderSegment}
                 onGoReady={() => setStage("checklist")}
                 onGoShots={() => setStage("shots")}
                 notify={notify}
@@ -482,9 +618,10 @@ export default function DramaWorkspacePage() {
               eid={episodeId}
               episode={episode}
               costPer5s={status?.pricing.cost_768p_5s ?? 10}
-              activePatchRun={runKind === "patch" ? run : null}
+              activePatchRun={run && !TERMINAL.has(run.phase) ? run : null}
               notify={notify}
               onPatchStarted={patchStarted}
+              onSegmentStarted={segmentStarted}
               onChanged={async () => {
                 await loadDetail();
               }}
@@ -524,11 +661,21 @@ export default function DramaWorkspacePage() {
             loading={checklistLoading}
             onRefresh={() => void refreshChecklist()}
           />
-          <RunBadge run={run} label={runKind === "patch" ? "返修批次" : "整集批次"} />
+          <RunBadge
+            run={run}
+            label={
+              run?.mode === "patch"
+                ? "返修批次"
+                : run?.mode === "segment" && run.segment_no
+                  ? `第 ${run.segment_no} 段批次`
+                  : "整集批次"
+            }
+          />
           <div className="panel space-y-1.5 p-3 text-[11px] text-foreground-500">
             <p className="text-foreground-700">阶段提示</p>
-            <p>· 改剧本/角色/分镜会让旧成片标为「旧版」，需重新生成。</p>
-            <p>· 返修 0 成本重拼成片；整集失败自动退积分。</p>
+            <p>· 一集按段生成：每段 30–120s，完成后自动续下一段，可边生成边审已完成段。</p>
+            <p>· 改剧本/角色/分镜会让受影响的段与旧成片标为「旧版」，需重生对应段。</p>
+            <p>· 返修/回滚 0 成本重拼段成片与集成片；段失败只退该段积分。</p>
             <p>· 交付后仍可「重新编辑」，旧成片保留可看。</p>
           </div>
         </aside>

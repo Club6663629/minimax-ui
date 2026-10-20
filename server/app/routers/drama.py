@@ -25,14 +25,15 @@ from ..config import DRAMA_DIR, UPLOAD_DIR, settings
 from ..database import get_db
 from ..models import (
     DramaArtifact, DramaCharacter, DramaEpisode, DramaProject, DramaRun, DramaScene,
-    DramaShot, Task, Upload, User,
+    DramaSegment, DramaShot, Task, Upload, User,
 )
 from ..schemas import (
     DramaAiPrecheckIn, DramaAiRepairIn, DramaAiRewriteBeatIn, DramaAiRewriteShotIn,
     DramaCharacterIn, DramaCharacterLockIn, DramaCharacterPatchIn, DramaEpisodeIn,
     DramaExtractIn, DramaProjectIn, DramaProjectPatchIn, DramaRejectIn, DramaRenderIn,
     DramaRollbackIn, DramaSceneIn, DramaScenePatchIn, DramaScriptGenerateIn,
-    DramaScriptSaveIn, DramaShotIn, DramaShotsSaveIn,
+    DramaScriptSaveIn, DramaSegmentPlanIn, DramaSegmentRenderIn, DramaSegmentsSaveIn,
+    DramaShotIn, DramaShotsSaveIn,
 )
 from ..services import drama_ai, drama_composer as composer, drama_llm, drama_runner
 from ..services.drama_agent import DramaAgentError
@@ -113,6 +114,14 @@ def _run(db: Session, rid: int, user: User) -> DramaRun:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在")
     _episode(db, run.episode_id, user)
     return run
+
+
+def _segment(db: Session, sid: int, user: User) -> DramaSegment:
+    segment = db.get(DramaSegment, sid)
+    if segment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "段不存在")
+    _episode(db, segment.episode_id, user)
+    return segment
 
 
 def _guard_writing(db: Session, project_id: int) -> None:
@@ -202,28 +211,55 @@ def _clips_by_shot(db: Session, episode_id: int) -> dict:
     return {row.shot_id: row for row in rows}
 
 
-def _full_cost(db: Session, episode: DramaEpisode) -> int:
-    run = (
-        db.query(DramaRun)
-        .filter(DramaRun.episode_id == episode.id, DramaRun.mode == "full",
-                DramaRun.status == "done")
-        .order_by(DramaRun.id.desc())
-        .first()
+def _cuts_by_segment(db: Session, episode_id: int) -> dict:
+    rows = (
+        db.query(DramaArtifact)
+        .filter(DramaArtifact.episode_id == episode_id, DramaArtifact.kind == "segment",
+                DramaArtifact.is_current.is_(True))
+        .order_by(DramaArtifact.id)
+        .all()
     )
-    if run is None:
-        return 0
-    task = db.get(Task, run.task_id)
-    return int(task.cost or 0) if task else 0
+    return {row.segment_id: row for row in rows}
 
 
-def _serialize_shot(shot: DramaShot, clip: Optional[DramaArtifact], episode: DramaEpisode) -> dict:
+def _segments_by_episode(db: Session, episode_id: int) -> list:
+    return (
+        db.query(DramaSegment)
+        .filter(DramaSegment.episode_id == episode_id)
+        .order_by(DramaSegment.segment_no)
+        .all()
+    )
+
+
+def _generation_cost(db: Session, segments: list) -> int:
+    """当前各段最近一次成功 run 的实际消耗合计（展示用）。"""
+    total = 0
+    for segment in segments:
+        run = (
+            db.query(DramaRun)
+            .filter(DramaRun.segment_id == segment.id, DramaRun.status == "done")
+            .order_by(DramaRun.id.desc())
+            .first()
+        )
+        if run is None:
+            continue
+        task = db.get(Task, run.task_id)
+        total += int(task.cost or 0) if task else int(run.cost or 0)
+    return total
+
+
+def _serialize_shot(shot: DramaShot, clip: Optional[DramaArtifact], episode: DramaEpisode,
+                    segment_no: Optional[int] = None) -> dict:
     qa = _json(shot.qa, {}) if shot.qa else {}
     ai = qa.get("ai") if isinstance(qa, dict) else None
-    # 预检结果跟着 spec_hash 失效：分镜/角色卡改动后标 stale，前端灰显旧结论
-    if isinstance(ai, dict) and ai.get("spec_hash") and ai["spec_hash"] != episode.spec_hash:
-        qa = {**qa, "ai": {**ai, "stale": True}}
+    # 预检结果跟着指纹失效：单镜对段指纹、整集对集指纹
+    if isinstance(ai, dict) and ai.get("spec_hash"):
+        expected = shot.spec_hash if ai.get("scope") == "shot" else episode.spec_hash
+        if ai["spec_hash"] != expected:
+            qa = {**qa, "ai": {**ai, "stale": True}}
     return {
         "id": shot.id, "shot_no": shot.shot_no, "scene_no": shot.scene_no,
+        "segment_id": shot.segment_id, "segment_no": segment_no,
         "beat_id": shot.beat_id, "prompt": shot.prompt,
         "duration_s": shot.duration_s, "shot_size": shot.shot_size,
         "camera": shot.camera, "movement": shot.movement,
@@ -235,8 +271,29 @@ def _serialize_shot(shot: DramaShot, clip: Optional[DramaArtifact], episode: Dra
         "repair_count": shot.repair_count or 0,
         "repair_cost_total": shot.repair_cost_total or 0,
         "clip_url": _artifact_url(clip),
-        "stale": bool(clip and clip.spec_hash and clip.spec_hash != episode.spec_hash),
+        "stale": bool(clip and clip.spec_hash and clip.spec_hash != shot.spec_hash),
         "qa": qa,
+    }
+
+
+def _serialize_segment(segment: DramaSegment, shots: list, cut: Optional[DramaArtifact]) -> dict:
+    duration = round(sum(s.duration_s for s in shots), 2)
+    return {
+        "id": segment.id, "episode_id": segment.episode_id,
+        "segment_no": segment.segment_no, "title": segment.title,
+        "scene_nos": _json(segment.scene_nos, []),
+        "entry_mode": segment.entry_mode, "status": segment.status,
+        "target_seconds": segment.target_seconds or duration,
+        "duration": (cut.duration if cut is not None and cut.duration else duration),
+        "shot_count": len(shots),
+        "shot_ids": [s.id for s in shots],
+        "estimate_cost": composer.estimate_cost_from_shots(shots),
+        "cut_url": _artifact_url(cut),
+        "bridge_url": _upload_url(segment.bridge_upload_id),
+        "bridge_note": segment.bridge_note or "",
+        "stale": bool(cut is None or not cut.spec_hash or cut.spec_hash != segment.spec_hash),
+        "active_run": None,
+        "last_error": segment.last_error or "",
     }
 
 
@@ -246,21 +303,28 @@ def _episode_bundle(db: Session, episode: DramaEpisode) -> dict:
         .order_by(DramaShot.shot_no).all()
     )
     clips = _clips_by_shot(db, episode.id)
+    segments = _segments_by_episode(db, episode.id)
+    cuts = _cuts_by_segment(db, episode.id)
     final = drama_runner.current_final(db, episode)
-    full_cost = _full_cost(db, episode)
     stats = {
         "shots": len(shots),
+        "segments": len(segments),
         "total_seconds": round(sum(s.duration_s for s in shots), 2),
         "rendered": sum(1 for s in shots if s.status == "rendered"),
         "approved": sum(1 for s in shots if s.status == "approved"),
         "rejected": sum(1 for s in shots if s.status == "rejected"),
-        "stale": sum(1 for s in shots if clips.get(s.id) and clips[s.id].spec_hash != episode.spec_hash),
+        "stale": sum(1 for s in shots if clips.get(s.id)
+                     and clips[s.id].spec_hash != s.spec_hash),
+        "segments_ready": sum(
+            1 for s in segments
+            if cuts.get(s.id) is not None and cuts[s.id].spec_hash == s.spec_hash
+        ),
         "repair_cost_total": sum(int(s.repair_cost_total or 0) for s in shots),
-        "full_cost": full_cost,
+        "generation_cost": _generation_cost(db, segments),
     }
     final_stale = bool(final and final.spec_hash and final.spec_hash != episode.spec_hash)
-    return {"shots": shots, "clips": clips, "final": final, "stats": stats,
-            "final_stale": final_stale}
+    return {"shots": shots, "clips": clips, "segments": segments, "cuts": cuts,
+            "final": final, "stats": stats, "final_stale": final_stale}
 
 
 def _serialize_episode(db: Session, episode: DramaEpisode, with_shots: bool = True) -> dict:
@@ -270,6 +334,21 @@ def _serialize_episode(db: Session, episode: DramaEpisode, with_shots: bool = Tr
     versions = {
         int(clip.version_no or 0) for clip in bundle["clips"].values() if clip.version_no
     }
+    shots_by_segment: dict = {}
+    for shot in shots:
+        if shot.segment_id is not None:
+            shots_by_segment.setdefault(shot.segment_id, []).append(shot)
+    no_by_segment = {s.id: s.segment_no for s in bundle["segments"]}
+    segments = [
+        _serialize_segment(segment, shots_by_segment.get(segment.id, []),
+                           bundle["cuts"].get(segment.id))
+        for segment in bundle["segments"]
+    ]
+    for item in segments:
+        if episode.active_run_id:
+            run = db.get(DramaRun, episode.active_run_id)
+            if run is not None and run.segment_id == item["id"]:
+                item["active_run"] = {"id": run.id, "status": run.status}
     data = {
         "id": episode.id, "project_id": episode.project_id,
         "episode_no": episode.episode_no, "title": episode.title,
@@ -285,8 +364,11 @@ def _serialize_episode(db: Session, episode: DramaEpisode, with_shots: bool = Tr
         "spent": sum(int(run.cost or 0) for run in runs),
         "run_count": len(runs),
         "version_count": len(versions),
+        "segments": segments,
         "shots": [
-            _serialize_shot(shot, bundle["clips"].get(shot.id), episode) for shot in shots
+            _serialize_shot(shot, bundle["clips"].get(shot.id), episode,
+                            no_by_segment.get(shot.segment_id))
+            for shot in shots
         ] if with_shots else [],
         "active_run": None,
         "created_at": episode.created_at.isoformat() if episode.created_at else None,
@@ -312,21 +394,28 @@ def _phase(run: DramaRun, task: Optional[Task]) -> str:
 
 def _serialize_run(db: Session, run: DramaRun) -> dict:
     task = db.get(Task, run.task_id)
-    episode = db.get(DramaEpisode, run.episode_id)
     shots = (
         db.query(DramaShot).filter(DramaShot.episode_id == run.episode_id)
         .order_by(DramaShot.shot_no).all()
     )
+    if run.segment_id:
+        shots = [s for s in shots if s.segment_id == run.segment_id]
     clips = _clips_by_shot(db, run.episode_id)
+    no_by_segment = {
+        s.id: s.segment_no for s in _segments_by_episode(db, run.episode_id)
+    }
     master = (
         db.query(DramaArtifact)
         .filter(DramaArtifact.episode_id == run.episode_id, DramaArtifact.kind == "master",
                 DramaArtifact.version_no == run.id)
         .order_by(DramaArtifact.id.desc()).first()
     )
+    segment = db.get(DramaSegment, run.segment_id) if run.segment_id else None
     return {
         "id": run.id, "mode": run.mode, "status": run.status,
         "phase": _phase(run, task),
+        "segment_id": run.segment_id,
+        "segment_no": segment.segment_no if segment else None,
         "task_id": run.task_id,
         "task_status": task.status if task else "",
         "task_error": (task.error if task else "") or "",
@@ -339,22 +428,23 @@ def _serialize_run(db: Session, run: DramaRun) -> dict:
         "master_url": _artifact_url(master),
         "shots": [{
             "shot_no": shot.shot_no,
+            "segment_no": no_by_segment.get(shot.segment_id),
             "clip_url": _artifact_url(clips.get(shot.id)),
             "version_no": shot.version_no or 0,
             "status": shot.status,
-            "stale": bool(clips.get(shot.id) and episode
-                          and clips[shot.id].spec_hash != episode.spec_hash),
+            "stale": bool(clips.get(shot.id)
+                          and clips[shot.id].spec_hash != shot.spec_hash),
         } for shot in shots],
     }
 
 
-def _reject_if_stale(clip: Optional[DramaArtifact], episode: DramaEpisode, shot_no: int) -> None:
+def _reject_if_stale(clip: Optional[DramaArtifact], shot: DramaShot) -> None:
     if clip is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"第 {shot_no} 镜还没有成片")
-    if clip.spec_hash != episode.spec_hash:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"第 {shot.shot_no} 镜还没有成片")
+    if clip.spec_hash != shot.spec_hash:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "该镜头是旧版（分镜已改动），请重新生成整集后再操作",
+            "该镜头是旧版（分镜已改动），请重新生成本段后再操作",
         )
 
 
@@ -376,6 +466,9 @@ def drama_status(user: User = Depends(get_current_user)):
             "max_seconds": settings.drama_max_episode_seconds,
             "min_shot": settings.drama_min_shot_seconds,
             "max_shot": settings.drama_max_shot_seconds,
+            "segment_target_seconds": settings.drama_segment_target_seconds,
+            "segment_max_seconds": settings.drama_segment_max_seconds,
+            "segment_max_shots": settings.drama_segment_max_shots,
         },
     }
 
@@ -418,6 +511,8 @@ def list_projects(user: User = Depends(drama_user), db: Session = Depends(get_db
             "final_duration": ep.final_duration or 0,
             "shot_count": db.query(func.count(DramaShot.id))
             .filter(DramaShot.episode_id == ep.id).scalar() or 0,
+            "segment_count": db.query(func.count(DramaSegment.id))
+            .filter(DramaSegment.episode_id == ep.id).scalar() or 0,
         } for ep in episodes]
         projects.append(item)
     return {"projects": projects}
@@ -1092,21 +1187,82 @@ def checklist(eid: int, user: User = Depends(drama_user), db: Session = Depends(
     return result
 
 
+# ---------------------------------------------------------------- 分段
+@router.post("/episodes/{eid}/segments/plan")
+def plan_segments(eid: int, body: Optional[DramaSegmentPlanIn] = None,
+                  user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """自动分段（场优先，30–120s / ≤12 镜）；已有段时需 force 重建。"""
+    episode = _episode(db, eid, user)
+    _guard_writing(db, episode.project_id)
+    target = body.target_seconds if body else None
+    force = bool(body.force) if body else False
+    try:
+        composer.plan_segments(db, episode, target_seconds=target, force=force)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    db.commit()
+    episode = db.get(DramaEpisode, eid)
+    return _serialize_episode(db, episode)
+
+
+@router.put("/episodes/{eid}/segments")
+def save_segments(eid: int, body: DramaSegmentsSaveIn, user: User = Depends(drama_user),
+                  db: Session = Depends(get_db)):
+    """保存手动调整后的段结构（必须覆盖全部镜头、顺序与镜号一致）。"""
+    episode = _episode(db, eid, user)
+    _guard_writing(db, episode.project_id)
+    try:
+        composer.save_segments(db, episode, body.segments)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    db.commit()
+    episode = db.get(DramaEpisode, eid)
+    return _serialize_episode(db, episode)
+
+
 # ---------------------------------------------------------------- 生成
 @router.post("/episodes/{eid}/render")
 def render_episode(eid: int, body: Optional[DramaRenderIn] = None,
                    user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """提交下一个缺口段（mode=full 仅兼容旧前端）；chain 时 commit 后自动续下一段。"""
     episode = _episode(db, eid, user)
     _require_node()
     force = bool(body.force) if body else False
+    chain = bool(body.chain) if body else True
     try:
-        result = drama_runner.submit_full(db, episode, user, force=force)
+        result = drama_runner.submit_episode(db, episode, user, force=force, chain=chain)
     except DramaError as exc:
         _raise(exc)
-    run = db.get(DramaRun, result["run_id"])
+    run = db.get(DramaRun, result["run_id"]) if result.get("run_id") else None
     return {
-        "reused": result["reused"], "run": _serialize_run(db, run),
+        "reused": result["reused"],
+        "run": _serialize_run(db, run) if run is not None else None,
         "cost": result["cost"],
+        "segment_no": result.get("segment_no"),
+        "remaining": result.get("remaining", 0),
+    }
+
+
+@router.post("/segments/{sid}/render")
+def render_segment(sid: int, body: Optional[DramaSegmentRenderIn] = None,
+                   user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """生成单段（默认不链式）；已 fresh 且未 force 时 0 积分复用。"""
+    segment = _segment(db, sid, user)
+    _require_node()
+    force = bool(body.force) if body else False
+    chain = bool(body.chain) if body else False
+    try:
+        result = drama_runner.submit_segment(db, segment, user, force=force, chain=chain)
+    except DramaError as exc:
+        _raise(exc)
+    run = db.get(DramaRun, result["run_id"]) if result.get("run_id") else None
+    return {
+        "reused": result["reused"],
+        "run": _serialize_run(db, run) if run is not None else None,
+        "cost": result["cost"],
+        "segment_no": result.get("segment_no"),
     }
 
 
@@ -1147,7 +1303,6 @@ def list_shot_artifacts(sid: int, user: User = Depends(drama_user),
                         db: Session = Depends(get_db)):
     """某镜头的历史版本（版本抽屉 + 回滚用），新版本在前。"""
     shot = _shot(db, sid, user)
-    episode = db.get(DramaEpisode, shot.episode_id)
     artifacts = (
         db.query(DramaArtifact)
         .filter(DramaArtifact.shot_id == sid, DramaArtifact.kind == "clip")
@@ -1160,7 +1315,30 @@ def list_shot_artifacts(sid: int, user: User = Depends(drama_user),
             "id": a.id, "version_no": a.version_no, "url": _artifact_url(a),
             "duration": a.duration, "frames": a.frames,
             "is_current": bool(a.is_current),
-            "stale": bool(episode and a.spec_hash != episode.spec_hash),
+            "stale": bool(a.spec_hash != shot.spec_hash),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        } for a in artifacts],
+    }
+
+
+@router.get("/segments/{sid}/artifacts")
+def list_segment_artifacts(sid: int, user: User = Depends(drama_user),
+                           db: Session = Depends(get_db)):
+    """某段的历史段成片（段级回滚用），新版本在前。"""
+    segment = _segment(db, sid, user)
+    artifacts = (
+        db.query(DramaArtifact)
+        .filter(DramaArtifact.segment_id == sid, DramaArtifact.kind == "segment")
+        .order_by(DramaArtifact.version_no.desc(), DramaArtifact.id.desc())
+        .all()
+    )
+    return {
+        "segment_no": segment.segment_no,
+        "artifacts": [{
+            "id": a.id, "version_no": a.version_no, "url": _artifact_url(a),
+            "duration": a.duration, "frames": a.frames,
+            "is_current": bool(a.is_current),
+            "stale": bool(a.spec_hash != segment.spec_hash),
             "created_at": a.created_at.isoformat() if a.created_at else None,
         } for a in artifacts],
     }
@@ -1170,15 +1348,56 @@ def list_shot_artifacts(sid: int, user: User = Depends(drama_user),
 def approve_shot(sid: int, user: User = Depends(drama_user), db: Session = Depends(get_db)):
     shot = _shot(db, sid, user)
     episode = db.get(DramaEpisode, shot.episode_id)
-    if episode.status != "review":
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前集不在审片阶段")
+    segment = db.get(DramaSegment, shot.segment_id) if shot.segment_id else None
+    if segment is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该镜头还没有分段，请先重新分段")
+    if segment.status not in ("review", "approved"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "该镜头所属段还没生成完成")
     if shot.status not in ("rendered", "approved"):
         raise HTTPException(status.HTTP_409_CONFLICT, "该镜头当前不可通过")
     clip = drama_runner.current_clip(db, shot.id)
-    _reject_if_stale(clip, episode, shot.shot_no)
+    _reject_if_stale(clip, shot)
     shot.status = "approved"
     db.commit()
-    return {"status": shot.status, "shot": _serialize_shot(shot, clip, episode)}
+    return {"status": shot.status,
+            "shot": _serialize_shot(shot, clip, episode, segment.segment_no)}
+
+
+@router.post("/segments/{sid}/approve")
+def approve_segment(sid: int, user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """段通过：段成片为当前版本，段内 rendered 的镜头一并置 approved。"""
+    segment = _segment(db, sid, user)
+    episode = db.get(DramaEpisode, segment.episode_id)
+    if segment.active_run_id or episode.active_run_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "本段正在生成中，请等待完成")
+    if segment.status not in ("review", "approved"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "本段不在审片阶段")
+    cut = drama_runner.current_segment_cut(db, segment)
+    if cut is None or not Path(cut.path).exists() or cut.spec_hash != segment.spec_hash:
+        raise HTTPException(status.HTTP_409_CONFLICT, "本段成片缺失或已过旧，请先生成本段")
+    segment.status = "approved"
+    for shot in composer.segment_shots(db, segment):
+        if shot.status == "rendered":
+            shot.status = "approved"
+    db.commit()
+    return _serialize_episode(db, episode)
+
+
+@router.post("/segments/{sid}/reject")
+def reject_segment(sid: int, user: User = Depends(drama_user), db: Session = Depends(get_db)):
+    """段驳回：只退段状态，不扣费；重新生成后自动回到 review。"""
+    segment = _segment(db, sid, user)
+    episode = db.get(DramaEpisode, segment.episode_id)
+    if segment.active_run_id or episode.active_run_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "本段正在生成中，请等待完成")
+    if segment.status != "approved":
+        raise HTTPException(status.HTTP_409_CONFLICT, "本段尚未通过，无需驳回")
+    segment.status = "review"
+    for shot in composer.segment_shots(db, segment):
+        if shot.status == "approved":
+            shot.status = "rendered"
+    db.commit()
+    return _serialize_episode(db, episode)
 
 
 @router.post("/shots/{sid}/reject")
@@ -1186,16 +1405,19 @@ def reject_shot(sid: int, body: DramaRejectIn, user: User = Depends(drama_user),
                 db: Session = Depends(get_db)):
     shot = _shot(db, sid, user)
     episode = db.get(DramaEpisode, shot.episode_id)
-    if episode.status != "review":
-        raise HTTPException(status.HTTP_409_CONFLICT, "当前集不在审片阶段")
+    segment = db.get(DramaSegment, shot.segment_id) if shot.segment_id else None
+    if segment is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "该镜头还没有分段，请先重新分段")
+    if segment.status != "review":
+        raise HTTPException(status.HTTP_409_CONFLICT, "该镜头所属段不在审片阶段")
     if shot.status not in ("rendered", "approved", "rejected"):
         raise HTTPException(status.HTTP_409_CONFLICT, "该镜头当前不可返修")
     clip = drama_runner.current_clip(db, shot.id)
-    _reject_if_stale(clip, episode, shot.shot_no)
+    _reject_if_stale(clip, shot)
     if not body.rerun:
         shot.status = "rejected"
         db.commit()
-        return {"shot": _serialize_shot(shot, clip, episode)}
+        return {"shot": _serialize_shot(shot, clip, episode, segment.segment_no)}
     _require_node()
     try:
         result = drama_runner.submit_patch(db, episode, shot, body.reason, anchor=body.anchor)
@@ -1204,7 +1426,7 @@ def reject_shot(sid: int, body: DramaRejectIn, user: User = Depends(drama_user),
     run = db.get(DramaRun, result["run_id"])
     shot = db.get(DramaShot, sid)
     return {
-        "shot": _serialize_shot(shot, clip, episode),
+        "shot": _serialize_shot(shot, clip, episode, segment.segment_no),
         "run": _serialize_run(db, run),
         "cost": result["cost"],
     }
@@ -1298,20 +1520,22 @@ def ai_precheck(eid: int, body: DramaAiPrecheckIn,
 
     by_no = {row["shot_no"]: row for row in result["data"]["results"]}
     now = datetime.now().isoformat(timespec="seconds")
+    # 单镜预检对段指纹，整集预检对集指纹；序列化时按 scope 选对应口径判 stale
+    spec = target[0].spec_hash if body.scope == "shot" and target else episode.spec_hash
     for shot in target:
         row = by_no.get(shot.shot_no)
         if row is None:
             continue
         qa = _json(shot.qa, {}) if shot.qa else {}
         qa["ai"] = {
-            "spec_hash": episode.spec_hash, "scope": body.scope,
+            "spec_hash": spec, "scope": body.scope,
             "score": row["score"], "issues": row["issues"], "at": now,
         }
         shot.qa = json.dumps(qa, ensure_ascii=False)
     db.commit()
 
     payload = {
-        **_ai_meta(result), "scope": body.scope, "spec_hash": episode.spec_hash,
+        **_ai_meta(result), "scope": body.scope, "spec_hash": spec,
         "summary": result["data"]["summary"], "results": result["data"]["results"],
         "image_used": bool(images),
     }
@@ -1322,22 +1546,55 @@ def ai_precheck(eid: int, body: DramaAiPrecheckIn,
 
 def _review_warnings(db: Session, episode: DramaEpisode, bundle: dict) -> list:
     warnings = []
-    full_cost = bundle["stats"]["full_cost"] or 0
-    if full_cost > 0:
+    generation_cost = bundle["stats"]["generation_cost"] or 0
+    if generation_cost > 0:
         hot = [
             s for s in bundle["shots"]
-            if int(s.repair_cost_total or 0) > 0.4 * full_cost
+            if int(s.repair_cost_total or 0) > 0.4 * generation_cost
         ]
         if hot:
             warnings.append({
                 "code": "REPAIR_COST_HIGH",
-                "message": "已返修成本接近半集，建议整集重跑",
+                "message": "已返修成本接近半集，建议重生成对应段",
                 "shot_nos": [s.shot_no for s in hot],
             })
     if bundle["final_stale"]:
         warnings.append({
             "code": "FINAL_STALE",
-            "message": "成片已过旧（分镜或角色卡已改动），请重新生成整集后再交付",
+            "message": "集成片已过旧（分镜或角色卡已改动），请重新生成再交付",
+        })
+    # 段级：缺段 / 段成片过旧
+    shots = bundle["shots"]
+    if shots and not bundle["segments"]:
+        warnings.append({
+            "code": "SEGMENT_MISSING",
+            "message": "本集还没有分段，请先分段再生成",
+        })
+    elif shots and any(s.segment_id is None for s in shots):
+        warnings.append({
+            "code": "SEGMENT_MISSING",
+            "message": "分镜已改动，请重新分段后再生成",
+        })
+    stale_segments = []
+    for segment in bundle["segments"]:
+        cut = bundle["cuts"].get(segment.id)
+        if cut is None or cut.spec_hash != segment.spec_hash:
+            stale_segments.append(segment.segment_no)
+    if stale_segments:
+        warnings.append({
+            "code": "SEGMENT_STALE",
+            "message": f"第 {'、'.join(str(n) for n in stale_segments)} 段成片缺失或已过旧",
+            "segment_nos": stale_segments,
+        })
+    bridge_missing = [
+        segment.segment_no for segment in bundle["segments"]
+        if segment.entry_mode == "continue" and not segment.bridge_upload_id
+    ]
+    if bridge_missing:
+        warnings.append({
+            "code": "SEGMENT_BRIDGE_MISSING",
+            "message": "承接段尚未抽取桥接帧，生成时自动补齐",
+            "segment_nos": bridge_missing,
         })
     return warnings
 
@@ -1363,12 +1620,23 @@ def review_episode(eid: int, user: User = Depends(drama_user), db: Session = Dep
     episode = _episode(db, eid, user)
     bundle = _episode_bundle(db, episode)
     sheet = drama_runner.current_sheet(db, episode)
+    shots_by_segment: dict = {}
+    for shot in bundle["shots"]:
+        if shot.segment_id is not None:
+            shots_by_segment.setdefault(shot.segment_id, []).append(shot)
+    no_by_segment = {s.id: s.segment_no for s in bundle["segments"]}
     return {
         "episode": _serialize_episode(db, episode),
         "stats": bundle["stats"],
         "shots": [
-            _serialize_shot(shot, bundle["clips"].get(shot.id), episode)
+            _serialize_shot(shot, bundle["clips"].get(shot.id), episode,
+                            no_by_segment.get(shot.segment_id))
             for shot in bundle["shots"]
+        ],
+        "segments": [
+            _serialize_segment(segment, shots_by_segment.get(segment.id, []),
+                               bundle["cuts"].get(segment.id))
+            for segment in bundle["segments"]
         ],
         "seams": _seams(bundle),
         "sheet_url": _artifact_url(sheet) or "",
@@ -1435,10 +1703,12 @@ def rollback_episode(eid: int, body: DramaRollbackIn, user: User = Depends(drama
 
 @router.get("/episodes/{eid}/download")
 def download_episode(eid: int, kind: str = Query(default="final"),
+                     artifact_id: Optional[int] = Query(default=None),
                      download: int = Query(default=0, ge=0, le=1),
                      token: Optional[str] = Query(default=None),
                      creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_optional),
                      db: Session = Depends(get_db)):
+    """三级下载：final（集成片）/ segment（段成片）/ clip（单镜）。"""
     raw = token or (creds.credentials if creds is not None else None)
     user_id = decode_token(raw) if raw else None
     if user_id is None:
@@ -1447,12 +1717,20 @@ def download_episode(eid: int, kind: str = Query(default="final"),
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户不存在")
     episode = _episode(db, eid, user)
-    if kind != "final":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持下载成片")
-    final = drama_runner.current_final(db, episode)
-    if final is None:
+    target: Optional[DramaArtifact] = None
+    if kind == "final":
+        target = drama_runner.current_final(db, episode)
+    elif kind in ("segment", "clip"):
+        if artifact_id is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "请指定 artifact_id")
+        target = db.get(DramaArtifact, artifact_id)
+        if target is None or target.episode_id != episode.id or target.kind != kind:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "版本不存在")
+    else:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "只支持下载集成片/段成片/单镜成片")
+    if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "成片不存在")
     suffix = f"?token={raw}" if raw else ""
     if download:
         suffix += ("&" if suffix else "?") + "download=1"
-    return RedirectResponse(f"/files/drama/{final.id}{suffix}", status_code=307)
+    return RedirectResponse(f"/files/drama/{target.id}{suffix}", status_code=307)

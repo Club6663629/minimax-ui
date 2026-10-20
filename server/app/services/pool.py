@@ -22,7 +22,6 @@ from typing import List, Optional
 import httpx
 
 from ..config import settings
-from . import quarantine as poison_guard
 from .clouds import registry
 
 logger = logging.getLogger(__name__)
@@ -47,8 +46,6 @@ class WorkerNode:
         self.queue_busy = False             # ComfyUI 真实队列是否忙碌（心跳探测 /queue）
         self.disabled = False               # 手动置忙（外部清单）：派发侧视同 busy
         self.cloud = None                   # 云端实例（clouds/*.env 按 url 绑定；非云节点为 None）
-        self.ram_free_gb = None            # 宿主可用内存 GB（心跳刷新，POISON_RAM 长任务准入用）
-        self.ram_total_gb = None           # 宿主总内存 GB
 
     @property
     def busy(self) -> bool:
@@ -197,7 +194,6 @@ class WorkerPool:
         self._cloud_task: Optional[asyncio.Task] = None
         self._rr_index = 0  # 生成节点轮询指针（round-robin，避免永远优先第一个节点）
         self._disabled_meta: dict = {}
-        self._ram_log_ts = 0.0  # POISON_RAM 准入告警节流
         # 云端实例绑定：按 CLOUD_WORKER_URL 精确匹配；目录不存在/不匹配只告警（防误操作）
         try:
             registry.bind_nodes(self.nodes)
@@ -245,14 +241,6 @@ class WorkerPool:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(f"{node.url}/system_stats")
                 r.raise_for_status()
-                try:  # POISON_RAM：记录宿主可用内存，供长任务准入
-                    _sysd = (r.json() or {}).get("system") or {}
-                    _tot, _free = _sysd.get("ram_total") or 0, _sysd.get("ram_free") or 0
-                    if _tot:
-                        node.ram_total_gb = _tot / 1024 ** 3
-                        node.ram_free_gb = _free / 1024 ** 3
-                except Exception:
-                    pass
                 # 同时探测真实队列状态：有 running/pending 即视为忙碌
                 try:
                     q = await client.get(f"{node.url}/queue")
@@ -310,28 +298,6 @@ class WorkerPool:
         }
 
     # ---- 槽位分配 ----
-    def _ram_filter(self, idle: List[WorkerNode], long_task: bool) -> List[WorkerNode]:
-        """长任务内存准入（POISON_RAM）：宿主可用内存不足的节点不参与长任务派发。
-
-        事故根因是"长任务把宿主内存打爆 → kernel OOM 杀 python"，故派发前先看
-        /system_stats 的 ram_free（心跳每 10s 刷新）。全部节点都不达标时返回空，
-        调用方自然让任务排队等待，而不是把节点打崩。
-        """
-        if not long_task or not poison_guard.ram_admission_enabled():
-            return idle
-        need = poison_guard.long_task_ram_min_gb()
-        ok = [n for n in idle if n.ram_free_gb is None or n.ram_free_gb >= need]
-        if not ok and idle:
-            now = time.time()
-            if now - getattr(self, "_ram_log_ts", 0) > 60:
-                self._ram_log_ts = now
-                logger.warning(
-                    "长任务准入拦截：无节点满足宿主可用内存 ≥ %sGB（%s）",
-                    need, ", ".join(f"{n.url}={n.ram_free_gb if n.ram_free_gb is None else round(n.ram_free_gb, 1)}GB"
-                                    for n in idle),
-                )
-        return ok
-
     def acquire_generate(self, heavy: bool, task_id: int) -> Optional[WorkerNode]:
         """领取生成节点：时长>10s 的任务优先 heavy 节点（A100），否则任意空闲节点。
 
@@ -339,7 +305,7 @@ class WorkerPool:
         节点（此前 idle[0] 导致 45 永远优先、51/246 空闲）。
         """
         idle = [n for n in self.nodes if n.role == "generate" and n.healthy and not n.busy]
-        idle = self._ram_filter(self._split_by_priority(idle), heavy)  # POISON_RAM 长任务内存准入
+        idle = self._split_by_priority(idle)
         if not idle:
             return None
         if heavy:
@@ -384,7 +350,7 @@ class WorkerPool:
             n for n in self.nodes
             if n.role == "generate" and n.has_tag("director") and n.healthy and not n.busy
         ]
-        idle = self._ram_filter(self._split_by_priority(idle), True)  # POISON_RAM 长任务内存准入
+        idle = self._split_by_priority(idle)
         if not idle:
             return None
         node = self._pick_round_robin(idle)

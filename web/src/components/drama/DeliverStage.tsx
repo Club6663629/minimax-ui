@@ -1,9 +1,10 @@
-/** S7 交付：成片播放与下载、消耗汇总、确认交付 / 重新编辑。 */
+/** S7 交付：集成片 + 段成片 + 单镜下载、消耗汇总、确认交付 / 重新编辑。 */
 import { useState } from "react";
-import { CheckCircle2, Copy, Download, Film, RotateCcw, Sparkles } from "lucide-react";
+import { CheckCircle2, Copy, Download, Film, Layers, RotateCcw, Sparkles } from "lucide-react";
 import { api, fileUrl } from "../../api/client";
 import type { DramaAiCopy, DramaEpisode } from "../../types";
 import { errText, fmtSecs } from "./labels";
+import SegmentCards from "./SegmentCards";
 
 export default function DeliverStage({
   episode,
@@ -24,8 +25,10 @@ export default function DeliverStage({
   const [copyLabel, setCopyLabel] = useState("");
   const done = episode.status === "done";
   const finalStale = episode.final_stale;
+  const segmentsReady =
+    episode.segments.length > 0 && episode.segments.every((segment) => !segment.stale);
   const canFinish =
-    !done && !finalStale && Boolean(episode.final_url) && !episode.active_run;
+    !done && !finalStale && Boolean(episode.final_url) && !episode.active_run && segmentsReady;
 
   const copyLink = async () => {
     const path = `/api/drama/episodes/${episode.id}/download?kind=final`;
@@ -143,14 +146,16 @@ export default function DeliverStage({
         )}
       </section>
 
-      <section className="panel grid grid-cols-2 gap-3 px-4 py-3 text-xs md:grid-cols-5">
+      <section className="panel grid grid-cols-2 gap-3 px-4 py-3 text-xs md:grid-cols-6">
         <div>
           <p className="text-foreground-500">成片时长</p>
           <p className="mt-0.5 text-sm text-foreground-900">{fmtSecs(episode.final_duration)}</p>
         </div>
         <div>
-          <p className="text-foreground-500">镜头数</p>
-          <p className="mt-0.5 text-sm text-foreground-900">{episode.stats.shots}</p>
+          <p className="text-foreground-500">镜头 / 段</p>
+          <p className="mt-0.5 text-sm text-foreground-900">
+            {episode.stats.shots} / {episode.segments.length}
+          </p>
         </div>
         <div>
           <p className="text-foreground-500">总消耗</p>
@@ -221,6 +226,37 @@ export default function DeliverStage({
         )}
       </section>
 
+      <section className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-foreground-900">
+            <Layers size={14} /> 段成片
+          </h3>
+          <span className="text-xs text-foreground-500">
+            {episode.segments.filter((segment) => !segment.stale).length} / {episode.segments.length} 段就绪
+          </span>
+          {!segmentsReady && (
+            <span className="text-xs text-rose-600">还有段未生成或已过旧，确认交付会被拒绝。</span>
+          )}
+        </div>
+        <SegmentCards
+          segments={episode.segments}
+          renderActions={(segment) =>
+            segment.cut_url ? (
+              <a
+                className="inline-flex items-center gap-1 text-[11px] text-primary-600 hover:underline"
+                href={fileUrl(`${segment.cut_url}?download=1`)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Download size={11} /> 下载段成片
+              </a>
+            ) : (
+              <span className="text-[10px] text-rose-600">缺段成片</span>
+            )
+          }
+        />
+      </section>
+
       <section className="panel p-4">
         <h3 className="text-sm font-medium text-foreground-900">逐镜下载</h3>
         <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -230,6 +266,11 @@ export default function DeliverStage({
               className="flex items-center gap-2 rounded-xl border border-background-200 px-2.5 py-2 text-xs"
             >
               <span className="text-foreground-500">#{shot.shot_no}</span>
+              {shot.segment_no !== null && (
+                <span className="rounded bg-background-200 px-1 text-[10px] text-foreground-500">
+                  段{shot.segment_no}
+                </span>
+              )}
               <span className="text-foreground-700">{fmtSecs(shot.duration_s)}</span>
               <span className="text-[10px] text-foreground-400">
                 v{shot.version_no || 0}
@@ -264,7 +305,13 @@ export default function DeliverStage({
             className="btn-primary"
             disabled={!canFinish || busy}
             onClick={() => void finish()}
-            title={finalStale ? "成片过旧，需重新生成" : ""}
+            title={
+              finalStale
+                ? "集成片过旧，需重新生成受影响段"
+                : !segmentsReady
+                  ? "还有段未生成或已过旧"
+                  : ""
+            }
           >
             <CheckCircle2 size={15} /> {busy ? "提交中…" : "确认交付"}
           </button>
