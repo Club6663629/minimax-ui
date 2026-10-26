@@ -124,14 +124,16 @@ if [[ "$RUN_TEST" == "1" ]]; then
 fi
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
-  PY="$ROOT/../../../../venv/bin/python"
-  if [[ ! -x "$PY" ]]; then
-    echo "==> 跳过平台 smoke：找不到 $PY" >&2
+  # smoke 读 config 里的相对路径（data/、uploads/），必须在 server/ 下跑，否则会写到 vendor 目录
+  REPO_ROOT="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  PY="${REPO_ROOT:+$REPO_ROOT/server/venv/bin/python}"
+  if [[ -z "$REPO_ROOT" || ! -x "$PY" ]]; then
+    echo "==> 跳过平台 smoke：不在 git 仓库内或找不到 server/venv" >&2
   else
     echo "==> 平台 smoke"
     for smoke in studio_keyframe_smoke studio_clip_smoke studio_render_smoke; do
       printf '    %-24s ' "$smoke"
-      if log="$("$PY" "$ROOT/../../../../../tmp/$smoke.py" 2>&1 | tail -1)"; then
+      if log="$(cd "$REPO_ROOT/server" && "$PY" "$REPO_ROOT/tmp/$smoke.py" 2>&1 | tail -1)"; then
         echo "$log"
       else
         echo "FAIL"
