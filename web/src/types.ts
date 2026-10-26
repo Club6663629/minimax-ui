@@ -741,3 +741,268 @@ export interface DramaSegmentDraft {
   shot_ids: number[];
 }
 
+// ---------------------------------------------------------------- 剧集工坊（studio）
+
+/** 一张设定图（一个视图一个版本）。url 走 /files/studio/{id}，配 fileUrl 预览。 */
+export interface StudioAssetView {
+  id: number;
+  view: string;
+  version: number;
+  path: string;
+  url: string;
+  sha256: string;
+  confirmed: boolean;
+}
+
+/** cast.json / art.json 里的单条记录。只有 image.prompt 参与出图。 */
+export interface StudioAssetData {
+  id?: string;
+  name?: string;
+  summary?: string;
+  anchors?: string[];
+  scale?: string;
+  primary?: boolean;
+  image?: {
+    prompt?: string;
+    negativePrompt?: string;
+    promptLocal?: string;
+    sheet?: string;
+    tags?: string[];
+  };
+  persona?: Record<string, unknown>;
+  usage?: { episodes?: number[]; beats?: string[] };
+  [key: string]: unknown;
+}
+
+/** 角色 / 场景 / 道具。ref_id 是 shuohao 编码（C01/S01/P01）。 */
+export interface StudioAsset {
+  id: number;
+  kind: "character" | "scene" | "prop";
+  ref_id: string;
+  name: string;
+  status: string;
+  data: StudioAssetData;
+  views: StudioAssetView[];
+}
+
+export interface StudioProject {
+  id: number;
+  title: string;
+  source_name: string;
+  status: string;
+  look: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudioEpisode {
+  id: number;
+  ep_no: number;
+  name: string;
+  status: string;
+  updated_at: string;
+}
+
+/** 80 集地图的一行：集 + 场数 + 目标秒数 + 切表进度。 */
+export interface StudioMapRow extends StudioEpisode {
+  scenes: number;
+  /** 剧本目标秒数 */
+  seconds: number;
+  /** 已生成的切数；没生成切表为 0 */
+  cuts?: number;
+  cut_seconds?: number;
+}
+
+export interface StudioGenerateResult {
+  episode: StudioEpisode;
+  doc: unknown;
+  summary: StudioSummary;
+  gates: StudioGates;
+}
+
+export interface StudioGate {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface StudioGates {
+  kind: string;
+  gates: StudioGate[];
+  problems: string[];
+  stats?: Record<string, unknown> | null;
+  passed: boolean;
+}
+
+export interface StudioJob {
+  id: number;
+  kind: string;
+  target_type: string;
+  target_key: string;
+  task_id: number | null;
+  status: string;
+  cost: number;
+  error: string;
+  created_at: string;
+  /** 关联 Task 的真实状态（queued/generating_images/done/failed） */
+  task_status?: string;
+  task_error?: string;
+  result?: string;
+}
+
+export interface StudioStatus {
+  enabled: boolean;
+  image: {
+    available?: boolean;
+    worker?: string;
+    template_exists?: boolean;
+    sizes?: Record<string, number[]>;
+  };
+  cost_image: number;
+}
+
+/** script.json 的一场。 */
+export interface StudioScene {
+  sceneId: string;
+  characters?: string[];
+  props?: string[];
+  flow?: Array<{ line?: string; speaker?: string; action?: string; delivery?: string }>;
+}
+
+/** script.json 的一集。 */
+export interface StudioScriptEpisode {
+  ep: number;
+  title?: string;
+  hook?: string;
+  targetSeconds?: number;
+  characters?: string[];
+  scenes?: StudioScene[];
+  beatsClaimed?: unknown[];
+}
+
+export interface StudioScript {
+  source?: string;
+  episodes?: StudioScriptEpisode[];
+}
+
+/** 切 = 关键帧。一个切一张关键帧，段内按顺序播。 */
+export interface StudioCut {
+  /** 覆盖的节拍序号（1 基） */
+  beats: number[];
+  seconds: number;
+  /** extreme-wide / wide / medium / close / extreme-close */
+  size: string;
+  /** H3 官方运镜词：Push In / Static Shot … */
+  camera: string;
+  characters: string[];
+  props?: string[];
+  /** 中文分镜图提示词（画关键帧用） */
+  frame: string;
+  /** 画幅，平台扩展：默认 9:16 竖屏 */
+  aspectRatio?: string;
+  /** 项目级视觉风格（取自 look.keywords），M3 拼进出图/出视频提示词 */
+  look?: string;
+  /** 中文镜头正文（不出现角色名，可直接给视频模型） */
+  shot: string;
+  lens: string;
+  cameraPosition: string;
+  composition: string;
+  eyeline: string;
+  focus: string;
+  stability: string;
+  sfx?: string;
+  lighting?: string;
+}
+
+/** 段 = 一次生成。段内切按顺序播，H3 提示词按切对齐关键帧。 */
+export interface StudioSegment {
+  id: string;
+  /** 1 基场号 */
+  sceneIndex: number;
+  cuts: StudioCut[];
+  h3Prompt: string;
+  blocking: string;
+  soundscape: string;
+  music: string;
+}
+
+/** storyboard.json：一集的分段与切表。 */
+export interface StudioStoryboard {
+  source?: string;
+  aspectRatio: string;
+  promptLang: string;
+  /** 项目级视觉风格，与每个 cut.look 一致 */
+  look?: string;
+  params?: Record<string, number>;
+  episodes?: Array<{ ep: number; segments: StudioSegment[] }>;
+}
+
+/** 一切一张关键帧。status=ready 时 url 可用（/files/studio/kf/{id}）。 */
+export interface StudioKeyframe {
+  id: number;
+  segment_id: string;
+  cut_index: number;
+  status: "missing" | "queued" | "ready" | "stale";
+  url: string;
+  sha256: string;
+}
+
+/** 一段关键帧排单结果：blockers 是「设定图没出」这类硬拦。 */
+export interface StudioKeyframeQueueResult {
+  queued: number;
+  skipped: number;
+  blockers: string[];
+  items: StudioJob[];
+}
+
+/** 一段成片：一段一次 r2v，状态由后端按任务实时映射。 */
+export interface StudioSegmentClip {
+  id: number;
+  segment_id: string;
+  status: "missing" | "queued" | "running" | "ready" | "failed";
+  task_id: number | null;
+  duration_sec: number;
+  seconds: number;
+  cut_count: number;
+  url: string;
+  error: string;
+}
+
+/** 一段排片结果：blockers 是「关键帧没出」这类硬拦。 */
+export interface StudioClipQueueResult {
+  queued: number;
+  skipped: number;
+  blockers: string[];
+  items: StudioSegmentClip[];
+}
+
+/** 合成清单里的一段：计划秒数与实测时长并列，交付可追溯。 */
+export interface StudioRenderCut {
+  index: number;
+  segment_id: string;
+  file: string;
+  planned_sec: number;
+  actual_sec: number;
+}
+
+/** 一条成片：每次合成新插一条，GET 只返回最新。 */
+export interface StudioRender {
+  id: number;
+  status: "rendering" | "done" | "failed";
+  url: string;
+  duration_sec: number;
+  error: string;
+  cutlist: StudioRenderCut[];
+}
+
+/** 后端算好的概览，前端不重算。 */
+export interface StudioSummary {
+  segments?: number;
+  cuts?: number;
+  seconds?: number;
+  sceneIndexes?: number[];
+  scenes?: number;
+  locations?: number;
+}
+

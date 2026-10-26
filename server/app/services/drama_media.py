@@ -20,6 +20,22 @@ class MediaError(RuntimeError):
     """媒体处理失败（缺文件 / ffmpeg 报错 / 产物为空）。"""
 
 
+def _resolve_ffmpeg() -> str:
+    """PATH 里没有 ffmpeg 时回落 imageio-ffmpeg 自带二进制（开发机常见）。"""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 —— 没装 shim 就继续用字面量，让调用方报缺依赖
+        return "ffmpeg"
+
+
+FFMPEG = _resolve_ffmpeg()
+
+
 def _run(cmd: list, timeout: int = 900) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -40,7 +56,7 @@ def run_ffmpeg(cmd: list, timeout: int = 900) -> subprocess.CompletedProcess:
 def _ffmpeg_header(path: Path) -> str:
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-i", str(path)],
+            [FFMPEG, "-hide_banner", "-i", str(path)],
             capture_output=True, text=True, timeout=30,
         )
         return (proc.stderr or "") + (proc.stdout or "")
@@ -99,7 +115,7 @@ def slice_frames(master, out, start_frame: int, end_frame: int, fps: int = 24,
         has_audio = probe_has_audio(master)
     duration = (end_frame - start_frame) / float(fps)
     vf = f"trim=start_frame={start_frame}:end_frame={end_frame},setpts=PTS-STARTPTS"
-    base = ["ffmpeg", "-y", "-v", "error", "-i", str(master)]
+    base = [FFMPEG, "-y", "-v", "error", "-i", str(master)]
     tail = [
         "-r", str(fps), "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(tmp),
@@ -134,7 +150,7 @@ def pad_frames(src, out, frames: int, fps: int = 24) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     vf = f"tpad=stop_mode=clone:stop_duration={frames / fps:.6f},trim=end_frame={frames},setpts=PTS-STARTPTS"
     run_ffmpeg([
-        "ffmpeg", "-y", "-v", "error", "-i", str(src), "-vf", vf,
+        FFMPEG, "-y", "-v", "error", "-i", str(src), "-vf", vf,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(out),
     ])
@@ -163,7 +179,7 @@ def concat_clips(paths: list, out, fps: int = 24) -> Path:
     tmp = out.with_suffix(".tmp.mp4")
     expected = sum(probe_duration(p) for p in paths)
     try:
-        run_ffmpeg(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+        run_ffmpeg([FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0",
                     "-i", str(list_path), "-c", "copy", "-movflags", "+faststart", str(tmp)])
         actual = probe_duration(tmp)
         if expected and abs(actual - expected) > 0.25:
@@ -171,7 +187,7 @@ def concat_clips(paths: list, out, fps: int = 24) -> Path:
     except MediaError as exc:
         logger.warning("concat -c copy 失败，重编码兜底：%s", exc)
         run_ffmpeg([
-            "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_path),
+            FFMPEG, "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(list_path),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
             "-r", str(fps), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
             "-movflags", "+faststart", str(tmp),
@@ -191,7 +207,7 @@ def extract_frame(clip, frame_index: int, out) -> Path:
         raise MediaError(f"镜头文件缺失：{clip.name}")
     out.parent.mkdir(parents=True, exist_ok=True)
     run_ffmpeg([
-        "ffmpeg", "-y", "-v", "error", "-i", str(clip),
+        FFMPEG, "-y", "-v", "error", "-i", str(clip),
         "-vf", f"select=eq(n\\,{max(0, int(frame_index))})", "-vsync", "0",
         "-frames:v", "1", str(out),
     ])
@@ -215,7 +231,7 @@ def make_sheet(clip_paths: list, out, cols: int = 4) -> Optional[Path]:
             extract_frame(clip, max(0, frames // 2), tmp_dir / f"f_{index:03d}.png")
         rows = max(1, math.ceil(len(paths) / cols))
         run_ffmpeg([
-            "ffmpeg", "-y", "-v", "error", "-i", str(tmp_dir / "f_%03d.png"),
+            FFMPEG, "-y", "-v", "error", "-i", str(tmp_dir / "f_%03d.png"),
             "-vf", f"tile={cols}x{rows}:padding=4:margin=4", "-frames:v", "1",
             "-q:v", "3", str(out),
         ])
@@ -229,14 +245,14 @@ def make_sheet(clip_paths: list, out, cols: int = 4) -> Optional[Path]:
 
 # ---------------------------------------------------------------- 接缝指标
 def _ssim(a: Path, b: Path) -> Optional[float]:
-    proc = _run(["ffmpeg", "-v", "info", "-i", str(a), "-i", str(b),
+    proc = _run([FFMPEG, "-v", "info", "-i", str(a), "-i", str(b),
                  "-lavfi", "ssim", "-f", "null", "-"])
     match = re.search(r"All:([0-9.]+)", (proc.stderr or ""))
     return round(float(match.group(1)), 4) if match else None
 
 
 def _yavg(image: Path) -> Optional[float]:
-    proc = _run(["ffmpeg", "-v", "info", "-i", str(image),
+    proc = _run([FFMPEG, "-v", "info", "-i", str(image),
                  "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG",
                  "-f", "null", "-"])
     match = re.search(r"lavfi\.signalstats\.YAVG=([0-9.]+)", (proc.stderr or ""))
@@ -244,7 +260,7 @@ def _yavg(image: Path) -> Optional[float]:
 
 
 def _mean_volume(clip: Path, start: float, duration: float) -> Optional[float]:
-    proc = _run(["ffmpeg", "-v", "info", "-ss", f"{max(0.0, start):.3f}",
+    proc = _run([FFMPEG, "-v", "info", "-ss", f"{max(0.0, start):.3f}",
                  "-t", f"{duration:.3f}", "-i", str(clip), "-vn",
                  "-af", "volumedetect", "-f", "null", "-"])
     match = re.search(r"mean_volume:\s*(-?[0-9.]+)\s*dB", (proc.stderr or ""))

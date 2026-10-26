@@ -30,3 +30,4 @@ server/clouds/*.env
 minimax-ui-patch-20260926/*
 tmp/*
 
+剧本/*

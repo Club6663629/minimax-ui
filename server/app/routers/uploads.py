@@ -226,6 +226,7 @@ def list_uploads(
     rows = (
         db.query(Upload)
         .filter(Upload.user_id == user.id)
+        .filter(Upload.slot != "studio")  # 剧集工坊关键帧的内部参考图，不进素材库
         .order_by(Upload.id.desc())
         .limit(limit)
         .all()

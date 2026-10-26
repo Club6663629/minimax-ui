@@ -137,3 +137,107 @@ def download_advideo_image(
     if not path.exists():
         raise HTTPException(status.HTTP_410_GONE, "广告图文件已失效")
     return FileResponse(path, media_type="image/png", filename=f"advideo_{task_id}_{index}.png")
+
+
+@router.get("/studio/render/{render_id}")
+def download_studio_render(
+    render_id: int,
+    download: int = Query(default=0, ge=0, le=1),
+    token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """剧集工坊成片：鉴权链 render → episode → project。"""
+    from ..studio.models import StudioEpisode, StudioProject, StudioRender
+
+    user = _user_from_query_token(token, db)
+    row = db.get(StudioRender, render_id)
+    episode = db.get(StudioEpisode, row.episode_id) if row is not None else None
+    project = db.get(StudioProject, episode.project_id) if episode is not None else None
+    if project is None or (project.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "成片不存在")
+    if row.status != "done" or not row.path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "成片尚未拼接完成")
+    path = Path(row.path)
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "成片文件已失效")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=f"studio_ep{episode.ep_no:02d}.mp4" if download else None,
+    )
+
+
+@router.get("/studio/clip/{clip_id}")
+def download_studio_clip(
+    clip_id: int,
+    download: int = Query(default=0, ge=0, le=1),
+    token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """剧集工坊段视频：鉴权链 clip → episode → project。"""
+    from ..studio.models import StudioEpisode, StudioProject, StudioSegmentClip
+
+    user = _user_from_query_token(token, db)
+    clip = db.get(StudioSegmentClip, clip_id)
+    episode = db.get(StudioEpisode, clip.episode_id) if clip is not None else None
+    project = db.get(StudioProject, episode.project_id) if episode is not None else None
+    if project is None or (project.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "段视频不存在")
+    if clip.status != "ready" or not clip.path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "段视频尚未生成完成")
+    path = Path(clip.path)
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "段视频文件已失效")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=f"studio_{clip.segment_id}.mp4" if download else None,
+    )
+
+
+@router.get("/studio/{view_id}")
+def download_studio_view(
+    view_id: int,
+    token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """剧集工坊设定图：<img> 预览用（?token= 鉴权）。
+
+    鉴权链 view → asset → project → user；落盘路径不进前端（前端只拿这个 URL）。
+    """
+    from ..studio.models import StudioAsset, StudioAssetView, StudioProject
+
+    user = _user_from_query_token(token, db)
+    row = db.get(StudioAssetView, view_id)
+    asset = db.get(StudioAsset, row.asset_id) if row is not None else None
+    project = db.get(StudioProject, asset.project_id) if asset is not None else None
+    if project is None or (project.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "设定图不存在")
+    path = Path(row.path or "")
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "设定图文件已失效")
+    return FileResponse(path, media_type="image/png", filename=f"studio_{row.id}.png")
+
+
+@router.get("/studio/kf/{keyframe_id}")
+def download_studio_keyframe(
+    keyframe_id: int,
+    token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """剧集工坊关键帧：<img> 预览用（?token= 鉴权）。
+
+    鉴权链 keyframe → episode → project → user；关键帧比设定图多一跳（集）。
+    """
+    from ..studio.models import StudioEpisode, StudioKeyframe, StudioProject
+
+    user = _user_from_query_token(token, db)
+    row = db.get(StudioKeyframe, keyframe_id)
+    episode = db.get(StudioEpisode, row.episode_id) if row is not None else None
+    project = db.get(StudioProject, episode.project_id) if episode is not None else None
+    if project is None or (project.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "关键帧不存在")
+    path = Path(row.path or "")
+    if not path.exists():
+        raise HTTPException(status.HTTP_410_GONE, "关键帧文件已失效")
+    return FileResponse(path, media_type="image/png", filename=f"studio_kf_{row.id}.png")

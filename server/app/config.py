@@ -166,6 +166,20 @@ class Settings(BaseSettings):
     cost_2k_extra: int = 15       # 2K 升级附加
     cost_4k_extra: int = 30       # 4K 升级附加
 
+    # ---- 剧集工坊（shuohao 内核）----
+    studio_enabled: bool = False
+    studio_dir: str = ""                  # 留空 = <data_dir>/studio
+    studio_node_bin: str = "node"         # 只用来跑 shuohao 的门/报告
+    studio_gate_timeout: int = 60         # 单次门超时（秒）
+    studio_cost_image: int = 0            # 0 = 沿用 cost_ad_image
+    studio_max_segment_seconds: int = 15  # 段秒数上限，与 shuohao 默认一致
+    studio_max_cuts_per_segment: int = 9  # 参考图 ≤9，一图一切
+    # 出图节点：留空 = 沿用 ADVIDEO_IMAGE_WORKER（同一个 qwen21 节点）；
+    # 计划里要单独排队时再指向另一台，不影响广告图。
+    studio_image_worker: str = ""
+    studio_image_timeout_minutes: int = 20
+    studio_image_count: int = 1           # 每次出图张数（四视图=4 次独立任务）
+
 
     @property
     def cloud_enabled(self) -> bool:
@@ -230,7 +244,9 @@ STAGING_DIR = DATA_DIR / "staging"    # 768p 中间产物
 OUTPUT_DIR = DATA_DIR / "output"      # 最终成片
 ADVIDEO_DIR = DATA_DIR / "advideo"    # 广告片候选广告图
 DRAMA_DIR = DATA_DIR / "drama"        # 短剧产物（clips/final/sheet/anchors/runs）
+# 剧集工坊：projects/<id>/assets/<C01>/<view>_v1.png
+STUDIO_DIR = Path(settings.studio_dir).resolve() if settings.studio_dir else DATA_DIR / "studio"
 WORKFLOW_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
-for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, DRAMA_DIR):
+for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, DRAMA_DIR, STUDIO_DIR):
     _d.mkdir(parents=True, exist_ok=True)

@@ -15,6 +15,8 @@ from .services import billing  # noqa: F401
 from .services import drama_runner
 from .services.pool import pool
 from .services.worker import start_worker, stop_worker
+from .studio import models as studio_models  # noqa: F401  建表时包含 studio_* 表
+from .studio import router as studio_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -279,6 +281,7 @@ app.include_router(admin.router)
 app.include_router(ops.router)
 app.include_router(legal.router)
 app.include_router(drama.router)
+app.include_router(studio_router.router)
 
 
 @app.get("/api/health")

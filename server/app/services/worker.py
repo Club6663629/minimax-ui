@@ -15,6 +15,7 @@ Mock 模式（MOCK_COMFY=1）：不依赖 ComfyUI，用 ffmpeg 生成测试视�
 import asyncio
 import json
 import logging
+import os
 import random
 import shutil
 import subprocess
@@ -90,6 +91,7 @@ def start_worker() -> None:
     _bg_tasks.append(loop.create_task(_loop_guard(_generate_loop, "生成")))
     _bg_tasks.append(loop.create_task(_loop_guard(_upscale_loop, "超分")))
     _bg_tasks.append(loop.create_task(_loop_guard(_advideo_image_loop, "广告图")))
+    _bg_tasks.append(loop.create_task(_loop_guard(_studio_images_loop, "剧集设定图")))
     _bg_tasks.append(loop.create_task(_recover_orphans()))
     logger.info("调度器已启动 (mock=%s)", settings.mock_comfy)
 
@@ -316,6 +318,7 @@ def _claim_generate() -> Optional[int]:
             .filter(
                 Task.worker_url == "",
                 Task.mode != "director",   # 导演台走 _claim_director（独占整卡）
+                Task.mode != "image",      # 剧集设定图走 _studio_images_loop（qwen21 节点）
                 or_(
                     Task.status == "generating_768p",
                     and_(Task.status == "queued", Task.enhance.is_(False)),
@@ -1523,4 +1526,258 @@ async def _advideo_image_loop() -> None:
             raise
         except Exception:
             logger.exception("广告图领取循环异常")
+            await asyncio.sleep(3)
+
+
+# ---------------------------------------------------------------- 剧集工坊：设定图
+# 与广告图分开一条循环：同一台 qwen21 节点，但工作流/提示词/计费完全独立。
+# 每个任务只出一张图（一视图一任务），失败只影响这一张。
+from . import studio_image  # noqa: E402
+from .billing import compute_studio_image_cost  # noqa: E402
+
+# 进程内占位：带上 pid，重启后旧占位就成了可回收的孤儿。
+# 不能再写死 "studio-image"——那样同一个任务会被同一进程立刻重复领取。
+STUDIO_IMAGE_PLACEHOLDER = f"studio-image:{os.getpid()}"
+
+
+def _claim_studio_images() -> Optional[int]:
+    """领取一个待出的设定图任务；重投时不再重复扣费（cost>0 跳过）。
+
+    只接两种：未占位的（worker_url 为空），以及上个进程遗留的孤儿
+    （worker_url 带 studio-image: 前缀但不是当前进程）。
+    """
+    with SessionLocal() as db:
+        task = (
+            db.query(Task)
+            .filter(
+                Task.mode == "image",
+                Task.status.in_(("queued", "generating_images")),
+                or_(
+                    Task.worker_url == "",
+                    and_(
+                        Task.worker_url.like("studio-image:%"),
+                        Task.worker_url != STUDIO_IMAGE_PLACEHOLDER,
+                    ),
+                ),
+            )
+            .order_by(Task.id)
+            .first()
+        )
+        if task is None:
+            return None
+
+        if task.cost <= 0:
+            cost = compute_studio_image_cost(1)
+            user = db.get(User, task.user_id)
+            if cost and (user is None or user.credits < cost):
+                task.status = "failed"
+                task.error = "积分不足"
+                task.finished_at = datetime.now()
+                db.commit()
+                return None
+            if cost and user is not None:
+                add_credits(db, user, -cost, "consume", note="剧集设定图", task_id=task.id)
+            task.cost = cost
+
+        task.status = "generating_images"
+        task.worker_url = STUDIO_IMAGE_PLACEHOLDER
+        task.started_at = task.started_at or datetime.now()
+        db.commit()
+        return task.id
+
+
+async def _run_studio_images(task_id: int) -> None:
+    """出一张设定图或关键帧：调 qwen21 工作流 → 落盘 → 写对应业务表。"""
+    from ..studio.models import StudioAsset, StudioAssetView, StudioJob
+
+    payload: dict = {}
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                return
+            try:
+                payload = json.loads(task.segments or "{}")
+            except (TypeError, ValueError):
+                payload = {}
+        if not payload.get("prompt"):
+            raise RuntimeError("任务缺少出图提示词（segments 为空）")
+
+        if payload.get("target") == "keyframe":
+            await _run_studio_keyframe(task_id, payload)
+            return
+
+        ref_paths = [Path(p) for p in payload.get("refs") or [] if Path(p).exists()]
+        seed = payload.get("seed")
+        result = await studio_image.generate_to_dir(
+            project_id=int(payload["project_id"]),
+            ref_id=str(payload["ref_id"]),
+            view=str(payload["view"]),
+            version=int(payload.get("version") or 1),
+            prompt=str(payload["prompt"]),
+            negative=str(payload.get("negative") or ""),
+            seed=int(seed) if seed is not None else None,
+            ref_paths=ref_paths,
+        )
+
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                return
+            asset = db.get(StudioAsset, int(payload["asset_id"]))
+            if asset is not None:
+                version = int(payload.get("version") or 1)
+                row = (
+                    db.query(StudioAssetView)
+                    .filter(
+                        StudioAssetView.asset_id == asset.id,
+                        StudioAssetView.view == str(payload["view"]),
+                        StudioAssetView.version == version,
+                    )
+                    .one_or_none()
+                )
+                if row is None:
+                    row = StudioAssetView(
+                        asset_id=asset.id, view=str(payload["view"]), version=version
+                    )
+                    db.add(row)
+                row.path = result["path"]
+                row.sha256 = result["sha256"]
+                row.model = "qwen"
+                row.prompt = str(payload["prompt"])
+                row.refs = json.dumps(payload.get("refs") or [], ensure_ascii=False)
+                row.confirmed = False
+                asset.status = "imaging"
+
+                job = (
+                    db.query(StudioJob)
+                    .filter(StudioJob.task_id == task_id)
+                    .one_or_none()
+                )
+                if job is not None:
+                    job.status = "done"
+                    job.cost = int(task.cost or 0)
+                    job.error = ""
+
+            task.status = "done"
+            task.video_path = result["path"]
+            task.finished_at = datetime.now()
+            task.worker_url = ""
+            db.commit()
+        logger.info(
+            "剧集设定图任务 #%s 完成：%s → %s",
+            task_id, payload.get("view"), result.get("path"),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("剧集设定图任务 #%s 失败", task_id)
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is not None:
+                task.status = "failed"
+                task.error = f"设定图生成失败: {str(exc)[:400]}"
+                task.worker_url = ""
+                task.finished_at = datetime.now()
+                # 系统失败全额退还（重试成功则不再退）
+                refund = int(task.cost or 0)
+                if refund > 0:
+                    user = db.get(User, task.user_id)
+                    if user is not None:
+                        add_credits(db, user, refund, "refund", note="剧集设定图失败退款", task_id=task.id)
+                    task.cost = 0
+                try:
+                    from ..studio.models import StudioJob, StudioKeyframe
+
+                    job = db.query(StudioJob).filter(StudioJob.task_id == task_id).one_or_none()
+                    if job is not None:
+                        job.status = "failed"
+                        job.error = str(exc)[:400]
+                    # 关键帧失败回退到 missing，前端可重试；不保留“排队中”的假象
+                    if payload.get("target") == "keyframe" and payload.get("segment_id"):
+                        kf = (
+                            db.query(StudioKeyframe)
+                            .filter(
+                                StudioKeyframe.episode_id == int(payload["episode_id"]),
+                                StudioKeyframe.segment_id == str(payload["segment_id"]),
+                                StudioKeyframe.cut_index == int(payload["cut_index"]),
+                            )
+                            .one_or_none()
+                        )
+                        if kf is not None:
+                            kf.status = "missing"
+                except Exception:  # noqa: BLE001 业务表写不进去不影响任务退款
+                    logger.warning("回写 studio_jobs 失败（任务 #%s）", task_id)
+                db.commit()
+
+
+async def _run_studio_keyframe(task_id: int, payload: dict) -> None:
+    """出一张关键帧：9:16 改图 → 落盘 → 写 studio_keyframes。失败抛给外层统一退款。"""
+    from ..studio.models import StudioJob, StudioKeyframe
+
+    out_path = Path(str(payload.get("out_path") or ""))
+    if not str(out_path):
+        raise RuntimeError("关键帧任务缺少落盘路径")
+    ref_paths = [Path(p) for p in payload.get("refs") or [] if Path(p).exists()]
+    result = await studio_image.generate_image(
+        prompt=str(payload["prompt"]),
+        ratio=str(payload.get("ratio") or "9:16"),
+        ref_paths=ref_paths,
+        prefix=f"studio/p{payload['project_id']}/{payload['segment_id']}_c{payload['cut_index']}",
+        out_path=out_path,
+    )
+
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if task is None:
+            return
+        row = (
+            db.query(StudioKeyframe)
+            .filter(
+                StudioKeyframe.episode_id == int(payload["episode_id"]),
+                StudioKeyframe.segment_id == str(payload["segment_id"]),
+                StudioKeyframe.cut_index == int(payload["cut_index"]),
+            )
+            .one_or_none()
+        )
+        if row is not None:
+            row.path = result["path"]
+            row.sha256 = result["sha256"]
+            row.prompt = str(payload["prompt"])
+            row.refs = json.dumps(payload.get("refs") or [], ensure_ascii=False)
+            row.status = "ready"
+
+        job = db.query(StudioJob).filter(StudioJob.task_id == task_id).one_or_none()
+        if job is not None:
+            job.status = "done"
+            job.cost = int(task.cost or 0)
+            job.error = ""
+
+        task.status = "done"
+        task.video_path = result["path"]
+        task.finished_at = datetime.now()
+        task.worker_url = ""
+        db.commit()
+    logger.info(
+        "剧集关键帧任务 #%s 完成：%s c%s → %s",
+        task_id, payload.get("segment_id"), payload.get("cut_index"), result.get("path"),
+    )
+
+
+async def _studio_images_loop() -> None:
+    """设定图领取循环：节点未配时空转，不影响其它循环。"""
+    while True:
+        try:
+            if not studio_image.available():
+                await asyncio.sleep(15)
+                continue
+            task_id = await asyncio.to_thread(_claim_studio_images)
+            if task_id is None:
+                await asyncio.sleep(3)
+                continue
+            asyncio.get_event_loop().create_task(_run_studio_images(task_id))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("剧集设定图领取循环异常")
             await asyncio.sleep(3)

@@ -1,6 +1,6 @@
 /** 页面骨架：顶部导航（海白菜品牌）+ 协议更新横幅 + 内容区 + 页脚常驻法律文本入口。 */
 import { useEffect, useState } from "react";
-import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck, Sparkles } from "lucide-react";
+import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck, Sparkles, BookOpen } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import BrandLogo from "./BrandLogo";
@@ -81,6 +81,7 @@ export default function Layout() {
 
           <nav className="flex items-center gap-1">
             <NavItem to="/" icon={<Sparkles size={15} />} label="创作" />
+            <NavItem to="/studio" icon={<BookOpen size={15} />} label="剧集工坊" />
             <NavItem
               to="/drama"
               icon={<Clapperboard size={15} />}

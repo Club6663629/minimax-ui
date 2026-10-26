@@ -56,6 +56,16 @@ def compute_ad_image_cost(image_count: int) -> int:
     return max(0, int(image_count or 0)) * int(settings.cost_ad_image or 0)
 
 
+def compute_studio_image_cost(image_count: int = 1) -> int:
+    """剧集工坊出图：每张单价 × 张数。
+
+    STUDIO_COST_IMAGE=0 时沿用广告图单价（同一个 qwen21 节点、同一档成本）。
+    四视图是四次独立任务，按张计费，重出一张只收一张。
+    """
+    unit = int(settings.studio_cost_image or settings.cost_ad_image or 0)
+    return max(0, int(image_count or 0)) * unit
+
+
 def add_credits(
     db: Session,
     user: User,

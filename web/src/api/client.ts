@@ -33,6 +33,22 @@ import type {
   DramaStatus,
   Pricing,
   RedeemCodeOut,
+  StudioAsset,
+  StudioClipQueueResult,
+  StudioEpisode,
+  StudioGate,
+  StudioGates,
+  StudioGenerateResult,
+  StudioJob,
+  StudioKeyframe,
+  StudioKeyframeQueueResult,
+  StudioMapRow,
+  StudioProject,
+  StudioRender,
+  StudioScript,
+  StudioSegmentClip,
+  StudioStatus,
+  StudioSummary,
   Task,
   TokenOut,
   UploadListItem,
@@ -471,4 +487,133 @@ export const api = {
     request<DramaAiMeta & { copy: DramaAiCopy }>(`/api/drama/episodes/${eid}/ai/deliver-copy`, {
       method: "POST",
     }),
+
+  // ---------------------------------------------------------------- 剧集工坊（studio）
+  studioStatus: () => request<StudioStatus>("/api/studio/status"),
+  studioProjects: () => request<{ items: StudioProject[] }>("/api/studio/projects"),
+  studioCreateProject: (title: string) =>
+    request<StudioProject>("/api/studio/projects", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
+  studioProject: (pid: number) =>
+    request<{
+      project: StudioProject;
+      episodes: StudioEpisode[];
+      counts: { episodes: number; assets: number };
+    }>(`/api/studio/projects/${pid}`),
+  studioImport: (pid: number, body: { script_md: string; art_md: string; force?: boolean }) =>
+    request<{ project: StudioProject; stats: Record<string, number> }>(
+      `/api/studio/projects/${pid}/import`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  studioPreview: (pid: number, body: { script_md: string; art_md: string }) =>
+    request<{ stats: Record<string, number>; checks: Record<string, StudioGates> }>(
+      `/api/studio/projects/${pid}/preview`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  studioMap: (pid: number) =>
+    request<{ items: StudioMapRow[] }>(`/api/studio/projects/${pid}/map`),
+  studioDoc: (pid: number, kind: string) =>
+    request<{ kind: string; data: unknown; updated_at: string }>(
+      `/api/studio/projects/${pid}/docs/${kind}`,
+    ),
+  /** 不传 data 时后端用库里已存的版本跑门。 */
+  studioGates: (pid: number, kind: string) =>
+    request<StudioGates>(`/api/studio/projects/${pid}/gates/${kind}`, {
+      method: "POST",
+      body: JSON.stringify({ data: null }),
+    }),
+  studioEpisode: (pid: number, ep: number) =>
+    request<{
+      episode: StudioEpisode;
+      script: StudioScript;
+      docs: { staging?: unknown; storyboard?: unknown };
+      summary: StudioSummary;
+    }>(`/api/studio/projects/${pid}/episodes/${ep}`),
+  /** 确定性生成分段 / 切表；不带 data 时用库里已存的剧本。 */
+  studioGenerate: (
+    pid: number,
+    ep: number,
+    kind: "staging" | "storyboard",
+    data?: unknown,
+  ) =>
+    request<StudioGenerateResult>(
+      `/api/studio/projects/${pid}/episodes/${ep}/generate/${kind}`,
+      {
+        method: "POST",
+        ...(data === undefined ? {} : { body: JSON.stringify({ data }) }),
+      },
+    ),
+  studioEpisodeGates: (pid: number, ep: number, kind: string) =>
+    request<StudioGates>(`/api/studio/projects/${pid}/episodes/${ep}/gates/${kind}`, {
+      method: "POST",
+      body: JSON.stringify({ data: null }),
+    }),
+  /** 该集关键帧清单；前端按 (segment_id, cut_index) 挂到切行。 */
+  studioKeyframes: (pid: number, ep: number) =>
+    request<{ items: StudioKeyframe[] }>(
+      `/api/studio/projects/${pid}/episodes/${ep}/keyframes`,
+    ),
+  /** 给一段的每一切排关键帧；force 全部重出。 */
+  studioQueueKeyframes: (pid: number, ep: number, segmentId: string, force = false) =>
+    request<StudioKeyframeQueueResult>(
+      `/api/studio/projects/${pid}/episodes/${ep}/segments/${segmentId}/keyframes${
+        force ? "?force=true" : ""
+      }`,
+      { method: "POST" },
+    ),
+  /** 该集段视频清单（状态由后端按任务实时映射）。 */
+  studioClips: (pid: number, ep: number) =>
+    request<{ items: StudioSegmentClip[] }>(
+      `/api/studio/projects/${pid}/episodes/${ep}/clips`,
+    ),
+  /** 一段一次 r2v；关键帧不齐会被 blockers 拦下，出好的要 force 才重出。 */
+  studioQueueClip: (pid: number, ep: number, segmentId: string, force = false) =>
+    request<StudioClipQueueResult>(
+      `/api/studio/projects/${pid}/episodes/${ep}/segments/${segmentId}/video${
+        force ? "?force=true" : ""
+      }`,
+      { method: "POST" },
+    ),
+  /** 该集最新成片；没合成过时 render 为 null。 */
+  studioRender: (pid: number, ep: number) =>
+    request<{ render: StudioRender | null }>(
+      `/api/studio/projects/${pid}/episodes/${ep}/render`,
+    ),
+  /** 全部段出片后同步拼接；缺段会 400 拦下，不给半成品。 */
+  studioRenderEpisode: (pid: number, ep: number) =>
+    request<{ render: StudioRender }>(
+      `/api/studio/projects/${pid}/episodes/${ep}/render`,
+      { method: "POST" },
+    ),
+  studioAssets: (pid: number, kind?: string, usedOnly = false) => {
+    const q = new URLSearchParams();
+    if (kind) q.set("kind", kind);
+    if (usedOnly) q.set("used_only", "true");
+    const qs = q.toString();
+    return request<{ items: StudioAsset[] }>(
+      `/api/studio/projects/${pid}/assets${qs ? `?${qs}` : ""}`,
+    );
+  },
+  studioAssetImage: (
+    pid: number,
+    assetId: number,
+    body: { view?: string; prompt?: string; negative?: string; seed?: number } = {},
+  ) =>
+    request<StudioJob>(`/api/studio/projects/${pid}/assets/${assetId}/image`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  studioConfirmView: (pid: number, assetId: number, view: string, version = 0) =>
+    request<{ asset: StudioAsset; gates: StudioGate[] }>(
+      `/api/studio/projects/${pid}/assets/${assetId}/views/${view}/confirm${
+        version ? `?version=${version}` : ""
+      }`,
+      { method: "POST" },
+    ),
+  studioJobs: (pid: number, kind?: string) =>
+    request<{ items: StudioJob[] }>(
+      `/api/studio/projects/${pid}/jobs${kind ? `?kind=${kind}` : ""}`,
+    ),
 };
