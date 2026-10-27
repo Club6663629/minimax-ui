@@ -496,7 +496,10 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
         return hibtv_jobs.asset_payload(project.id, asset)
 
     payload: Dict = {"asset_id": asset.id, "kind": asset.kind}
-    if body.action == "regen":
+    if body.action == "sheet":
+        # 主路径：一张 16:9 多视图设定稿，落盘后裁成每个视图
+        payload["mode"] = "sheet"
+    elif body.action == "regen":
         view = body.view or anchor
         payload.update({"mode": "views", "views": [view]})
     elif body.action == "views":
@@ -509,7 +512,9 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
     if body.hint.strip():
         data = hibtv_jobs.jloads(asset.data, {})
         hints = data.get("hints") or {}
-        for view in (payload.get("views") or [anchor]):
+        # sheet 模式：一句话改图要求作用于整张设定稿（四/五格一起改）
+        targets = ["__sheet"] if payload.get("mode") == "sheet" else (payload.get("views") or [anchor])
+        for view in targets:
             hints[view] = body.hint.strip()[:400]
         data["hints"] = hints
         asset.data = hibtv_jobs.jdumps(data)
@@ -545,7 +550,7 @@ async def upload_asset(project_id: int, asset_id: int,
     defs = hibtv_jobs.VIEW_DEFS.get(asset.kind, [["front", "正面"]])
     valid = [v[0] for v in defs]
     target = view or valid[0]
-    if target not in valid:
+    if target not in valid and target != "__sheet":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "未知视角")
 
     suffix = Path(file.filename or "").suffix.lower()
@@ -559,6 +564,12 @@ async def upload_asset(project_id: int, asset_id: int,
     path = hibtv_jobs.project_dir(project.id) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+    if target == "__sheet":
+        # 上传一张手工画/外部出好的多视图设定稿：重裁所有视图，主图与派生一次同步
+        hibtv_jobs.import_sheet(db, project, asset, path, rel)
+        db.commit()
+        return hibtv_jobs.asset_payload(project.id, asset)
 
     upload = Upload(user_id=project.user_id, slot="reference",
                     filename=file.filename or path.name, path=str(path),
@@ -664,6 +675,8 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
         raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED,
                             f"积分不足：本段 {seconds}s 需 {cost} 积分，请先充值")
     ref_ids = hibtv_jobs.segment_ref_ids(db, project, seg)
+    # 参考图是设定稿时，必须明说「只当外观证据、不复刻分格版式」
+    prompt = hibtv_jobs.video_prompt(db, project, seg, prompt, ref_ids)
 
     task = Task(
         user_id=user.id,

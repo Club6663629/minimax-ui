@@ -68,22 +68,29 @@ def run_gates(
     art: Optional[Dict] = None,
     script: Optional[Dict] = None,
 ) -> Dict:
-    """跑一个文档的确定性质量门。任何异常都收敛成 fail，不抛。"""
+    """跑一个文档的确定性质量门。任何异常都收敛成 fail，不抛。
+
+    `problems` 只放**内容缺陷**（概览页按它统计缺口）；门没跑起来的原因
+    （缺 node / 缺脚本 / 缺前置文档）放 `notes`，否则“未运行”会被当成违规计入缺口。
+    """
     entry = _SCRIPTS.get(kind)
     if not entry:
-        return {"status": "skipped", "problems": ["该文档类型没有确定性质量门"], "checked_at": _now()}
+        return {"status": "skipped", "problems": [],
+                "notes": ["该文档类型没有确定性质量门"], "checked_at": _now()}
     node = _node_bin()
     if not node:
         return {
             "status": "skipped",
-            "problems": [f"未找到 Node（HIBTV_NODE_BIN={settings.hibtv_node_bin}），质量门未运行"],
+            "problems": [],
+            "notes": [f"未找到 Node（HIBTV_NODE_BIN={settings.hibtv_node_bin}），质量门未运行"],
             "checked_at": _now(),
             "runner": "",
         }
     skill_dir, script_name = entry
     script_path = SKILL_ROOT / skill_dir / "scripts" / script_name
     if not script_path.exists():
-        return {"status": "skipped", "problems": [f"质量门脚本缺失：{script_path}"], "checked_at": _now()}
+        return {"status": "skipped", "problems": [],
+                "notes": [f"质量门脚本缺失：{script_path}"], "checked_at": _now()}
 
     with tempfile.TemporaryDirectory(prefix="hibtv_gate_") as tmp:
         tmp_path = Path(tmp)
@@ -98,7 +105,8 @@ def run_gates(
             cmd += ["--art", str(tmp_path / "art.json")]
         if kind == "storyboard":
             if script is None:
-                return {"status": "skipped", "problems": ["分镜质量门需要先有本集剧本"], "checked_at": _now()}
+                return {"status": "skipped", "problems": [],
+                        "notes": ["分镜质量门需要先有本集剧本"], "checked_at": _now()}
             _dump(tmp_path / "script.json", script)
             cmd += ["--script", str(tmp_path / "script.json")]
         try:
@@ -114,13 +122,16 @@ def run_gates(
         raw = _collect_problems(out)
         problems = _relax(kind, data, raw)
         ok = proc.returncode == 0 or (bool(raw) and not _blocking(problems))
+        notes: list = []
         if not ok and not raw:
             problems = [ln.strip() for ln in out.splitlines() if ln.strip()][:20]
         elif ok and raw and not problems:
-            problems = ["单集项目：大爆点必然落在最后一集，「大爆点提前」门不适用，已跳过"]
+            # 门本身适用不了（单集项目的「大爆点提前」）：说一句，但不计缺口
+            notes = ["单集项目：大爆点必然落在最后一集，「大爆点提前」门不适用，已跳过"]
         return {
             "status": "ok" if ok else "fail",
             "problems": problems[:40],
+            "notes": notes,
             "checked_at": _now(),
             "runner": node,
         }
@@ -192,3 +203,11 @@ def hint_of(gates: Optional[Dict]) -> str:
         return ""
     rows = gates.get("problems") or []
     return "\n".join(f"- {r}" for r in rows[:20])
+
+
+def notes_of(gates: Optional[Dict]) -> list:
+    """门的说明行（未运行原因 / 单集项目豁免）：不是缺陷，只给 UI 展示。"""
+    if not gates:
+        return []
+    return list(gates.get("notes") or [])
+

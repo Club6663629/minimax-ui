@@ -6,6 +6,8 @@ export type JobKind = DocKind | "images" | "compose";
 export interface Gates {
   status?: "ok" | "fail" | "skipped" | string;
   problems?: string[];
+  // 说明行（质量门未运行的原因 / 单集项目豁免）：不是缺陷，不计缺口
+  notes?: string[];
   checked_at?: string;
   runner?: string;
 }
@@ -83,6 +85,7 @@ export interface ViewMeta {
   uploaded?: boolean;
   stale?: boolean;
   failed?: boolean;
+  fromSheet?: boolean;
   at?: string;
 }
 
@@ -100,6 +103,14 @@ export interface HibtvAsset {
   sort: number;
   defs: string[][];
   anchor: string;
+  // 多视图设定稿：一张 16:9 图装下全部视角，views 里的每张都是从它裁出来的
+  sheet?: ViewMeta & { cells?: string[] };
+  sheetSpec?: {
+    // 出图画幅（Qwen-Image-2.1 官方 16:9 原生 2K = 2752×1536）
+    size?: number[];
+    // 每种资产的格子比例矩形 [view, x, y, w, h]；裁切以后端实际出图尺寸为准
+    kinds?: Record<string, { brief?: string; cells?: (string | number)[][] }>;
+  };
 }
 
 export interface Cut {

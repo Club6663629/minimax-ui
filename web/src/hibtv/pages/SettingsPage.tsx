@@ -239,9 +239,11 @@ export default function SettingsPage() {
               )}
               {row("段长上限", `${status?.segMaxSeconds || 10}s`, "与平台 5 / 8 / 10 / 15 档吸附")}
               {row(
-                "锚点先确认",
+                "设定稿先确认",
                 status?.anchorConfirm ? "开" : "关",
-                status?.anchorConfirm ? "锚点出完要你确认才派生其余视图" : "锚点出完直接派生",
+                status?.anchorConfirm
+                  ? "整张四/五视图设定稿出完先要你确认"
+                  : "设定稿出完直接可用（格子同时裁好）",
               )}
             </div>
           </div>

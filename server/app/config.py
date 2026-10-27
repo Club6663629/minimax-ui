@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     hibtv_image_gap_sec: float = 5.0
     hibtv_image_width: int = 1088          # 9:16 竖屏锚点图画布
     hibtv_image_height: int = 1920
+    # 多视图设定稿画幅：默认 Qwen-Image-2.1 官方 16:9 原生 2K（2752×1536）；
+    # 低于推荐值等于把每格细节再降一档，显存不够才调小（0 = 用内置值）
+    hibtv_sheet_width: int = 0
+    hibtv_sheet_height: int = 0
     # 段视频单次上限秒数（H3 可用档位 5/8/10/15；默认 10）
     hibtv_seg_max_seconds: int = 10
     # 质量门：node 可执行文件（vendored skill 脚本零依赖，需 Node ≥18）

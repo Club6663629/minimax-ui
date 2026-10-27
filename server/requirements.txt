@@ -8,3 +8,5 @@ bcrypt>=4.1
 httpx>=0.27
 python-multipart>=0.0.9
 email-validator>=2.1
+# 多视图设定稿裁切成单视图（_crop_sheet），缺了会降级为只保留整张
+Pillow>=10.0

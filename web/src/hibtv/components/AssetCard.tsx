@@ -1,4 +1,4 @@
-/** 角色卡 / 场景卡 / 道具卡：同一套语言（锚点大图 + 派生视图 + 图上四图标 + 提示词区）。 */
+/** 角色卡 / 场景卡 / 道具卡：一张多视图设定稿直接上卡（无分格展示）+ 图上四图标 + 提示词区。 */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { hibtvApi, mediaUrl } from "../api";
 import { errText, useHibtv } from "../state";
@@ -51,6 +51,7 @@ function RerollDrawer({
 }) {
   const [hint, setHint] = useState("");
   const anchor = asset.views[asset.anchor] || {};
+  const sheet = asset.sheet || {};
   return (
     <div className="drawer">
       <div className="drawer-hd">
@@ -68,12 +69,12 @@ function RerollDrawer({
         <Plate
           kind={PLATE_KIND[asset.kind] || "person"}
           label={asset.name}
-          view={`当前版本 · v${asset.version || 1}`}
-          src={anchor.url}
-          ratio={asset.kind === "cast" ? "3 / 4" : "16 / 9"}
+          view={`当前设定稿 · v${asset.version || 1}`}
+          src={sheet.url || anchor.url}
+          ratio="16 / 9"
         />
         <div className="tiny dim" style={{ margin: "10px 0 14px" }}>
-          原图作为参考，其余 {Math.max(0, asset.defs.length - 1)} 张会标成过期（可随时切回历史版本）。
+          整张设定稿作为参考重画：{asset.defs.length} 格一起更新，不会出现「只改一格」。
         </div>
         <div className="field">
           <div className="label">要改的地方</div>
@@ -85,7 +86,7 @@ function RerollDrawer({
           />
         </div>
         <div className="note">
-          只会重画这张锚点并派生其余视图；下游引用它的镜头会标「素材已更新」，但不自动重跑视频。
+          会把整张设定稿重画一遍（{asset.defs.length} 格），下游引用它的镜头标记「素材已更新」，但不自动重跑视频。
         </div>
       </div>
       <div className="drawer-ft">
@@ -116,7 +117,13 @@ export function AssetCard({
   const plateKind = PLATE_KIND[asset.kind] || "person";
   const anchor = asset.anchor;
   const anchorMeta = asset.views[anchor] || {};
-  const derived = asset.defs.slice(1);
+  const sheet = asset.sheet || {};
+  // 一张设定稿就是唯一产物；没有它时才回退到旧数据里的锚点图
+  const sheetSrc = sheet.url || anchorMeta.url;
+  const hasSheet = Boolean(sheet.url || sheet.path);
+  const gridLabel = asset.kind === "cast" ? "四视图" : "五视图";
+  // 出图画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 官方 16:9 2K）
+  const sheetSize = (asset.sheetSpec?.size || []).join("×");
   const review = asset.status === "review";
   const drawing = asset.status === "drawing";
   const prompt: string = asset.data?.image?.prompt || "";
@@ -139,19 +146,21 @@ export function AssetCard({
     }
   };
 
-  const draw = async (action: "anchor" | "views" | "all" | "confirm", hint?: string) => {
+  const draw = async (action: "sheet" | "anchor" | "views" | "all" | "confirm", hint?: string) => {
     if (!project) return;
     setBusy(true);
     try {
       const res = await hibtvApi.assetImage(project.id, asset.id, {
         action,
         hint,
-        views: action === "views" ? derived.map(([v]) => v) : undefined,
+        views: action === "views" ? asset.defs.slice(1).map(([v]) => v) : undefined,
       });
       if ("kind" in res && res.kind === "images") {
-        toast(`已排队出图：${asset.name}（${action === "anchor" ? "锚点" : `${derived.length} 张派生`}）`);
+        const what = action === "sheet" ? `多视图设定稿（${asset.defs.length} 格自动裁好）`
+          : action === "anchor" ? "锚点" : `${asset.defs.length - 1} 张派生`;
+        toast(`已排队出图：${asset.name}（${what}）`);
       } else if (action === "confirm") {
-        toast(`已接受 v${asset.version}：派生视图恢复`);
+        toast(`已接受 v${asset.version}`);
       }
       onChanged();
     } catch (err) {
@@ -166,7 +175,9 @@ export function AssetCard({
     setBusy(true);
     try {
       await hibtvApi.uploadAsset(project.id, asset.id, file, view);
-      toast(`已替换：${asset.name} · ${view === anchor ? "锚点" : view}`);
+      toast(view === "__sheet"
+        ? `已替换整张设定稿：${asset.name}（格子已重裁）`
+        : `已替换：${asset.name} · ${view === anchor ? "锚点" : view}`);
       onChanged();
     } catch (err) {
       toast(errText(err));
@@ -177,17 +188,21 @@ export function AssetCard({
 
   const bigView = () => {
     openLayer(
-      <div className="modal" style={{ width: "min(860px,94vw)", background: "#0d0b09" }}>
+      <div className="modal" style={{ width: "min(1180px,96vw)", background: "#0d0b09" }}>
         <div className="modal-hd">
           <div>
             <div className="eyebrow">
-              {asset.kind.toUpperCase()} · {asset.code} · 全部视图
+              {asset.kind.toUpperCase()} · {asset.code} · {gridLabel}设定稿
             </div>
             <div className="h1" style={{ fontSize: 18 }}>
               {asset.name}
             </div>
             <div className="tiny mut" style={{ marginTop: 4 }}>
-              {asset.defs.length} 张视图来自同一个锚点；点卡片上的「重新生成」可重出这一组。
+              {hasSheet
+                ? `一张 16:9 设定稿${sheetSize ? ` · ${sheetSize}px` : ""}装下 ${asset.defs.length} 个视角：${asset.defs
+                    .map(([, label]) => label)
+                    .join(" / ")}。改这张即同步全部。`
+                : "还没有设定稿；下面是旧数据里的单张锚点图。"}
             </div>
           </div>
           <span className="x" onClick={closeLayer}>
@@ -195,28 +210,17 @@ export function AssetCard({
           </span>
         </div>
         <div className="modal-bd">
-          <div className={`quad ${asset.kind === "cast" ? "" : "land"}`}>
-            {asset.defs.map(([v, label], i) => (
-              <div
-                key={v}
-                className={`q ${i === 0 ? "main" : ""} ${
-                  asset.kind !== "cast" && asset.defs.length % 2 && i === asset.defs.length - 1 ? "wide" : ""
-                }`}
-              >
-                <Plate
-                  kind={plateKind}
-                  label={asset.name}
-                  view={label}
-                  src={asset.views[v]?.url}
-                  extra={asset.views[v]?.stale ? "stale" : ""}
-                />
-                <span className="tag">
-                  {label}
-                  {i === 0 ? " · 锚点" : ""}
-                </span>
-              </div>
-            ))}
-          </div>
+          {sheetSrc ? (
+            <img
+              src={mediaUrl(sheetSrc)}
+              alt={`${asset.name} ${gridLabel}设定稿`}
+              style={{ width: "100%", borderRadius: 6, border: "1px solid var(--line-3)" }}
+            />
+          ) : (
+            <div className="tiny dim" style={{ padding: "32px 0", textAlign: "center" }}>
+              这张还没有图；点卡片上的「出{gridLabel}」就能一次生成整张设定稿。
+            </div>
+          )}
         </div>
         <div className="modal-ft">
           <span className="tiny dim">{asset.code}</span>
@@ -230,7 +234,7 @@ export function AssetCard({
   };
 
   const onAct = (act: string) => {
-    if (act === "regen") void draw("anchor");
+    if (act === "regen") void draw("sheet");
     if (act === "upload") fileRef.current?.click();
     if (act === "reroll") {
       openLayer(
@@ -239,7 +243,7 @@ export function AssetCard({
           onClose={closeLayer}
           onSubmit={(hint) => {
             closeLayer();
-            void draw("anchor", hint);
+            void draw("sheet", hint);
           }}
         />,
       );
@@ -258,23 +262,23 @@ export function AssetCard({
     <span className="chip gold">出图中…</span>
   ) : review ? (
     <>
-      <span className="chip red">v{asset.version} 待确认 · 派生图已过期</span>
+      <span className="chip red">v{asset.version} 待确认</span>
       <button className="btn xs" disabled={busy} onClick={() => void draw("confirm")}>
         接受 v{asset.version}
       </button>
     </>
-  ) : anchorMeta.path ? (
+  ) : sheetSrc ? (
     <>
       <span className="chip green">v{asset.version} · 已出图</span>
       <span className="chip">
-        {asset.kind === "cast" ? `派生 ${derived.length} 张` : `派生 ${derived.filter(([v]) => asset.views[v]?.path).length}/${derived.length}`}
+        {hasSheet ? `${asset.defs.length} 格 · 一张设定稿` : "单张锚点（旧数据）"}
       </span>
     </>
   ) : (
     <>
-      <span className="chip ghost">还没有锚点图</span>
-      <button className="btn xs" disabled={busy} onClick={() => void draw("anchor")}>
-        出锚点图
+      <span className="chip ghost">还没有图</span>
+      <button className="btn xs" disabled={busy} onClick={() => void draw("sheet")}>
+        出{gridLabel}
       </button>
     </>
   );
@@ -290,40 +294,34 @@ export function AssetCard({
       onChange={(e) => {
         const file = e.target.files?.[0];
         e.target.value = "";
-        if (file) void upload(file, anchor);
+        if (file) void upload(file, "__sheet");
       }}
     />
   );
-  // 斜纹只标「这张图本身过期」：待确认（review）用红色 chip 表达，
-  // 派生图过期也只在该缩略图上画斜纹——不能因此把完好的锚点整张盖住。
-  const staleMark = anchorMeta.stale && <div className="stale" />;
+  // 斜纹只标「这张图本身过期」：待确认（review）用红色 chip 表达。
+  // 设定稿是唯一产物，它有图就永远不会“整张过期”；旧数据的锚点才看 stale。
+  const staleMark = !hasSheet && anchorMeta.stale && <div className="stale" />;
 
   if (asset.kind === "cast") {
     return (
       <div className="cast-card">
         <div className="cast-media">
-          <div className="cast-anchor" onClick={bigView} aria-label="点击看四视图大图">
+          <div
+            className={`cast-anchor ${hasSheet ? "sheet" : ""}`}
+            onClick={bigView}
+            aria-label={`点击看${gridLabel}设定稿大图`}
+          >
             <Plate
               kind="person"
               label={asset.name}
-              view="正面全身 · 锚点"
-              src={anchorMeta.url}
-              extra={anchorMeta.stale ? "stale" : ""}
+              view={hasSheet ? `多视图设定稿 · ${asset.defs.length} 格` : "正面全身 · 锚点"}
+              src={sheetSrc}
+              extra={!hasSheet && anchorMeta.stale ? "stale" : ""}
             >
               {staleMark}
             </Plate>
             {fileInput}
             <MediaActs onAct={onAct} />
-          </div>
-          <div className="cast-viewcol">
-            {derived.map(([v, label]) => (
-              <div key={v} className="vthumb" onClick={bigView} title={`${label}（点开看大图）`}>
-                <span className="ph" style={{ position: "absolute", inset: 0, fontSize: 9 }} />
-                {asset.views[v]?.url && <img src={mediaUrl(asset.views[v].url)} alt={label} />}
-                <span className="lab">{label}</span>
-                {asset.views[v]?.stale && <span className="stale" />}
-              </div>
-            ))}
           </div>
         </div>
         <div className="cast-body">
@@ -340,7 +338,7 @@ export function AssetCard({
               {asset.code}
               {asset.data?.aliases?.length ? ` · ${asset.data.aliases.join(" / ")}` : ""}
             </span>
-            <span className="pin" title="看全部视图" onClick={bigView}>
+            <span className="pin" title={`看${gridLabel}设定稿`} onClick={bigView}>
               ⤢
             </span>
           </div>
@@ -363,14 +361,14 @@ export function AssetCard({
           </div>
           <div className="art-foot" style={{ borderTop: "none", paddingTop: 0 }}>
             <span className="tiny dim">
-              {derived.filter(([v]) => asset.views[v]?.path).length}/{derived.length} 张派生
+              {hasSheet ? `${gridLabel} · ${asset.defs.length} 格一张` : "还没有设定稿"}
             </span>
-            <span className="link" onClick={(e) => { e.stopPropagation(); void draw("views"); }}>
-              补齐派生视图
+            <span className="link" onClick={(e) => { e.stopPropagation(); void draw("sheet"); }}>
+              重出{gridLabel}
             </span>
           </div>
           <div className="cast-foot" onClick={bigView}>
-            画像 · 弧光 · 关系 · 音色 · 全部视图 →
+            画像 · 弧光 · 关系 · 音色 · {gridLabel}设定稿 →
           </div>
         </div>
       </div>
@@ -379,35 +377,29 @@ export function AssetCard({
 
   return (
     <div className="art-card">
-      <div className="art-anchor" onClick={bigView} aria-label="点击看全部视图大图">
+      <div
+        className={`art-anchor ${hasSheet ? "sheet" : ""}`}
+        onClick={bigView}
+        aria-label={`点击看${gridLabel}设定稿大图`}
+      >
         <Plate
           kind={plateKind}
           label={asset.name}
-          view="正面 · 锚点"
-          src={anchorMeta.url}
-          extra={anchorMeta.stale ? "stale" : ""}
+          view={hasSheet ? `多视图设定稿 · ${asset.defs.length} 格` : "正面 · 锚点"}
+          src={sheetSrc}
+          extra={!hasSheet && anchorMeta.stale ? "stale" : ""}
         >
           {staleMark}
         </Plate>
         {fileInput}
         <MediaActs onAct={onAct} />
       </div>
-      <div className="art-thumbs">
-        {derived.map(([v, label]) => (
-          <div key={v} className="vthumb" onClick={bigView} title={`${label}（点开看大图）`}>
-            <span className="ph" style={{ position: "absolute", inset: 0, fontSize: 9 }} />
-            {asset.views[v]?.url && <img src={mediaUrl(asset.views[v].url)} alt={label} />}
-            <span className="lab">{label}</span>
-            {asset.views[v]?.stale && <span className="stale" />}
-          </div>
-        ))}
-      </div>
       <div className="art-body">
         <div className="cast-name">
           <span className="mid">{asset.code}</span>
           <InlineEdit value={asset.name} onSave={(v) => void patch({ name: v })} />
           <span className="tag">{tag}</span>
-          <span className="pin" title="看全部视图" onClick={bigView}>
+          <span className="pin" title={`看${gridLabel}设定稿`} onClick={bigView}>
             ⤢
           </span>
         </div>
@@ -423,8 +415,8 @@ export function AssetCard({
         </div>
         <div className="art-foot">
           {status}
-          <span className="link" onClick={() => void draw("views")}>
-            补齐派生视图
+          <span className="link" onClick={() => void draw("sheet")}>
+            {hasSheet ? `重出${gridLabel}` : `出${gridLabel}设定稿`}
           </span>
         </div>
       </div>

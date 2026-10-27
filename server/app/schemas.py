@@ -385,8 +385,9 @@ class HibtvAssetPatch(BaseModel):
 
 
 class HibtvImageIn(BaseModel):
-    """出图动作：anchor=只出锚点；all=补齐全部视图；views=指定视图；regen=单视图重出。"""
-    action: Literal["anchor", "all", "views", "regen", "confirm"] = "anchor"
+    """出图动作：sheet=一张多视图设定稿（默认主路径）；anchor=只出锚点；
+    all=补齐全部视图；views=指定视图；regen=单视图重出。"""
+    action: Literal["sheet", "anchor", "all", "views", "regen", "confirm"] = "sheet"
     view: str = ""
     views: list[str] = []
     hint: str = ""

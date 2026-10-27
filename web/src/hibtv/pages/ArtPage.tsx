@@ -23,19 +23,19 @@ export default function ArtPage() {
 
   const drawAll = async () => {
     if (!project) return;
-    const pending = shown.filter((a) => !a.views[a.anchor]?.path);
+    const pending = shown.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path);
     if (!pending.length) {
-      toast("这一栏的锚点图都已出过");
+      toast("这一栏的设定稿都已出过；要换某一张的版式，点卡片上的「重出五视图」");
       return;
     }
     for (const asset of pending) {
       try {
-        await hibtvApi.assetImage(project.id, asset.id, { action: "anchor" });
+        await hibtvApi.assetImage(project.id, asset.id, { action: "sheet" });
       } catch {
         /* 单张失败不影响其余 */
       }
     }
-    toast(`已排入出图队列：${pending.length} 张锚点图`);
+    toast(`已排入出图队列：${pending.length} 张多视图设定稿`);
     reload();
   };
 
@@ -50,12 +50,12 @@ export default function ArtPage() {
           </span>
         </>
       }
-      lede="每个场景一组参考图：正面是锚点，俯视、背面、左侧、右侧都照着它改。鼠标移到图上浮现四个图标——重新生成 / 改图 / 上传 / 删除；点图片直接看多视图大图。"
+      lede="每个场景/道具一张 16:9 五视图设定稿：主图 + 左侧 + 背面 + 右侧 + 俯视，一次出图、格子自动裁好。卡片上直接显示整张（不再分格陈列），点图看大图；鼠标移到图上浮现四个图标——重出设定稿 / 改图 / 上传整张 / 删除。改这张即同步全部视角。"
       right={
         <>
           <GateChips gates={doc?.gates} none="美术设定走 skill 的 art schema，但没有接线 node 确定性校验（它的 validate 要求英文出图提示词与 ≥3 个一致性锚点）" />
           <button className="btn" onClick={() => void drawAll()}>
-            出全部锚点图
+            出全部设定稿
           </button>
           <button className="btn gold" onClick={() => void runJob("art")}>
             {data?.scenes?.length || data?.props?.length ? "重新生成美术" : "生成场景与道具"}
@@ -65,15 +65,19 @@ export default function ArtPage() {
     />
   );
 
+  // 设定稿固定 16:9（与视频横竖版无关），画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 2K）
+  const sheetSize = (assets[0]?.sheetSpec?.size || []).join("×") || "2752×1536";
+
   const toolbar = (
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
-      <span className="chip">锚点模型 {status?.image?.worker || "qwen21"}</span>
-      <span className="chip">派生模型 同锚点模型</span>
-      <span className="chip">画幅 {project?.aspectRatio || "9:16"}</span>
+      <span className="chip">设定稿模型 {status?.image?.worker || "qwen21"}</span>
+      <span className="chip">格子 比例裁切（列宽不等分）</span>
+      <span className="chip">设定稿 16:9 · {sheetSize}</span>
+      <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span
         className="chip i"
-        onClick={() => toast(`当前 ${project?.aspectRatio || "9:16"}；改比例请点顶栏的 9:16 / 16:9`)}
+        onClick={() => toast(`设定稿固定 16:9；视频画幅当前 ${project?.aspectRatio || "9:16"}，改比例点顶栏`)}
       >
         比例切换在顶栏
       </span>

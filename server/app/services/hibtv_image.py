@@ -112,7 +112,8 @@ def write_blank_png(path: Path, width: int = 512, height: int = 512) -> Path:
 
 
 def _inject(prompt: str, image_name: str, *, width: int, height: int, seed: int,
-            prefix: str, text_only: bool) -> dict:
+            prefix: str, text_only: bool, negative: str = "",
+            keep_adv_negative: bool = True) -> dict:
     """装配一次出图：关掉 PE（484），提示词直写 474。"""
     wf = advimage.inject_image_job(
         advimage.load_template(),
@@ -128,6 +129,17 @@ def _inject(prompt: str, image_name: str, *, width: int, height: int, seed: int,
         fidelity_pe=False,
         canvas_follow_ratio=True,
     )
+    # 商品保真负向词里已经压了拼贴 / 网格 / 克隆人 / 屏内文字，对短剧资用图同样受用，
+    # 故保留公共部分，只追加视图专属负向词（背面禁脸、细节图禁全身）。
+    # 474.negative_prompt 不经过 PE，写了就一定生效。
+    # `keep_adv_negative=False` 用于多视图设定稿：那一层的 character sheet /
+    # multi-view layout 正是我们要的东西，必须整体换掉而不是叠加。
+    if negative.strip():
+        base = str(wf[advimage.NODE_ENCODE]["inputs"].get("negative_prompt") or "")
+        wf[advimage.NODE_ENCODE]["inputs"]["negative_prompt"] = (
+            f"{base}, {negative.strip()}"[:900]
+            if (keep_adv_negative and base) else negative.strip()[:900]
+        )
     # 关 PE：474.prompt 直接吃 484.on_false，也就是我们的提示词原文
     wf[advimage.NODE_SWITCH]["inputs"]["switch"] = False
     wf[advimage.NODE_SWITCH]["inputs"]["on_false"] = prompt
@@ -146,6 +158,8 @@ async def generate_image(
     ref_path: Optional[Path] = None,
     width: Optional[int] = None,
     height: Optional[int] = None,
+    negative: str = "",
+    keep_adv_negative: bool = True,
 ) -> Dict:
     """出一张图并落到 out_path。返回 {path, degraded, seed}。"""
     w, h = int(width or settings.hibtv_image_width), int(height or settings.hibtv_image_height)
@@ -175,7 +189,8 @@ async def generate_image(
             img_name = await client.upload_image(blank)
 
         wf = _inject(prompt, img_name or "", width=w, height=h, seed=seed,
-                     prefix=f"hibtv_{seed}", text_only=bool(text_only and not ref_path))
+                     prefix=f"hibtv_{seed}", text_only=bool(text_only and not ref_path),
+                     negative=negative, keep_adv_negative=keep_adv_negative)
         try:
             prompt_id = await client.submit(advimage._prune(wf, advimage.NODE_SAVE))  # noqa: SLF001
             info = await client.wait_image_result(prompt_id)
@@ -190,7 +205,8 @@ async def generate_image(
                     write_blank_png(blank, w, h)
                 img_name = await client.upload_image(blank)
                 wf = _inject(prompt, img_name, width=w, height=h, seed=seed,
-                             prefix=f"hibtv_{seed}", text_only=False)
+                             prefix=f"hibtv_{seed}", text_only=False, negative=negative,
+                             keep_adv_negative=keep_adv_negative)
                 prompt_id = await client.submit(advimage._prune(wf, advimage.NODE_SAVE))  # noqa: SLF001
                 info = await client.wait_image_result(prompt_id)
                 text_only = False

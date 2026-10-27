@@ -188,11 +188,14 @@
 .hibtv-root .genbar .t{font-size:12px;color:var(--gold-2)}
 .hibtv-root .genbar .m{font:10.5px var(--mono);color:#8f877b}
 .hibtv-root .cast-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
-.hibtv-root .cast-card{display:grid;grid-template-columns:196px 50px minmax(0,1fr);gap:10px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
+.hibtv-root .cast-card{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
 .hibtv-root .cast-card:hover{border-color:rgba(224,179,106,.22)}
 .hibtv-root .cast-media{display:contents}
 .hibtv-root .cast-anchor{position:relative;min-width:0}
 .hibtv-root .cast-anchor .plate{aspect-ratio:3/4.55;cursor:zoom-in}
+/* 设定稿是 16:9 整张图：直接平铺展示，不再切分格缩略图 */
+.hibtv-root .cast-anchor.sheet .plate{aspect-ratio:16/9}
+.hibtv-root .cast-anchor.sheet .plate img{object-fit:contain}
 .hibtv-root .media-acts{position:absolute;z-index:6;left:0;right:0;top:8px;display:flex;gap:5px;padding:0 15% 0 8px;justify-content:flex-end;opacity:0;transition:opacity .09s linear}
 .hibtv-root .cast-anchor:hover .media-acts, .hibtv-root .cast-anchor:focus-within .media-acts, .hibtv-root .art-anchor:hover .media-acts, .hibtv-root .art-anchor:focus-within .media-acts{opacity:1}
 .hibtv-root .media-acts .ic{position:relative;overflow:visible;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid transparent;border-radius:8px;background:rgba(26,23,20,.92);color:#c9c3b9;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.45)}
@@ -203,9 +206,6 @@
 .hibtv-root .media-acts .tip{position:absolute;z-index:9;bottom:calc(100% + 7px);right:0;right:calc(-31px * (4 - var(--k,1)));width:170px;padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:rgba(14,12,10,.97);box-shadow:0 8px 20px rgba(0,0,0,.62);color:#b0a798;font-size:10px;line-height:1.6;letter-spacing:.01em;text-align:left;opacity:0;transform:translateY(3px);pointer-events:none;transition:opacity .05s linear,transform .05s linear}
 .hibtv-root .media-acts .tip b{color:var(--gold-2);font-weight:600}
 .hibtv-root .media-acts .ic:hover .tip, .hibtv-root .media-acts .ic:focus-visible .tip{opacity:1;transform:translateY(0)}
-.hibtv-root .cast-viewcol{display:flex;flex-direction:column;gap:5px;min-width:0}
-.hibtv-root .cast-viewcol .vthumb{flex:1 1 0;min-height:0;aspect-ratio:auto}
-.hibtv-root .cast-viewcol .vthumb .lab{font-size:8px;padding:4px 1px 2px}
 .hibtv-root .cast-body{min-width:0;display:flex;flex-direction:column;gap:4px}
 .hibtv-root .cast-name{display:flex;align-items:center;gap:7px;font-size:14.5px;color:#eee7da;font-weight:600;min-width:0}
 .hibtv-root .cast-name .tag{flex:0 0 auto;font-size:10px;font-weight:400;color:var(--gold);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
@@ -365,9 +365,7 @@
 /* plate 必须显式给宽度：.art-anchor 是 flex 容器，子项宽度按内容收缩会把占位压成 2px 细线；
    锚点框统一 16:9 缩略图尺寸（真实画幅在点开的大图里看），避免竖版项目把卡片撑成一条横条。 */
 .hibtv-root .art-anchor .plate{width:100%;aspect-ratio:16/9;cursor:zoom-in}
-.hibtv-root .art-thumbs{display:grid;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
-.hibtv-root .art-thumbs .vthumb{aspect-ratio:16/9}
-.hibtv-root .art-thumbs .vthumb .lab{font-size:8px;padding:3px 1px 2px}
+.hibtv-root .art-anchor.sheet .plate img{object-fit:contain}
 .hibtv-root .art-body{min-width:0;display:flex;flex-direction:column;gap:4px}
 .hibtv-root .art-body .mid{flex:0 0 auto;font:10.5px var(--mono);color:var(--gold-dim)}
 .hibtv-root .art-body .promptbox{max-height:58px}

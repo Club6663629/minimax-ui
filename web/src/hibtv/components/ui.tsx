@@ -184,14 +184,20 @@ export function GateChips({ gates, none }: { gates?: Gates; none?: string }) {
     return <span className="chip ghost">质量门未运行</span>;
   }
   if (gates.status === "skipped") {
+    // 未运行的原因在后端 notes 里（缺 node / 缺脚本）；它不是缺陷，不报红
     return (
-      <span className="chip red" title={(gates.problems || []).join("\n")}>
+      <span className="chip ghost" title={(gates.notes || gates.problems || []).join("\n")}>
         质量门未运行
       </span>
     );
   }
   if (gates.status === "ok") {
-    return <span className="chip green">质量门通过</span>;
+    const notes = gates.notes || [];
+    return (
+      <span className="chip green" title={notes.join("\n")}>
+        质量门通过{notes.length ? ` · ${notes.length} 项豁免` : ""}
+      </span>
+    );
   }
   return (
     <span className="chip red" title={(gates.problems || []).join("\n")}>
@@ -202,12 +208,18 @@ export function GateChips({ gates, none }: { gates?: Gates; none?: string }) {
 
 export function GateList({ gates }: { gates?: Gates }) {
   const problems = gates?.problems || [];
-  if (!problems.length) return null;
+  const notes = gates?.notes || [];
+  if (!problems.length && !notes.length) return null;
   const ok = gates?.status === "ok";
   return (
     <div className={`gates ${ok ? "ok" : "bad"}`}>
       {problems.map((p, i) => (
-        <div key={i}>{p}</div>
+        <div key={`p${i}`}>{p}</div>
+      ))}
+      {notes.map((n, i) => (
+        <div key={`n${i}`} className="tiny dim">
+          {n}
+        </div>
       ))}
     </div>
   );

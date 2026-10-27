@@ -43,53 +43,27 @@ export default function CastPage() {
       .filter((g) => g.rows.length);
   }, [assets]);
 
-  const missingDerived = useMemo(
-    () => assets.reduce((n, a) => {
-      if (!a.views[a.anchor]?.path) return n;
-      return n + a.defs.slice(1).filter(([v]) => !a.views[v]?.path || a.views[v]?.stale).length;
-    }, 0),
+  // 设定稿是唯一产物：没有设定稿也没有旧锚点图，才算“缺”
+  const missing = useMemo(
+    () => assets.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path).length,
     [assets],
   );
 
   const drawAll = async () => {
     if (!project) return;
-    const pending = assets.filter((a) => !a.views[a.anchor]?.path);
+    const pending = assets.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path);
     if (!pending.length) {
-      toast("全部角色都已有锚点图");
+      toast("全部角色都已有四视图设定稿；要换某一人的版式，点他卡片上的「重出四视图」");
       return;
     }
     for (const asset of pending) {
       try {
-        await hibtvApi.assetImage(project.id, asset.id, { action: "anchor" });
+        await hibtvApi.assetImage(project.id, asset.id, { action: "sheet" });
       } catch {
         /* 单张失败不影响其余 */
       }
     }
-    toast(`已排入出图队列：${pending.length} 张锚点图`);
-    reload();
-  };
-
-  const drawDerivedAll = async () => {
-    if (!project) return;
-    const pending = assets.filter(
-      (a) => a.views[a.anchor]?.path
-        && a.defs.slice(1).some(([v]) => !a.views[v]?.path || a.views[v]?.stale),
-    );
-    if (!pending.length) {
-      toast("所有派生视图都已就绪");
-      return;
-    }
-    for (const asset of pending) {
-      try {
-        await hibtvApi.assetImage(project.id, asset.id, {
-          action: "views",
-          views: asset.defs.slice(1).map(([v]) => v),
-        });
-      } catch {
-        /* 单张失败不影响其余 */
-      }
-    }
-    toast(`已排入派生队列：${pending.length} 人，共 ${missingDerived} 张图，按张扣积分`);
+    toast(`已排入出图队列：${pending.length} 张四视图设定稿`);
     reload();
   };
 
@@ -97,15 +71,12 @@ export default function CastPage() {
     <PageHead
       eyebrow="收敛层 · 谁 · CAST"
       title={<>角色 <span className="chip" style={{ verticalAlign: "middle" }}>{assets.length} 人</span></>}
-      lede="每个人一张卡：左边是正面全身锚点，右边是大头、侧面、背面。鼠标移到图上浮现四个图标——重新生成 / 改图 / 上传 / 删除；点图片直接看四视图大图。"
+      lede="每个人一张 16:9 四视图设定稿：①正脸特写 ②正面全身 ③90° 正侧全身 ④背面全身，一次出图、格子自动裁好。卡片上直接显示整张（不再分格陈列），点图看大图；鼠标移到图上浮现四个图标——重出设定稿 / 改图 / 上传整张 / 删除。改这张即同步全部视角。"
       right={
         <>
           <GateChips gates={doc?.gates} none="角色卡走 skill 的 cast schema，但没有接线 node 确定性校验；逐项检修看下方提示词与对齐检查" />
-          <button className="btn" onClick={() => void drawAll()}>
-            出全部锚点图
-          </button>
-          <button className="btn ghost" onClick={() => void drawDerivedAll()} disabled={!missingDerived}>
-            补齐派生{missingDerived ? `（${missingDerived} 张）` : " · 已齐"}
+          <button className="btn ghost" onClick={() => void drawAll()} disabled={!missing}>
+            {missing ? `出四视图（缺 ${missing} 人）` : "四视图已齐"}
           </button>
           <button className="btn gold" onClick={() => void runJob("cast")}>
             {characters.length ? "重新生成角色卡" : "基于大纲生成全部"}
@@ -115,6 +86,9 @@ export default function CastPage() {
     />
   );
 
+  // 设定稿固定 16:9（与视频横竖版无关），画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 2K）
+  const sheetSize = (assets[0]?.sheetSpec?.size || []).join("×") || "2752×1536";
+
   const toolbar = (
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
@@ -123,7 +97,8 @@ export default function CastPage() {
       <span className={`chip ${status?.anchorConfirm ? "gold" : "ghost"}`}>
         锚点出完先确认{status?.anchorConfirm ? " · 开" : " · 关"}
       </span>
-      <span className="chip">画幅 {project?.aspectRatio || "9:16"}</span>
+      <span className="chip">设定稿 16:9 · {sheetSize}</span>
+      <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span className="sp" />
       <span className="chip i" onClick={() => navigate("/hibtv/settings")}>
         项目设置 →

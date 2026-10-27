@@ -104,7 +104,7 @@ export const hibtvApi = {
   assetImage: (
     id: number,
     assetId: number,
-    body: { action: "anchor" | "all" | "views" | "regen" | "confirm"; view?: string; views?: string[]; hint?: string },
+    body: { action: "sheet" | "anchor" | "all" | "views" | "regen" | "confirm"; view?: string; views?: string[]; hint?: string },
   ) =>
     request<HibtvJob | HibtvAsset>(`${base}/projects/${id}/assets/${assetId}/image`, {
       method: "POST",

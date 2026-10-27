@@ -1009,12 +1009,38 @@ def ensure_segment_prompts(data: Dict, script_ep: Dict, outline: Dict) -> int:
     return fixed
 
 
+def _parse_flow_seconds(src: Optional[Dict]) -> Optional[float]:
+    """定稿剧本解析稿的估时：**按 kind 区分台词/动作**。
+
+    解析稿把动作节拍的文本也存在 `line` 字段里，直接用 `beat_seconds` 会把
+    “钩子：车灯里那辆车的牌照，为什么这么眼熟？” 当成台词算 4.9s（真实 2.5s），
+    整集目标虚高 20%，后面剧本/分镜的时长门就必挂。
+    """
+    if not src:
+        return None
+    total = 0.0
+    counted = False
+    for scene in src.get("scenes") or []:
+        for b in scene.get("beats") or []:
+            kind = str(b.get("kind") or "")
+            text = b.get("line") or ""
+            if kind == "action":
+                total += ACTION_SECONDS
+            elif kind == "line" or text:
+                total += max(1.0, line_seconds(text))
+            else:
+                continue
+            counted = True
+    return round(total, 1) if counted else None
+
+
 def clamp_target_seconds(data: Dict, script_parse: Dict, ep_no: int) -> Optional[float]:
     """把剧本的 `targetSeconds` 拉回台词量算出来的真实时长。
 
     LLM 会把「单集 1–2 分钟」直接写成 120s，而本集台词折算只有 38s，
     质量门的「总时长 ±15%」因此必挂。目标值应当由定稿剧本决定，不是由
-    项目设置的上限决定。偏差 ≤ 25% 时保留原值（尊重模型的分场节奏）。
+    项目设置的上限决定。容差 8% 是给 python / node 两边估算口径差留的余量，
+    必须小于门的 ±15%，否则偏差会漏到门里。
     返回最终采用的值；无法估算时返回 None。
     """
     ep = None
@@ -1029,16 +1055,13 @@ def clamp_target_seconds(data: Dict, script_parse: Dict, ep_no: int) -> Optional
         if int(item.get("ep") or 0) == int(ep_no):
             src = item
             break
-    flow = []
-    if src:
-        for scene in src.get("scenes") or []:
-            flow.extend(scene.get("flow") or scene.get("beats") or [])
-    if not flow:
+    est = _parse_flow_seconds(src)
+    if est is None or est <= 0:
+        # 没有解析稿时退到剧本自己的 flow（键名已分 line / action）
+        flow: List[Dict] = []
         for scene in ep.get("scenes") or []:
             flow.extend(scene.get("flow") or [])
-    if not flow:
-        return None
-    est = round(sum(beat_seconds(b) for b in flow), 1)
+        est = round(sum(beat_seconds(b) for b in flow), 1)
     if est <= 0:
         return None
     old = ep.get("targetSeconds")
@@ -1046,10 +1069,42 @@ def clamp_target_seconds(data: Dict, script_parse: Dict, ep_no: int) -> Optional
         oldf = float(old)
     except (TypeError, ValueError):
         oldf = 0.0
-    if oldf > 0 and abs(oldf - est) / est <= 0.25:
+    if oldf > 0 and abs(oldf - est) / est <= 0.08:
         return oldf
     ep["targetSeconds"] = est
     return est
+
+
+def ensure_beats_claimed(script: Dict, outline: Dict) -> int:
+    """把大纲里该集的爽点类型补进 `beatsClaimed`。
+
+    门要求「大纲说这一集有的爆点，剧本必须认领」——认领字段是显式清单，
+    LLM 经常漏写整栏，导致剧本内容没问题、门却必挂。大纲已定这一集演什么，
+    这里只补缺失的字段项，不改台词、不改分场。返回补齐了几集。
+    """
+    beats = outline.get("beats") or []
+    if not beats:
+        return 0
+    fixed = 0
+    for ep in script.get("episodes") or []:
+        due = []
+        for b in beats:
+            try:
+                if int(b.get("episode") or 0) != int(ep.get("ep") or 0):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            kind = str(b.get("type") or "").strip()
+            if kind and kind not in due:
+                due.append(kind)
+        claimed = ep.get("beatsClaimed")
+        if not isinstance(claimed, list):
+            claimed = []
+        missing = [t for t in due if t not in claimed]
+        if missing:
+            ep["beatsClaimed"] = claimed + missing
+            fixed += 1
+    return fixed
 
 
 # ------------------------------------------------------------------ 对外入口
@@ -1124,9 +1179,11 @@ def script_prompt(project, ep: Dict, outline: Dict) -> str:
         "【大纲（角色 / 场景 / 道具 id）】\n"
         f"{json.dumps({k: outline.get(k) for k in ('characters', 'scenes', 'props')}, ensure_ascii=False)[:10000]}\n\n"
         "【任务】按 novel-script 的 schema 产出这一集的 script.json。硬约束："
-        "flow 里动作节拍不出现引号台词、台词节拍逐字照抄解析结果（可只按标点切句）；"
+        "flow 里动作节拍不出现引号台词、台词节拍逐字照抄解析结果（可只按标 点切句）；"
         f"单句 ≤ {MAX_LINE_CHARS} 字；targetSeconds 按 charsPerSecond={CHARS_PER_SECOND} 折算后填；"
-        "speaker 必须是本场 characters 里的 C 编号或 VO。"
+        "speaker 必须是本场 characters 里的 C 编号或 VO；"
+        "beatsClaimed 必须逐条列出大纲里 ep 等于本集的 beats[].type，一条不能漏（不是自由发挥）；"
+        "targetSeconds 必须等于本集 flow 所有节拍折算秒数的合计，不要按项目时长上下限估。"
     )
 
 

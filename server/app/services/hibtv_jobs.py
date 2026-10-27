@@ -36,14 +36,179 @@ VIEW_DEFS: Dict[str, List[List[str]]] = {
     "prop": [["front", "正面"], ["back", "背面"], ["left", "左侧"], ["right", "右侧"], ["top", "俯视"]],
 }
 
-VIEW_HINT = {
-    "front": "正面全身，站姿自然，完整入画，头顶与脚部留一点余量",
-    "big": "同一个人物的面部特写，五官与发型和参考图完全一致",
-    "side": "同一个人物的正侧面全身，五官与服装与参考图完全一致",
-    "back": "同一个人物的背面全身，发型与服装与参考图一致",
-    "top": "同一空间的俯视全景，布局与参考图完全一致",
-    "left": "同一空间的左侧视角，陈设与参考图一致",
-    "right": "同一空间的右侧视角，陈设与参考图一致",
+# 视图约束按资产类型分开：`top` 对场景是「俯视全景」，对道具是「俯看这一件」，
+# 共用一份文案会把道具写成「空间俯视」。约束要写成硬命令（数量 / 占比 / 禁止项），
+# 只写「保持一致」模型会自由发挥——大头照最容易变成另一个人或带上手和场景。
+VIEW_HINT: Dict[str, Dict[str, str]] = {
+    "cast": {
+        "front": "同一个人物的正面全身：站姿自然、手臂不交叉，从头到脚完整入画，头顶与脚底各留约 5% 余量；"
+                 "五官、脸型、体型、发型与服装严格沿用参考图，不重新设计；中性纯色背景；"
+                 "画面里只有这一个人，不出现第二张脸、文字或边框",
+        "big": "同一个人物的头肩人像特写，证件照取景：只画头部与肩部，头顶贴近画面上边、"
+               "下巴在画面高度正中、下边切在锁骨；不写也不画下装与鞋（一提镜头就会退去画它们）；"
+               "五官、脸型、眉形、眼型、鼻唇比例、发际线、发型发色严格沿用参考图，不美化、不换人；"
+               "表情自然收敛，视线看向镜头；背景为中性纯色或极简虚化，不出现场景陈设、道具、文字、边框；"
+               "画面里只有这一个人，不出现第二张脸、手或身体其他部位；头顶与下巴都不被画面裁掉",
+        "side": "同一个人物的正侧面全身（约 90° 侧身）：全身与头都朝画面右侧，只看得到右半边脸，"
+                "视线不看镜头（不写这句头会转回来）；能看清耳廓与鼻梁侧面轮廓，从头到脚完整入画；"
+                "体型、发型、服装与参考图完全一致；只有这一个人，不出现正脸或镜像重复",
+        "back": "镜头绕人物旋转 180° 后的背面全身：只画背面看得到的东西（后脑发型、衣服背部结构、"
+                "脚跟与鞋底），从头到脚完整入画；不出现脸、不出现纽扣口袋等正面细节、不回头露肩看镜头；"
+                "不出现第二张脸",
+    },
+    "scene": {
+        "front": "同一场景的正面广角全景：地面、墙面、主要家具与陈设的位置关系、材质、色调与参考图一致，"
+                 "光照方向与色温一致；画面里不出现人物、不出现文字招牌或水印；完整呈现该空间，不裁切主体陈设",
+        "top": "该场景的正上方俯视（俯角约 90°）：只画地面、家具与陈设的平面布局与相对位置，"
+               "家具之间的通道与摆放关系与参考图一致；不被天花板遮挡，不出现人物与文字",
+        "back": "从该空间相反方向回看的机位（与正面相差 180°）：同一空间、同一批家具陈设，"
+                "位置关系、材质与色调光照保持一致；不出现人物与文字，不新增参考图里没有的家具",
+        "left": "站在该空间内面向左侧的机位（只转 90°）：可见墙面、家具与陈设的侧面关系，"
+                "材质、色调与光照方向一致；不出现人物与文字，不新增参考图里没有的家具",
+        "right": "站在该空间内面向右侧的机位（只转 90°）：可见墙面、家具与陈设的侧面关系，"
+                 "材质、色调与光照方向一致；不出现人物与文字，不新增参考图里没有的家具",
+    },
+    "prop": {
+        "front": "同一件道具的正面产品图：单件完整居中、占画面高度约 70%，材质纹理、颜色、磨损与刻字"
+                 "与参考图完全一致；浅灰或纯白无缝背景，柔和均匀布光；不出现手、人物、场景或包装盒，"
+                 "不出现文字水印或价签；不改变道具形状与比例",
+        "back": "同一件道具的背面产品图：单件完整居中，材质颜色与参考图一致；浅色无缝背景；"
+                "不出现手、人物、文字水印；不改变形状与比例",
+        "left": "同一件道具的左侧面产品图：单件完整居中，可看清厚度与侧面结构，材质颜色与参考图一致；"
+                "浅色无缝背景；不出现手、人物、文字水印",
+        "right": "同一件道具的右侧面产品图：单件完整居中，可看清厚度与侧面结构，材质颜色与参考图一致；"
+                 "浅色无缝背景；不出现手、人物、文字水印",
+        "top": "同一件道具的正上方俯看：单件完整居中，可看清顶面结构与按钮/开口位置，材质颜色与参考图一致；"
+               "浅色无缝背景；不出现手、人物、文字水印",
+    },
+}
+
+# 兜底：未知视图名（自定义 defs）仍按「只改视角、不改本体」给一句
+VIEW_HINT_ANY = "与参考图是同一个主体，只改变视角与取景，比例、材质与细节保持一致"
+
+# 反向词直接挂 474.negative_prompt，不经 PE、写了就生效；比正向堆定语可靠。
+# 商品保真负向词（含拼贴 / 网格 / 克隆人 / 屏内文字）作为底座，这里只补视图专属项。
+VIEW_NEGATIVE: Dict[str, Dict[str, str]] = {
+    "cast": {
+        "big": "full body, standing figure, whole torso, hips, legs, shoes, lower garment, "
+               "wide shot, medium shot, headroom gap, cropped head, cropped chin",
+        "side": "facing camera, frontal face, eye contact, looking at viewer, three-quarter view, "
+                "mirrored duplicate, second person",
+        "back": "face, facial features, eyes, nose, mouth, buttons, pockets, zipper on chest, "
+                "front view, looking back over shoulder, turned head",
+        "front": "cropped head, cropped feet, no headroom, sitting, kneeling",
+    },
+    "scene": {"_any": "person, people, human figure, crowd, silhouette, signage, shop sign, "
+                      "poster text, subtitle, watermark"},
+    "prop": {"_any": "hand, fingers, arm, person, human body, holding by hand, packaging box, "
+                     "price tag, label text, watermark, scene background, table reflection"},
+}
+
+# 所有资产图都压的通用项：单帧、单主体、无屏内文字
+NEGATIVE_BASE = ("extra person, duplicated person, cloned face, multiple people, side-by-side views, "
+                 "character sheet, model sheet, turnaround sheet, reference table layout")
+
+# ---------------------------------------------------------------- 多视图设定稿（一图多格）
+# 一张 sheet 装下全部视角：出图一次、裁切一次，主图改了就整组同步。
+# cells 用**比例矩形** (view, x, y, w, h)，按模型实际输出尺寸换算像素：
+# 不依赖它画的线，也允许列宽不等分（大头格窄一点，省下的宽度给三个全身格）。
+# 画幅取 Qwen-Image-2.1 官方 16:9 原生 2K（2752×1536）——低于推荐值等于白丢细节。
+SHEET_SPEC: Dict[str, Dict] = {
+    # 宽度配比有硬约束：大头格窄于约 0.2 画幅（<0.4:1 的竖条）就会横向切掉头肩，
+    # 0.22 / 0.26 / 0.26 / 0.26 是 16:9 下「不切头」与「全身格尽量宽」的折中。
+    # 全身格 0.26 × 2752 = 715px 宽、1536 高（0.47:1），比等分 4 格的 0.44:1 宽一档。
+    "cast": {
+        "cells": [("big", 0.00, 0.0, 0.22, 1.0),
+                  ("front", 0.22, 0.0, 0.26, 1.0),
+                  ("side", 0.48, 0.0, 0.26, 1.0),
+                  ("back", 0.74, 0.0, 0.26, 1.0)],
+        "brief": "画面按列分成 4 个等高画格：第 1 格较窄（约占画幅宽度 22%，正脸特写），"
+                 "后 3 格各约占 26%（正面全身 / 90° 正侧全身 / 背面全身）",
+    },
+    "scene": {
+        "cells": [("front", 0.0, 0.0, 1 / 3, 0.5), ("left", 1 / 3, 0.0, 1 / 3, 0.5),
+                  ("right", 2 / 3, 0.0, 1 / 3, 0.5),
+                  ("back", 0.0, 0.5, 1 / 3, 0.5), ("top", 1 / 3, 0.5, 2 / 3, 0.5)],
+        "brief": "画面分 5 个画格：上排 正面主视图 / 左侧机位 / 右侧机位；"
+                 "下排 背面机位 + 横向占两格的正上方俯视平面图",
+    },
+    "prop": {
+        "cells": [("front", 0.0, 0.0, 1 / 3, 0.5), ("left", 1 / 3, 0.0, 1 / 3, 0.5),
+                  ("right", 2 / 3, 0.0, 1 / 3, 0.5),
+                  ("back", 0.0, 0.5, 1 / 3, 0.5), ("top", 1 / 3, 0.5, 2 / 3, 0.5)],
+        "brief": "画面分 5 个画格：上排 正面主视图 / 左侧 / 右侧；"
+                 "下排 背面 + 横向占两格的俯视",
+    },
+}
+# 无论视频横版还是竖版，设定稿统一 16:9（画格横向排列才能一遍读完）
+SHEET_W, SHEET_H = 2752, 1536
+
+# 模板写法来自两处：skills 里 character-refs 的逐视图几何约束（大头证件照取景、
+# 侧面只看右半边脸、背面不出现五官），加上业界 turnaround / reference sheet 的
+# 通行写法（orthographic、A-pose、8% 安全边距、平光无投影、跨格同焦距、俯视 1.2m 剖切）。
+# 不给色板/比例尺/箭头文字——那些是给人看的，会被裁进某一格。
+SHEET_PROMPT: Dict[str, str] = {
+    "cast": (
+        "角色设定参考图（character reference sheet / turnaround sheet）：横向 16:9、纯白无缝背景，"
+        "画面按列分成 4 个等高画格，格与格之间只留均匀白边、不画分隔线、不写任何文字："
+        "第 1 格较窄（约占画幅宽度 22%）——正脸特写：头肩近景、证件照取景，头顶距画格上边约一成高，"
+        "下巴在画格高度中部，下边切在锁骨，双眼平视镜头，五官清晰，不出现胸部以下；"
+        "后 3 格各约占 26%——第 2 格正面全身：正对镜头，A 字站姿，双臂自然下垂且与躯干留出缝隙、掌背朝前，"
+        "头顶到脚底完整入镜；第 3 格 90° 正侧全身：身体与头一起转向画面右侧，只看得到右半边脸，视线不看镜头；"
+        "第 4 格背面全身：镜头绕人物旋转 180°，只画后脑发型、衣服背部结构与脚跟，不出现五官。"
+        "正交视角（orthographic views, no perspective distortion）；四格是同一个人：五官、发型、体型、"
+        "服装、配饰完全一致，身高一致，四格头顶与脚底各自对齐同一水平线；"
+        "每格四周留 8% 安全边距，人物不触画格边缘；均匀平光棚拍（flat even studio lighting, "
+        "no cast shadow, no depth of field, no vignette）。"
+    ),
+    "scene": (
+        "场景设定参考图（location reference sheet）：横向 16:9、纯浅灰无缝背景，"
+        "画面分 5 个画格，只留均匀白边、不画分隔线、不写任何文字："
+        "上排 3 格——正面主视图、从左侧看的机位、从右侧看的机位，均为与视线齐平的建筑立面视角"
+        "（architectural elevation, eye-level, orthographic），不带广角畸变；"
+        "下排——背面机位，以及横向占两格的正上方俯视平面图（top-down floor plan）："
+        "墙体在离地 1.2 米处水平剖切，家具按真实比例摆放。"
+        "五格是同一个空间：地面、墙面、门窗、家具与陈设的相对位置、材质、色调、光照方向与色温完全一致，"
+        "五格使用同一焦距与同一日照方向（consistent focal length and sun direction），"
+        "俯视图的家具位置能与主视图一一对上；每个画格内空间完整入画、四周留 8% 安全边距，"
+        "主体陈设不触画格边缘；不出现人物。"
+    ),
+    "prop": (
+        "道具设定参考图（prop reference sheet / product turnaround）：横向 16:9、纯白无缝背景，"
+        "画面分 5 个画格，只留均匀白边、不画分隔线、不写任何文字："
+        "上排 3 格——正面主视图、左侧面、右侧面；下排——背面，以及横向占两格的正上方俯视。"
+        "正交视角、五格同一焦距（orthographic, consistent focal length），五格是同一件道具："
+        "材质、纹理、颜色、磨损与刻字完全一致；每格单件居中，占该格高度约 75%–85%，"
+        "四周留 8% 安全边距不触边缘；柔和均匀布光，无高光热点、无投影"
+        "（soft even light, no specular hotspot, no drop shadow），俯视格能看清顶面结构；"
+        "不出现手、人物、场景、包装盒与价签。"
+    ),
+}
+
+# sheet 模式的反向词：**不能**再压 character sheet / 多视图（那是本模式的目标），
+# 也不能压“格子不等宽”（本模式就是 22/26/26/26 的不等分），
+# 改压“格子数不对 / 每格人不同 / 文字边框 / 透视畸变 / 景深投影”。
+SHEET_NEGATIVE: Dict[str, str] = {
+    "cast": ("different person in each panel, inconsistent face, different hairstyle, different outfit, "
+             "different body proportions, more than four panels, fewer than four panels, empty panel, "
+             "cropped head, cropped feet, subject touching panel edge, overlapping panels, "
+             "standing on different ground lines, second person, duplicated person, dynamic pose, "
+             "holding prop, perspective distortion, wide angle distortion, bokeh, depth of field, "
+             "cast shadow, drop shadow, vignette, "
+             "text, caption, letters, label, logo, watermark, signature, arrow, annotation, "
+             "color swatch, height chart, ruler, border line, colored background, "
+             "dramatic lighting, harsh shadow, deformed hands, extra limbs"),
+    "scene": ("person, people, human figure, crowd, silhouette, text, caption, signage, shop sign, "
+              "poster text, watermark, border line, empty panel, missing panel, overlapping panels, "
+              "subject touching panel edge, different room in each panel, different furniture layout, "
+              "different lighting direction, perspective distortion, wide angle distortion, fisheye, "
+              "bokeh, depth of field, drop shadow, adjacent lamp"),
+    "prop": ("hand, fingers, arm, person, holding by hand, text, caption, letters, price tag, label, "
+             "logo, watermark, border line, empty panel, missing panel, overlapping panels, "
+             "subject touching panel edge, different object in each panel, different material, "
+             "changed proportions, perspective distortion, wide angle distortion, bokeh, "
+             "depth of field, specular hotspot, drop shadow, "
+             "packaging box, scene background, table reflection"),
 }
 
 MEDIA = {"image": {".png", ".jpg", ".jpeg", ".webp"}, "video": {".mp4", ".mov", ".webm"},
@@ -255,15 +420,35 @@ def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Di
 
 def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
     views = jloads(asset.views, {})
+    # `__sheet` 是多视图设定稿本身，不是视图；单独给前端，不混进 views
+    sheet_meta = dict(views.pop("__sheet", {}) or {})
     out_views: Dict[str, Dict] = {}
     for view, meta in (views or {}).items():
         entry = dict(meta or {})
         rel = entry.get("path") or ""
         entry["url"] = f"/files/hibtv/{project_id}/{rel}" if rel else ""
         out_views[view] = entry
+    # 每张视图当前生效的出图约束（用户自定义 or 默认），前端「改这张的提示词」直接回显，
+    # 免得把约束文案在前端复制一份、两边改飘。
+    view_hints = {}
+    for view, _label in VIEW_DEFS.get(asset.kind, []):
+        text, custom = view_hint(asset, view)
+        view_hints[view] = {"text": text, "custom": custom}
+    sheet_meta["url"] = (f"/files/hibtv/{project_id}/{sheet_meta['path']}"
+                         if sheet_meta.get("path") else "")
     return {
         "id": asset.id, "kind": asset.kind, "code": asset.code, "name": asset.name,
-        "data": jloads(asset.data, {}), "views": out_views,
+        "data": jloads(asset.data, {}), "views": out_views, "viewHints": view_hints,
+        "sheet": sheet_meta,
+        "sheetSpec": {
+            # 画幅 + 每种资产的格子比例矩形（view, x, y, w, h）：前端只做展示/提示用，
+            # 裁切以后端实际出图尺寸为准，不依赖这份数据。
+            "size": list(sheet_size()),
+            "kinds": {k: {"brief": v["brief"],
+                           "cells": [[c[0], round(c[1], 4), round(c[2], 4),
+                                      round(c[3], 4), round(c[4], 4)] for c in v["cells"]]}
+                      for k, v in SHEET_SPEC.items()},
+        },
         "status": asset.status, "version": asset.version, "hidden": bool(asset.hidden),
         "sort": asset.sort,
         "defs": VIEW_DEFS.get(asset.kind, []),
@@ -465,6 +650,10 @@ async def _job_script(db: Session, project: HibtvProject, job: HibtvJob) -> None
         gates_hint=hint,
     )
     hibtv_llm.clamp_target_seconds(data, script_parse, job.ep)
+    # 生成侧先补齐「大纲说这集有的爆点必须认领」，再跑门（漏写整栏是常态，不是内容缺陷）
+    claimed = hibtv_llm.ensure_beats_claimed(data, outline)
+    if claimed:
+        logger.info("短剧剧本 E%02d 补齐 beatsClaimed %d 集", job.ep, claimed)
     _progress(db, job, 80, "跑质量门")
     gates = hibtv_gates.run_gates("script", data, outline=outline, art=_art_doc(db, project))
     save_doc(db, project.id, "script", job.ep, data, gates=gates)
@@ -554,23 +743,37 @@ def _anchor_prompt(asset: HibtvAsset) -> str:
     image = data.get("image") or {}
     prompt = (image.get("prompt") or data.get("prompt") or "").strip()
     if not prompt:
-        prompt = f"{asset.name}，{data.get('summary') or ''}，当代中国都市写实风格。"
+        summary = (data.get("summary") or "").strip()
+        prompt = (f"{asset.name}，{summary}，当代中国都市写实风格。" if summary
+                  else f"{asset.name}，当代中国都市写实风格。")
     return prompt
 
 
-def _view_prompt(asset: HibtvAsset, view: str) -> str:
-    """视图提示词：锚点正文 + 视角补写 + 用户「改图」补充说明。"""
-    defs = VIEW_DEFS.get(asset.kind, [["front", "正面"]])
-    anchor = defs[0][0]
-    base = _anchor_prompt(asset)
+def view_hint(asset: HibtvAsset, view: str) -> tuple:
+    """这一视图的生效约束：(文案, 是否用户自定义)。用户改过的 hint 优先于默认约束。"""
     data = jloads(asset.data, {})
-    hint = ((data.get("hints") or {}).get(view) or "").strip()
-    if not hint and view != anchor:
-        hint = VIEW_HINT.get(view, "")
+    custom = ((data.get("hints") or {}).get(view) or "").strip()
+    if custom:
+        return custom[:400], True
+    defs = VIEW_DEFS.get(asset.kind, [["front", "正面"]])
+    if view == defs[0][0]:
+        # 锚点正文里已经写了人物/空间本身，再叠默认视角约束会自相矛盾
+        return "", False
+    by_kind = VIEW_HINT.get(asset.kind) or {}
+    return by_kind.get(view) or VIEW_HINT_ANY, False
+
+
+def _view_prompt(asset: HibtvAsset, view: str) -> str:
+    """视图提示词：锚点正文 + 视角约束（默认或用户改写）+ 一句「只改视角」收尾。"""
+    base = _anchor_prompt(asset)
+    hint, _custom = view_hint(asset, view)
     if not hint:
         return base
-    tail = ("以参考图为准，人物与空间的所有细节保持一致。" if view == anchor
-            else "以参考图为准，人物/空间的所有细节保持一致，只改变视角。")
+    tail = {
+        "cast": "以参考图为准，必须看起来是同一个人（五官、发型、体型一致），只改变取景。",
+        "scene": "以参考图为同一个空间，只改变机位与朝向，家具陈设的位置与材质不变。",
+        "prop": "以参考图为同一件道具，只改变观察角度，材质、颜色与比例不变。",
+    }.get(asset.kind, "以参考图为准，只改变视角。")
     return f"{base}；{hint}。{tail}"
 
 
@@ -585,6 +788,12 @@ def _register_upload(db: Session, user_id: int, path: Path) -> Optional[int]:
     except Exception:  # noqa: BLE001
         logger.warning("短剧产物登记 Upload 失败（不影响出图）", exc_info=True)
         return None
+
+
+def view_negative(kind: str, view: str) -> str:
+    """视图专属反向词 + 通用反向词（背面禁脸、侧面禁止面对镜头、道具禁手）。"""
+    by_kind = VIEW_NEGATIVE.get(kind) or {}
+    return f"{NEGATIVE_BASE}, {by_kind.get(view) or by_kind.get('_any') or ''}".rstrip(", ")
 
 
 async def _draw_view(db: Session, project: HibtvProject, asset: HibtvAsset, view: str,
@@ -603,7 +812,8 @@ async def _draw_view(db: Session, project: HibtvProject, asset: HibtvAsset, view
         ref_abs = None
     prompt = _view_prompt(asset, view)
     result = await hibtv_image.generate_image(
-        prompt=prompt, out_path=out_abs, ref_path=ref_abs, width=width, height=height)
+        prompt=prompt, out_path=out_abs, ref_path=ref_abs, width=width, height=height,
+        negative=view_negative(asset.kind, view))
     upload_id = None
     if out_abs.exists():
         upload_id = _register_upload(db, project.user_id, out_abs)
@@ -617,6 +827,124 @@ async def _draw_view(db: Session, project: HibtvProject, asset: HibtvAsset, view
     asset.version = max(int(asset.version or 0), version)
     asset.updated_at = now()
     return views[view]
+
+
+def sheet_prompt(asset: HibtvAsset) -> str:
+    """多视图设定稿的提示词：主体描述 + 版式模板 + 用户改图要求。"""
+    spec = SHEET_SPEC.get(asset.kind)
+    if not spec:
+        return _anchor_prompt(asset)
+    base = _anchor_prompt(asset).rstrip("。 ")
+    custom = ((jloads(asset.data, {}).get("hints") or {}).get("__sheet") or "").strip()
+    tail = f"；{custom[:400]}" if custom else ""
+    return f"{base}。{SHEET_PROMPT[asset.kind]}{tail}"
+
+
+def sheet_negative(kind: str) -> str:
+    """设定稿反向词：禁“每格不同人 / 格子数不对 / 文字边框”，不禁多视图。"""
+    return SHEET_NEGATIVE.get(kind, SHEET_NEGATIVE.get("cast", ""))
+
+
+def _crop_sheet(sheet_abs: Path, kind: str, out_dir: Path) -> Dict[str, Path]:
+    """把设定稿按比例矩形裁成格子（不依赖模型画的线，也允许列宽不等分）。缺 Pillow 时返回空。"""
+    spec = SHEET_SPEC.get(kind)
+    if not spec or not sheet_abs.exists():
+        return {}
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover —— 线上 requirements 已装 Pillow
+        logger.warning("未安装 Pillow，设定稿不做裁切（只能看整张）")
+        return {}
+    out: Dict[str, Path] = {}
+    with Image.open(sheet_abs) as im:
+        im = im.convert("RGB")
+        width, height = im.size
+        for view, x, y, w, h in spec["cells"]:
+            # 比例 → 像素：模型没按 16:9 出图时也照样能裁（用实际尺寸换算）
+            box = (max(0, round(x * width)), max(0, round(y * height)),
+                   min(width, round((x + w) * width)), min(height, round((y + h) * height)))
+            if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+                logger.warning("设定稿 %s 的 %s 格尺寸异常，跳过裁切：%s", kind, view, box)
+                continue
+            dst = out_dir / f"{view}.png"
+            im.crop(box).save(dst, "PNG")
+            out[view] = dst
+    return out
+
+
+def sheet_size() -> tuple:
+    """设定稿画幅：默认 Qwen-Image-2.1 官方 16:9 原生 2K（2752×1536）。
+
+    低于推荐值等于把每格细节再降一档，所以默认取满；显存不够可在 env 调小
+    （HIBTV_SHEET_WIDTH / HIBTV_SHEET_HEIGHT），裁切按实际尺寸自适应。
+    """
+    w = int(getattr(settings, "hibtv_sheet_width", 0) or SHEET_W)
+    h = int(getattr(settings, "hibtv_sheet_height", 0) or SHEET_H)
+    return w, h
+
+
+def _apply_sheet(db: Session, project: HibtvProject, asset: HibtvAsset,
+                 sheet_abs: Path, rel: str, *, uploaded: bool = False) -> Dict:
+    """设定稿落库 + 重裁全部视图：LLM 出图与手工上传走同一条路径。
+
+    版本号只在设定稿上递增，每个格子版本跟随设定稿——所以不存在“只改了一张派生图”
+    这种状态，要改就重出/重传整张，四/五格一起变。
+    """
+    views = jloads(asset.views, {})
+    spec = SHEET_SPEC.get(asset.kind) or {"cells": []}
+    upload_id = _register_upload(db, project.user_id, sheet_abs) if sheet_abs.exists() else None
+    version = int((views.get("__sheet") or {}).get("version") or 0) + 1
+    stamp = now().strftime("%Y-%m-%d %H:%M")
+    views["__sheet"] = {
+        "path": rel, "upload_id": upload_id, "version": version, "at": stamp,
+        "uploaded": uploaded, "stale": False, "cells": [c[0] for c in spec["cells"]],
+    }
+    cells = _crop_sheet(sheet_abs, asset.kind, sheet_abs.parent) if sheet_abs.exists() else {}
+    folder = rel.rsplit("/", 1)[0]
+    for view, _label in VIEW_DEFS.get(asset.kind, []):
+        cell = cells.get(view)
+        if cell is not None and cell.exists():
+            views[view] = {
+                "path": f"{folder}/{view}.png",
+                "upload_id": _register_upload(db, project.user_id, cell),
+                "version": version, "uploaded": uploaded, "stale": False,
+                "fromSheet": True, "at": stamp,
+            }
+        elif (views.get(view) or {}).get("path"):
+            # 裁切不可用（缺 Pillow / 落盘失败）：旧格子标过期，不假装同步
+            views[view]["stale"] = True
+    asset.views = jdumps(views)
+    asset.version = max(int(asset.version or 0), version)
+    asset.updated_at = now()
+    reconcile_status(asset)
+    return views["__sheet"]
+
+
+async def _draw_sheet(db: Session, project: HibtvProject, asset: HibtvAsset) -> Dict:
+    """一次出整张多视图设定稿，再裁成每个视图（改主图 = 四/五张同步）。"""
+    views = jloads(asset.views, {})
+    spec = SHEET_SPEC.get(asset.kind)
+    if spec is None:
+        anchor = VIEW_DEFS.get(asset.kind, [["front"]])[0][0]
+        return await _draw_view(db, project, asset, anchor)
+    rel = f"assets/{asset.kind}/{asset.code}/sheet.png"
+    out_abs = project_dir(project.id) / rel
+    # 重出时把上一版设定稿当参考图：只换版式/补细节，不换人
+    prev_rel = (views.get("__sheet") or {}).get("path") or ""
+    ref_abs = abs_path(project.id, prev_rel) if prev_rel else None
+    if ref_abs is not None and not ref_abs.exists():
+        ref_abs = None
+    await hibtv_image.generate_image(
+        prompt=sheet_prompt(asset), out_path=out_abs, ref_path=ref_abs,
+        width=sheet_size()[0], height=sheet_size()[1],
+        negative=sheet_negative(asset.kind), keep_adv_negative=False)
+    return _apply_sheet(db, project, asset, out_abs, rel)
+
+
+def import_sheet(db: Session, project: HibtvProject, asset: HibtvAsset,
+                 sheet_abs: Path, rel: str) -> Dict:
+    """手工上传一张多视图设定稿（外部出图 / 人工修图）后重裁全部视图。"""
+    return _apply_sheet(db, project, asset, sheet_abs, rel, uploaded=True)
 
 
 def mark_derived_stale(asset: HibtvAsset) -> None:
@@ -653,7 +981,9 @@ def image_steps(db: Session, project: HibtvProject, payload: Dict) -> int:
     for asset in assets:
         views = jloads(asset.views, {})
         defs = [v[0] for v in VIEW_DEFS.get(asset.kind, [["front"]])]
-        if mode == "anchor":
+        if mode == "sheet":
+            steps += 1        # 一张设定稿 = 一张图（不再按视图张数扣）
+        elif mode == "anchor":
             steps += 1
         elif mode == "all":
             steps += len([v for v in defs
@@ -670,6 +1000,18 @@ async def _job_images(db: Session, project: HibtvProject, job: HibtvJob) -> None
     assets = _asset_query(db, project, payload).all()
     if not assets:
         raise RuntimeError("没有可出图的资产")
+
+    if mode == "sheet":
+        # 一张多视图设定稿：出图 1 张、裁切 N 格，所以进度按资产算而不是按视图算
+        total = max(1, len(assets))
+        for i, asset in enumerate(assets, start=1):
+            asset.status = "drawing"
+            db.commit()
+            _progress(db, job, int(5 + 90 * i / total), f"{asset.code} {asset.name} · 多视图设定稿")
+            await _draw_sheet(db, project, asset)
+            reconcile_status(asset)
+            db.commit()
+        return
 
     total_steps = 0
     for asset in assets:
@@ -880,6 +1222,29 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
         db.commit()
 
 
+# 段级出片的参考图约定：挂上去的是设定稿（一张里并排 4~5 个视角），
+# 视频模型很容易把整张版式复刻成九宫格，或把一格当成一个人。
+# 不改镜头正文结构，只在尾部追加“怎么用参考图”。
+REF_GUARD = (
+    "参考图约定：随附图片是角色、场景、道具的设定图（同一张里并排 4 个或 5 个视角），"
+    "只作为外观证据——照着确认脸、发型、体型、服装、配色、材质与空间结构；"
+    "不要复刻它的分格排版，不要把同一角色画成多个人，不要输出九宫格或拼贴；"
+    "景别、机位、构图与动作以上面的镜头描述为准。"
+)
+
+
+def video_prompt(db: Session, project: HibtvProject, seg: HibtvSegment,
+                 prompt: str = "", ref_ids: Optional[List[int]] = None) -> str:
+    """出片提示词：挂了参考图就追加「只当外观证据、不复刻分格版式」。"""
+    text = (prompt or "").strip()
+    if not text or REF_GUARD in text:
+        return text
+    ids = ref_ids if ref_ids is not None else segment_ref_ids(db, project, seg)
+    if not ids:
+        return text
+    return f"{text}\n{REF_GUARD}"
+
+
 def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[int]:
     """段的参考图：场景锚点 + 出场角色锚点 + 道具锚点（≤ 9，各取第一个有图的视图）。"""
     data = jloads(seg.data, {})
@@ -916,6 +1281,11 @@ def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> Li
         if asset is None:
             continue
         views = jloads(asset.views, {})
+        # 多视图设定稿：整张当 1 个参考（含 4/5 个视角），不拆成多张占预算
+        sheet_uid = (views.get("__sheet") or {}).get("upload_id")
+        if sheet_uid and int(sheet_uid) not in ids:
+            ids.append(int(sheet_uid))
+            continue
         order = [v[0] for v in VIEW_DEFS.get(kind, [["front"]])]
         for view in order:
             uid = (views.get(view) or {}).get("upload_id")
