@@ -12,9 +12,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..auth import decode_token
-from ..config import OUTPUT_DIR, settings
+from ..config import OUTPUT_DIR
 from ..database import get_db
-from ..models import DramaArtifact, DramaEpisode, DramaProject, Task, Upload, User
+from ..models import Task, Upload, User
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -83,37 +83,6 @@ def download_upload(
         ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
     }.get(suffix, "application/octet-stream")
     return FileResponse(path, media_type=media_type)
-
-@router.get("/drama/{artifact_id}")
-def download_drama(
-    artifact_id: int,
-    download: int = Query(default=0, ge=0, le=1),
-    token: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    """短剧产物：镜头切片 / 成片 / 联系表；鉴权链 artifact → episode → project。"""
-    user = _user_from_query_token(token, db)
-    if settings.drama_admin_only and user.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "短剧功能测试中，暂未对外开放")
-    artifact = db.get(DramaArtifact, artifact_id)
-    if artifact is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "产物不存在")
-    episode = db.get(DramaEpisode, artifact.episode_id)
-    project = db.get(DramaProject, episode.project_id) if episode is not None else None
-    if project is None or (project.user_id != user.id and user.role != "admin"):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "产物不存在")
-    path = Path(artifact.path or "")
-    if not path.exists():
-        raise HTTPException(status.HTTP_410_GONE, "产物文件已失效")
-    suffix = path.suffix.lower()
-    media_type = {
-        ".mp4": "video/mp4", ".mov": "video/quicktime",
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".png": "image/png", ".webp": "image/webp",
-    }.get(suffix, "application/octet-stream")
-    filename = f"drama_{artifact.kind}_{artifact.id}{suffix}"
-    return FileResponse(path, media_type=media_type, filename=filename if download else None)
-
 
 @router.get("/adimage/{task_id}")
 def download_advideo_image(

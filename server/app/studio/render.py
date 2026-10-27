@@ -1,7 +1,7 @@
 """成片：按切表顺序把段视频拼成一条。
 
 - 只有全部段 ready 才允许合成（缺一段就是缺剧情的片子，不给半成品）；
-- 拼接复用 drama_media.concat_clips：优先 -c copy，时长偏差或音轨不一致时自动重编码；
+- 拼接复用 media.concat_clips：优先 -c copy，时长偏差或音轨不一致时自动重编码；
 - cutlist 落每段的计划秒数、实测时长与文件，交付可追溯；
 - 同步执行：5 段、11 秒左右的段通常 1–3 秒拼完，不值得再开一条队列。
 """
@@ -12,7 +12,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from ..config import STUDIO_DIR
-from ..services import drama_media
+from ..services import media
 from . import clips as clipmod
 from . import docs as docmod
 from .models import StudioRender
@@ -58,7 +58,7 @@ def cutlist_of(db: Session, project, episode) -> tuple:
                 "segment_id": segment_id,
                 "file": str(path),
                 "planned_sec": clipmod.seconds_of(seg),
-                "actual_sec": round(drama_media.probe_duration(path), 2),
+                "actual_sec": round(media.probe_duration(path), 2),
             }
         )
     return cutlist, blockers
@@ -85,9 +85,9 @@ def do_render(db: Session, project, episode) -> StudioRender:
     db.commit()
     db.refresh(row)
     try:
-        drama_media.concat_clips([Path(c["file"]) for c in cutlist], out, fps=24)
+        media.concat_clips([Path(c["file"]) for c in cutlist], out, fps=24)
         row.path = str(out)
-        row.duration_sec = int(round(drama_media.probe_duration(out)))
+        row.duration_sec = int(round(media.probe_duration(out)))
         row.cutlist = docmod.dumps(cutlist)
         row.status = "done"
         row.error = ""

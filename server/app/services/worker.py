@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
 from ..models import Task, Upload, User
-from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, drama_media, videollm
+from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, media, videollm
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
 from .pool import WorkerNode, pool
@@ -389,18 +389,6 @@ def _director_busy() -> bool:
     return _DIRECTOR_RUNNING
 
 
-def _notify_drama(task_id: int) -> None:
-    """导演台任务终结后通知短剧执行器（惰性导入避免循环依赖）。
-
-    即使通知失败也不影响任务本身：短剧 30s 巡扫会按 task 状态兜底推进。
-    """
-    try:
-        from . import drama_runner
-        drama_runner.on_task_finished(task_id)
-    except Exception:
-        logger.exception("短剧任务 #%s 完成通知处理失败（巡扫将兜底）", task_id)
-
-
 def _claim_director() -> Optional[int]:
     """领取导演台任务（计费口径同短视频：派发即扣、失败全额退还）。"""
     with SessionLocal() as db:
@@ -539,14 +527,14 @@ def _concat_director_chunks(task_id: int, chunks: list, out_path: Path) -> Path:
             if not src.exists():
                 raise RuntimeError(f"导演台分块产物缺失：{src.name}")
             dst = STAGING_DIR / f"{task_id}_director_c{int(chunk['chunk_index']):02d}_trim.mp4"
-            drama_media.slice_frames(
+            media.slice_frames(
                 src, dst,
                 int(chunk.get("trim_head_frames") or 0),
                 int(chunk["total_frames"]),
                 fps=fps,
             )
             parts.append(dst)
-        drama_media.concat_clips(parts, out_path, fps=fps)
+        media.concat_clips(parts, out_path, fps=fps)
     finally:
         for path in parts:
             Path(path).unlink(missing_ok=True)
@@ -567,7 +555,7 @@ async def _run_director(task_id: int, node: WorkerNode) -> None:
 
 
 async def _finalize_director(task_id: int, staging: Path) -> None:
-    """把 staging 成片移入 output、置 done，通知短剧执行器并清理分块状态。"""
+    """把 staging 成片移入 output、置 done 并清理分块状态。"""
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         if task is None or task.status != "generating_768p":
@@ -580,7 +568,6 @@ async def _finalize_director(task_id: int, staging: Path) -> None:
         db.commit()
     logger.info("导演台任务 #%s 完成: %s", task_id, final_path)
     _clear_director_state(task_id)
-    await asyncio.to_thread(_notify_drama, task_id)
 
 
 def _probe_image_size(path) -> tuple:
@@ -1084,7 +1071,6 @@ def _fail_task(task_id: int, error: str) -> None:
     logger.error("任务 #%s 判失败：%s", task_id, error)
     if is_director:
         _clear_director_state(task_id)  # 分块状态/临时分块一并清理
-        _notify_drama(task_id)
 
 
 def _acquire_with_pin(task_id: int, role: str, fallback, require_director: bool = False):
@@ -1144,7 +1130,6 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
             logger.error("毒丸隔离 #%s：%s 已熔断，拒绝跨节点重投", task_id, failed_url)
             if is_director:
                 _clear_director_state(task_id)
-                _notify_drama(task_id)
             return False
         if task.attempts < MAX_ATTEMPTS:
             task.status = stage
@@ -1169,7 +1154,6 @@ def _requeue_or_fail(task_id: int, stage: str, error: str = "") -> bool:
         db.commit()
         if is_director:
             _clear_director_state(task_id)  # 最终判失败：分块状态/临时分块一并清理
-            _notify_drama(task_id)
     return False
 
 # ---------------------------------------------------------------- ② 768p 生成

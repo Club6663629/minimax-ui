@@ -39,34 +39,6 @@ class Settings(BaseSettings):
     # 导演台单次提交的时长上限（秒）：超过按段边界拆成多次生成，再用 ffmpeg 拼接。
     # 单次 latent 采样时长越长，宿主内存占用越高，超过 30s 在 4090/A100 上易触发 kernel OOM。
     director_chunk_seconds: float = 30.0
-    # ---- 短剧流水线（七阶段：剧本→角色→分镜→就绪→生成→审片→交付）----
-    # 总开关；上线时显式置 true（还需 director_enabled 与带 director 标签的节点）
-    drama_enabled: bool = False
-    drama_max_shots: int = 240            # 集内镜头总数（15 分钟约 150–200 镜）
-    drama_max_episode_seconds: int = 900  # 集时长上限（15 分钟）
-    drama_max_shot_seconds: float = 10.0
-    drama_min_shot_seconds: float = 2.0
-    # 分段生成：段 = 一次 director 任务 = 一次审片/返修
-    drama_segment_target_seconds: float = 60.0
-    drama_segment_max_seconds: float = 120.0
-    drama_segment_max_shots: int = 12
-    drama_plan_batch_beats: int = 6       # 分镜规划每批拍数（长集避免一次排 200 镜）
-    drama_keep_versions: int = 5          # 每镜保留版本数（P1 只记录，不清理）
-    # 已废弃：生成改走 drama_ai_timeout；保留仅为兼容旧 .env，无代码引用
-    drama_llm_timeout: int = 90
-    # qwen / off（off=强制本地模板，便于无 key 联调与 smoke），同时是 AI 辅助总开关
-    drama_llm_provider: str = "qwen"
-    # AI 辅助（P0+P1）：文本默认 deepseek-flash（快、便宜、JSON 稳），视觉默认 qwen-flash；
-    # 两个 provider 会自动交叉兜底，无 key 时整体回退本地/原值
-    drama_ai_text_provider: str = "deepseek"
-    drama_ai_vision_provider: str = "qwen"
-    drama_ai_timeout: int = 60              # 单次 AI 辅助超时（秒）
-    drama_ai_max_tokens: int = 1600
-    drama_ai_max_images: int = 4            # 单次视觉调用最多图片数
-    drama_ai_rate_per_hour: int = 60        # 每用户每小时 AI 调用上限
-    drama_ai_cache_ttl: int = 1800          # 相同输入的结果缓存（秒）
-    # 测试期只对管理员开放；测试完成后置 false（或 .env 加 DRAMA_ADMIN_ONLY=false）对外开放
-    drama_admin_only: bool = True
     # ---- 电商广告片 advideo：商品图 → 广告图（人工确认） → 广告视频 ----
     advideo_enabled: bool = True
     # 广告片已上线（2026-10-09 拍板放开）：默认全员可用。
@@ -243,10 +215,9 @@ UPLOAD_DIR = DATA_DIR / "uploads"     # 用户上传的首尾帧 / 参考图
 STAGING_DIR = DATA_DIR / "staging"    # 768p 中间产物
 OUTPUT_DIR = DATA_DIR / "output"      # 最终成片
 ADVIDEO_DIR = DATA_DIR / "advideo"    # 广告片候选广告图
-DRAMA_DIR = DATA_DIR / "drama"        # 短剧产物（clips/final/sheet/anchors/runs）
 # 剧集工坊：projects/<id>/assets/<C01>/<view>_v1.png
 STUDIO_DIR = Path(settings.studio_dir).resolve() if settings.studio_dir else DATA_DIR / "studio"
 WORKFLOW_DIR = Path(__file__).resolve().parent.parent / "workflows"
 
-for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, DRAMA_DIR, STUDIO_DIR):
+for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, STUDIO_DIR):
     _d.mkdir(parents=True, exist_ok=True)

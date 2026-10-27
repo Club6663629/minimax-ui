@@ -1,13 +1,10 @@
 /** 页面骨架：顶部导航（海白菜品牌）+ 协议更新横幅 + 内容区 + 页脚常驻法律文本入口。 */
-import { useEffect, useState } from "react";
-import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck, Sparkles, BookOpen } from "lucide-react";
+import { Coins, ListChecks, LogOut, ShieldCheck, Sparkles, BookOpen } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
 import BrandLogo from "./BrandLogo";
 import LegalNotice from "./LegalNotice";
 import { FOOTER_LINKS, LEGAL_UPDATED, LEGAL_VERSION } from "../legal";
 import { useAuth } from "../state/auth";
-import type { DramaStatus } from "../types";
 
 function NavItem({
   to,
@@ -54,22 +51,6 @@ function NavItem({
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [dramaStatus, setDramaStatus] = useState<DramaStatus | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    api
-      .dramaStatus()
-      .then(setDramaStatus)
-      .catch(() => setDramaStatus(null));
-  }, [user]);
-
-  const dramaDisabled = dramaStatus !== null && !dramaStatus.available;
-  const dramaTitle = dramaDisabled
-    ? dramaStatus?.enabled
-      ? "短剧功能测试中，暂仅管理员可用"
-      : "短剧功能未开启（需 DRAMA_ENABLED 与 DIRECTOR_ENABLED）"
-    : "短剧流水线";
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -82,13 +63,6 @@ export default function Layout() {
           <nav className="flex items-center gap-1">
             <NavItem to="/" icon={<Sparkles size={15} />} label="创作" />
             <NavItem to="/studio" icon={<BookOpen size={15} />} label="剧集工坊" />
-            <NavItem
-              to="/drama"
-              icon={<Clapperboard size={15} />}
-              label="短剧"
-              disabled={dramaDisabled}
-              title={dramaTitle}
-            />
             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
             {user?.role === "admin" && (
               <NavItem to="/admin" icon={<ShieldCheck size={15} />} label="管理" />

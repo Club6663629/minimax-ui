@@ -3,9 +3,6 @@ import Layout from "./components/Layout";
 import AdminPage from "./pages/AdminPage";
 import AuthPage from "./pages/AuthPage";
 import CreatePage from "./pages/CreatePage";
-import DramaListPage from "./pages/DramaListPage";
-import DramaProjectPage from "./pages/DramaProjectPage";
-import DramaWorkspacePage from "./pages/DramaWorkspacePage";
 import LedgerPage from "./pages/LedgerPage";
 import StudioEpisodePage from "./pages/StudioEpisodePage";
 import StudioProjectPage from "./pages/StudioProjectPage";
@@ -39,9 +36,6 @@ export default function App() {
             }
           >
             <Route path="/" element={<CreatePage />} />
-            <Route path="/drama" element={<DramaListPage />} />
-            <Route path="/drama/:pid" element={<DramaProjectPage />} />
-            <Route path="/drama/:pid/ep/:eid" element={<DramaWorkspacePage />} />
             <Route path="/studio" element={<StudioProjectsPage />} />
             <Route path="/studio/:pid" element={<StudioProjectPage />} />
             <Route path="/studio/:pid/ep/:ep" element={<StudioEpisodePage />} />

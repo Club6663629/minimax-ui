@@ -1,8 +1,7 @@
-"""短剧媒体处理：ffmpeg/ffprobe 切片、拼接、抽帧、联系表、接缝指标。
+"""媒体处理工具：ffmpeg/ffprobe 切片、拼接、抽帧、联系表、接缝指标。
 
 本机可能只有 ffmpeg 没有 ffprobe（imageio-ffmpeg shim），所以所有探测都带
-「解析 ffmpeg -i 头部」的回退路径；所有 ffmpeg 调用失败都抛 MediaError，
-由 runner 统一回写 run/episode 的失败状态。
+「解析 ffmpeg -i 头部」的回退路径；所有 ffmpeg 调用失败都抛 MediaError。
 """
 import logging
 import math
@@ -223,7 +222,7 @@ def make_sheet(clip_paths: list, out, cols: int = 4) -> Optional[Path]:
         return None
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dir = Path(tempfile.mkdtemp(prefix="drama_sheet_"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="media_sheet_"))
     try:
         for index, clip in enumerate(paths):
             duration = probe_duration(clip)
@@ -290,7 +289,7 @@ def _level_of(ssim: Optional[float], d_y: Optional[float], audio_gap: Optional[f
 def seam_metrics(prev_clip, prev_frames: int, next_clip) -> dict:
     """前镜末帧 vs 后镜首帧：SSIM / ΔY / 音频差，取最差等级。"""
     prev_clip, next_clip = Path(prev_clip), Path(next_clip)
-    with tempfile.TemporaryDirectory(prefix="drama_seam_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="media_seam_") as tmp:
         a = Path(tmp) / "prev.png"
         b = Path(tmp) / "next.png"
         try:
