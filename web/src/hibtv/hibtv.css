@@ -1,4 +1,4 @@
-/* HiBTV 暗金工作台设计系统 —— 由 hibtv/prototype.html 的样式整体移植，
+/* HiBTV 暗金工作台设计系统 —— 由设计稿 hibtv/prototype.html（本地保存，不入库）的样式整体移植，
    作用域收敛到 .hibtv-root（去掉 body/html 全局规则），类名保持 1:1。 */
 .hibtv-root{--bg:#0a0908;--bg-2:#0e0d0b;--panel:#131110;--panel-2:#191614;--panel-3:#211d19;
   --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.04);
