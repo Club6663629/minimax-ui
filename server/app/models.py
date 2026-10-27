@@ -180,7 +180,7 @@ class HibtvDoc(Base):
     data: Mapped[str] = mapped_column(Text, default="{}")
     # 质量门结果：{status: ok|fail|skipped, problems: [...], checked_at, runner}
     gates: Mapped[str] = mapped_column(Text, default="{}")
-    version: Mapped[int] = mapped_column(Integer, default=1)
+    version: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="empty")  # empty|running|done|failed
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

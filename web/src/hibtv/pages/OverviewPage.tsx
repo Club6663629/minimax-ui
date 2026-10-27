@@ -72,9 +72,18 @@ export default function OverviewPage() {
     };
   }, [assets, eps, project?.docs]);
 
-  const gaps = (project?.docs?.["outline#0"]?.gates?.problems || []).filter(
-    (p) => !p.startsWith("✗"),
-  );
+  // 缺口汇总大纲 / 剧本 / 分镜三份文档，否则概览（只看大纲）与分镜页数字永远对不上。
+  const gaps = useMemo(() => {
+    const out: string[] = [];
+    Object.entries(project?.docs || {}).forEach(([key, docRow]) => {
+      if (!/^(outline|script|storyboard)/.test(key)) return;
+      for (const p of (docRow.gates?.problems || []) as string[]) {
+        if (p.startsWith("✗")) continue;
+        if (!out.includes(p)) out.push(p);
+      }
+    });
+    return out;
+  }, [project?.docs]);
   const totalSecs = renders.reduce((n, r) => n + (r.durationSec || 0), 0);
   const latest = renders[0];
 
@@ -252,6 +261,8 @@ export default function OverviewPage() {
             <span className={`chip ${gaps.length ? "red" : "green"}`}>
               {gaps.length} 项
             </span>
+            <span className="sp" />
+            <span className="tiny dim">大纲 / 剧本 / 分镜合并</span>
           </div>
           <div className="card-bd small mut" style={{ lineHeight: 1.9 }}>
             {gaps.length

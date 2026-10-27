@@ -1,7 +1,7 @@
 /** 项目设置：基本参数（就改、就记变更）+ 链路可用性 + 导出 / 删除。 */
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { hibtvApi } from "../api";
+import { hibtvApi, maskHost } from "../api";
 import { Stage } from "../HibtvLayout";
 import { Empty, PageHead } from "../components/ui";
 import { errText, useHibtv } from "../state";
@@ -222,18 +222,20 @@ export default function SettingsPage() {
               )}
               {row(
                 "生图节点",
-                `${status?.image?.worker || "qwen21"}${status?.image?.available ? " · 可用" : " · 未探活"}`,
+                `${maskHost(status?.image?.worker) || "qwen21"}${status?.image?.available ? " · 可用" : " · 未探活"}`,
                 status?.image?.degraded ? "已降级（纯文本 + 空白参考图）" : status?.image?.note || "",
               )}
               {row(
                 "质量门",
-                status?.gates?.available ? `node ${status.gates.bin}` : "未运行（缺 node）",
-                status?.gates?.available ? "确定性校验通过才亮绿灯" : "页面会显式标注「质量门未运行」",
+                status?.gates?.available ? "node 已就绪" : "未运行（缺 node）",
+                status?.gates?.available
+                  ? `runner: ${status.gates.node || status.gates.bin} · 确定性校验通过才亮绿灯`
+                  : "页面会显式标注「质量门未运行」",
               )}
               {row(
                 "整集拼接",
-                status?.compose?.available ? "ffmpeg 可用" : "未检测到 ffmpeg",
-                status?.compose?.note || "",
+                status?.compose?.ffmpeg ? "ffmpeg 可用" : "未检测到 ffmpeg",
+                status?.compose?.note || (status?.compose?.ffmpeg ? `ffmpeg: ${status.compose.ffmpeg}` : ""),
               )}
               {row("段长上限", `${status?.segMaxSeconds || 10}s`, "与平台 5 / 8 / 10 / 15 档吸附")}
               {row(

@@ -167,16 +167,28 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
     void refreshJobs();
   }, [projectId, refreshProject, refreshJobs]);
 
+  const hasActiveJob = jobs.some((j) => j.status === "queued" || j.status === "running");
+
   useEffect(() => {
     if (!projectId) return;
-    const timer = window.setInterval(() => {
-      void refreshJobTick();
-    }, 4000);
-    const refreshJobTick = async () => {
+    let timer = 0;
+    let stopped = false;
+    const tick = async () => {
+      // 标签页不可见时不拉接口；有活跃作业 3s 一次，空闲降到 12s（长驻不再堆请求）。
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(tick, 20000);
+        return;
+      }
       await refreshJobs();
+      if (stopped) return;
+      timer = window.setTimeout(tick, hasActiveJob ? 3000 : 12000);
     };
-    return () => window.clearInterval(timer);
-  }, [projectId, refreshJobs]);
+    timer = window.setTimeout(tick, hasActiveJob ? 3000 : 6000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [projectId, refreshJobs, hasActiveJob]);
 
   const selectProject = useCallback((id: number) => setProjectId(id), []);
 

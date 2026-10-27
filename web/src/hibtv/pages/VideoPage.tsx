@@ -179,12 +179,8 @@ export default function VideoPage() {
         right={
           <>
             <GateChips gates={boardDoc?.gates} />
-            {latest && (
-              <a className="btn" href={`${mediaUrl(latest.url)}&download=1`}>
-                导出成片
-              </a>
-            )}
-            <button className="btn gold" onClick={() => void compose()} disabled={!segments.length}>
+            <button className="btn gold" onClick={() => void compose()} disabled={!withVideo}
+              title={withVideo ? "按段顺序拼成本集" : "还没有任何一段出过片，先出一段再合成"}>
               {latest ? "重新合成" : "合成成片"}
             </button>
           </>

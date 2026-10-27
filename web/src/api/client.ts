@@ -74,6 +74,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     let errorCode: string | undefined;
     if (typeof detail === "string") {
       message = detail;
+    } else if (Array.isArray(detail)) {
+      // FastAPI 校验错误是 [{loc, msg, type}] 数组，直接展示会是一屏英文
+      const fieldZh: Record<string, string> = { email: "邮箱", password: "密码", username: "用户名" };
+      const dict: [string, string][] = [
+        ["special-use or reserved name", "该邮箱域名是保留域名，无法登录（请换成 @example.com 这类真实域名）"],
+        ["not a valid email address", "邮箱格式不合法"],
+        ["Field required", "必填"],
+        ["at least 8 characters", "至少 8 位"],
+      ];
+      const parts = (detail as { loc?: (string | number)[]; msg?: string }[]).map((item) => {
+        const key = String(item.loc?.[item.loc.length - 1] ?? "");
+        const field = fieldZh[key] || "参数";
+        let msg = item.msg || "格式不正确";
+        for (const [needle, zh] of dict) {
+          if (msg.includes(needle)) {
+            msg = zh;
+            break;
+          }
+        }
+        return `${field}：${msg}`;
+      });
+      message = parts.join("；") || "请求参数不合法";
     } else if (detail && typeof detail === "object") {
       // 后端结构化错误（云开关机等）：{ok,error_code,msg,request_id}
       const obj = detail as { msg?: string; error_code?: string };

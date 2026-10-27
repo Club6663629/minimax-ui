@@ -22,8 +22,20 @@ import { AuthProvider, useAuth } from "./state/auth";
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) {
+    // 用暗金底而不是白底，避免未登录时先闪一帧「白屏 + 加载中」再跳登录页
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#0a0908",
+          color: "#948b7e",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 12,
+          letterSpacing: ".14em",
+        }}
+      >
         加载中…
       </div>
     );

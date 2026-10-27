@@ -229,6 +229,42 @@ def beat_seconds(beat: Dict) -> float:
 
 
 # ------------------------------------------------------------------ 兜底：大纲
+def ensure_reuse_plan(outline: Dict) -> int:
+    """给只出现一次的场景补「规避方案」——单集项目的每个场景天然只用一次。
+
+    novel-outline 的质量门要求 `scenes[].reusePlan` 非空（否则等于要搭一次性布景），
+    但 LLM 不会主动写。这里按出现次数确定性补齐，返回补了几条。
+    """
+    usage: Dict[str, int] = {}
+    for ep in outline.get("episodes") or []:
+        for sid in ep.get("scenes") or []:
+            key = str(sid)
+            usage[key] = usage.get(key, 0) + 1
+    fixed = 0
+    for scene in outline.get("scenes") or []:
+        sid = str(scene.get("id") or "")
+        if str(scene.get("reusePlan") or "").strip():
+            continue
+        if usage.get(sid, 0) <= 1:
+            scene["reusePlan"] = (
+                "本集一次性场景：与主场景共用同一面墙与同一组家具，只换陈设与光位，"
+                "不另搭新布景；近景用同一角落反向拍摄。"
+            )
+            fixed += 1
+    return fixed
+
+
+def ensure_cast_ids(data: Dict) -> int:
+    """给角色补稳定 id（C01…）——cast 文档跨章节对齐、资产 code 都靠它。"""
+    fixed = 0
+    for i, item in enumerate(data.get("characters") or []):
+        if str(item.get("id") or "").strip():
+            continue
+        item["id"] = f"C{i + 1:02d}"
+        fixed += 1
+    return fixed
+
+
 def _tier(index: int) -> str:
     if index < 3:
         return "lead"
@@ -599,6 +635,26 @@ def h3_alignment_line(cuts: Sequence[Dict]) -> str:
     return "参考图与目标视频的对齐——" + "；".join(parts) + "。"
 
 
+def cut_body(cut: Dict) -> str:
+    """镜头正文 = 运镜词 + 景别 + 画面描述。
+
+    `camera` / `size` 改了必须能改变提示词，否则「改镜头」只是改表格；
+    描述里已经写了同一个词时不重复叠加。
+    """
+    move = CAMERA_ZH.get(str(cut.get("camera") or "Static Shot"), "固定")
+    size = SHOT_SIZES.get(str(cut.get("size") or "medium"), "")
+    body = str(cut.get("shot") or "").strip()
+    head = body[:24]
+    lead: List[str] = []
+    if move and move not in head:
+        lead.append(f"{move}镜头")
+    if size and size not in head:
+        lead.append(size)
+    if lead:
+        return f"{'，'.join(lead)}。{body}" if body else f"{'，'.join(lead)}。"
+    return body or "空镜。"
+
+
 def _shot_text(cut: Dict, scene_name: str) -> str:
     """镜头正文：不写角色名、不写秒数、不写图片引用。"""
     move = CAMERA_ZH.get(cut.get("camera") or "Static Shot", "固定")
@@ -735,8 +791,7 @@ def _build_segment(seg_no: int, ep_no: int, scene_index: int, cuts: List[Dict], 
     starts = _cut_starts(cuts)
     for k, cut in enumerate(cuts, start=1):
         mark = "[镜头 1]" if k == 1 else f"[镜头 {k}] 于 {h3_cut_time(starts[k - 1])}，"
-        body = cut["shot"]
-        desc.append(f"{mark} {body}")
+        desc.append(f"{mark} {cut_body(cut)}")
     h3 = h3_alignment_line(cuts) + "\n整体视听描述：\n" + "\n".join(desc)
 
     # 台词块追加在各自镜头段落里（逐字），说话人身份/语气写在 <d> 外（英文）
@@ -825,7 +880,7 @@ def rebuild_h3_prompt(seg: Dict, script_ep: Dict, outline: Dict) -> str:
     desc: List[str] = []
     for k, cut in enumerate(cuts, start=1):
         mark = "[镜头 1]" if k == 1 else f"[镜头 {k}] 于 {h3_cut_time(starts[k - 1])}，"
-        desc.append(f"{mark} {(cut.get('shot') or '').strip()}".rstrip())
+        desc.append(f"{mark} {cut_body(cut)}".rstrip())
         first, last = _beat_range(cut)
         blocks = []
         for n in range(first, last + 1):
@@ -844,6 +899,157 @@ def rebuild_h3_prompt(seg: Dict, script_ep: Dict, outline: Dict) -> str:
     soundscape = seg.get("soundscape") or f"{scene_name or '场景'}的环境底噪。"
     return (h3_alignment_line(cuts) + "\n整体视听描述：\n" + "\n".join(desc)
             + DIALOGUE_TAIL.format(soundscape))
+
+
+def _flow_of(script_ep: Dict, scene_index: int) -> tuple:
+    scenes = script_ep.get("scenes") or []
+    if 0 < int(scene_index) <= len(scenes):
+        scene = scenes[int(scene_index) - 1]
+        return (scene.get("flow") or scene.get("beats") or []), scene
+    return [], {}
+
+
+def fit_dialogue_seconds(data: Dict, script_ep: Dict) -> int:
+    """把「一句台词装不进镜头秒数」的镜头拉长到台词自然时长。
+
+    skill 的 dialogue-fit 用 4.5 字/秒换算，LLM 切镜时经常按 5s 一刀切，
+    27 字的台词（6s）就装不下。台词逐字优先于节奏，所以这里按台词反推秒数，
+    并把 params.maxCutSeconds 同步到真实最大值（否则 cut-length 会反过来报错）。
+    """
+    changed = 0
+    max_cut = 0.0
+    for ep_doc in data.get("episodes") or []:
+        for seg in ep_doc.get("segments") or []:
+            flow, _scene = _flow_of(script_ep, int(seg.get("sceneIndex") or 1))
+            for cut in seg.get("cuts") or []:
+                first, last = _beat_range(cut)
+                need = 0.0
+                for n in range(first, last + 1):
+                    if 0 < n <= len(flow) and flow[n - 1].get("line"):
+                        need += beat_seconds(flow[n - 1])
+                if need > float(cut.get("seconds") or 0) + 0.01:
+                    cut["seconds"] = round(min(8.0, need), 1)
+                    changed += 1
+                max_cut = max(max_cut, float(cut.get("seconds") or 0))
+    params = data.setdefault("params", {})
+    if max_cut > float(params.get("maxCutSeconds") or 0):
+        params["maxCutSeconds"] = round(max_cut, 1)
+    return changed
+
+
+def prune_foreign_props(data: Dict, script_ep: Dict) -> int:
+    """镜头引用本场不存在的道具时直接摘掉——道具对账以剧本为准。"""
+    changed = 0
+    for ep_doc in data.get("episodes") or []:
+        for seg in ep_doc.get("segments") or []:
+            _flow, scene = _flow_of(script_ep, int(seg.get("sceneIndex") or 1))
+            allowed = {str(p) for p in (scene.get("props") or [])}
+            if not allowed:
+                continue
+            for cut in seg.get("cuts") or []:
+                props = cut.get("props") or []
+                keep = [p for p in props if str(p) in allowed]
+                if len(keep) != len(props):
+                    cut["props"] = keep
+                    changed += 1
+    return changed
+
+
+def split_oversized(data: Dict, max_seconds: float, ep_no: int) -> int:
+    """按镜头边界把超过单次生成上限的段拆开，并重编段号（E01-01…连号）。
+
+    不拆的话，出片会把 12s 吸附成 10s 并丢掉尾台词（静默截断）。
+    返回新增的段数（拆一段 +1）。
+    """
+    cap = max(5.0, float(max_seconds))
+    added = 0
+    for ep_doc in data.get("episodes") or []:
+        if int(ep_doc.get("ep") or 0) != int(ep_no):
+            continue
+        groups: List[Dict] = []
+        for seg in ep_doc.get("segments") or []:
+            bucket: List[Dict] = []
+            total = 0.0
+            for cut in seg.get("cuts") or []:
+                sec = float(cut.get("seconds") or 0)
+                if bucket and total + sec > cap:
+                    groups.append({**seg, "cuts": bucket})
+                    added += 1
+                    bucket, total = [], 0.0
+                bucket.append(cut)
+                total += sec
+            if bucket:
+                groups.append({**seg, "cuts": bucket})
+        for i, seg in enumerate(groups, start=1):
+            seg["id"] = f"E{int(ep_no):02d}-{i:02d}"
+            seg.pop("h3Prompt", None)   # 切点变了，提示词必须重算
+        ep_doc["segments"] = groups
+    return added
+
+
+def ensure_segment_prompts(data: Dict, script_ep: Dict, outline: Dict) -> int:
+    """逐段补齐/校正 h3Prompt，返回改动段数。
+
+    LLM 直出的分镜常常不带 h3Prompt（或只写半截），而「出视频」直接把它交给
+    视频模型。这里用 `rebuild_h3_prompt` 做确定性补全，保证：首行对齐指令、
+    [镜头 k] 切点时刻、台词 <d> 块、整体音景 / 非叙事配乐四个骨架都在。
+    """
+    fixed = 0
+    for ep_doc in data.get("episodes") or []:
+        for seg in ep_doc.get("segments") or []:
+            h3 = str(seg.get("h3Prompt") or "")
+            complete = ("[镜头 " in h3 and "整体视听描述：" in h3
+                        and "整体音景：" in h3 and "非叙事配乐：" in h3)
+            if complete:
+                continue
+            prompt = rebuild_h3_prompt(seg, script_ep, outline)
+            if prompt and prompt != h3:
+                seg["h3Prompt"] = prompt
+                fixed += 1
+    return fixed
+
+
+def clamp_target_seconds(data: Dict, script_parse: Dict, ep_no: int) -> Optional[float]:
+    """把剧本的 `targetSeconds` 拉回台词量算出来的真实时长。
+
+    LLM 会把「单集 1–2 分钟」直接写成 120s，而本集台词折算只有 38s，
+    质量门的「总时长 ±15%」因此必挂。目标值应当由定稿剧本决定，不是由
+    项目设置的上限决定。偏差 ≤ 25% 时保留原值（尊重模型的分场节奏）。
+    返回最终采用的值；无法估算时返回 None。
+    """
+    ep = None
+    for item in data.get("episodes") or []:
+        if int(item.get("ep") or 0) == int(ep_no):
+            ep = item
+            break
+    if ep is None:
+        return None
+    src = None
+    for item in script_parse.get("episodes") or []:
+        if int(item.get("ep") or 0) == int(ep_no):
+            src = item
+            break
+    flow = []
+    if src:
+        for scene in src.get("scenes") or []:
+            flow.extend(scene.get("flow") or scene.get("beats") or [])
+    if not flow:
+        for scene in ep.get("scenes") or []:
+            flow.extend(scene.get("flow") or [])
+    if not flow:
+        return None
+    est = round(sum(beat_seconds(b) for b in flow), 1)
+    if est <= 0:
+        return None
+    old = ep.get("targetSeconds")
+    try:
+        oldf = float(old)
+    except (TypeError, ValueError):
+        oldf = 0.0
+    if oldf > 0 and abs(oldf - est) / est <= 0.25:
+        return oldf
+    ep["targetSeconds"] = est
+    return est
 
 
 # ------------------------------------------------------------------ 对外入口

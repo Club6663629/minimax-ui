@@ -48,6 +48,16 @@ const base = "/api/hibtv";
 
 export const mediaUrl = fileUrl;
 
+/** 内网地址脱敏：http://127.0.0.1:8194 → 内网节点:8194（不把部署细节暴露到页面）。 */
+export function maskHost(raw?: string): string {
+  const value = (raw || "").trim();
+  if (!value) return "";
+  return value.replace(
+    /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)(:\d+)?/i,
+    (_m, _host, port) => `内网节点${port || ""}`,
+  );
+}
+
 export const hibtvApi = {
   status: () => request<HibtvStatus>(`${base}/status`),
 

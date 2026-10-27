@@ -69,7 +69,7 @@ export default function AuthPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
+    <div className="hb-auth relative flex min-h-screen items-center justify-center overflow-hidden px-4">
       {/* 背景光斑 */}
       <div className="pointer-events-none absolute -top-40 left-1/4 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-40 right-1/4 h-96 w-96 rounded-full bg-accent-500/15 blur-3xl" />

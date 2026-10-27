@@ -447,7 +447,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
           </span>
           {latest && <span className="chip">v{latest.version}</span>}
           <span style={{ marginLeft: "auto" }} />
-          <button className="btn xs" onClick={() => void compose()} disabled={!segments.length}>
+          <button className="btn xs" onClick={() => void compose()} disabled={!withVideo}>
             {latest ? "重新合成" : "合成成片"}
           </button>
         </div>

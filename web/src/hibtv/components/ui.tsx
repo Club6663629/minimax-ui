@@ -170,8 +170,17 @@ export function InlineEdit({
 }
 
 /* ------------------------------------------------------------------ 质量门 */
-export function GateChips({ gates }: { gates?: Gates }) {
+export function GateChips({ gates, none }: { gates?: Gates; none?: string }) {
   if (!gates || !gates.status || gates.status === "empty") {
+    // 角色/美术没有接线确定性质量门（skill 的 validate 需要书稿正文），
+    // 以前一律写「质量门未运行」——看着像漏跑，实际是没这道门。
+    if (none) {
+      return (
+        <span className="chip ghost" title={none}>
+          无确定性质量门
+        </span>
+      );
+    }
     return <span className="chip ghost">质量门未运行</span>;
   }
   if (gates.status === "skipped") {

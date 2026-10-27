@@ -3,7 +3,7 @@
 .hibtv-root{--bg:#0a0908;--bg-2:#0e0d0b;--panel:#131110;--panel-2:#191614;--panel-3:#211d19;
   --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.04);
   --gold:#e0b36a;--gold-2:#f3d7a8;--gold-dim:rgba(224,179,106,.45);
-  --text:#e9e3d7;--muted:#948b7e;--dim:#635c53;
+  --text:#e9e3d7;--muted:#948b7e;--dim:#8a8175;
   --red:#cf6a5f;--green:#7cae8b;--blue:#7d9ab5;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
   --sans:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
@@ -42,7 +42,7 @@
 .hibtv-root .stage{flex:1;display:flex;min-height:0}
 .hibtv-root .stage.no-side .side{display:none}
 .hibtv-root .stage.no-panel .panel{display:none}
-.hibtv-root .side{width:236px;flex:0 0 236px;border-right:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:14px 10px 20px}
+.hibtv-root .side{width:210px;flex:0 0 210px;border-right:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:14px 10px 20px}
 .hibtv-root .side-head{font-size:10.5px;letter-spacing:.16em;color:#6d665c;text-transform:uppercase;padding:0 8px 10px}
 .hibtv-root .subnav{display:flex;flex-direction:column;gap:1px;margin-bottom:14px}
 .hibtv-root .nav-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;color:#a89f92;font-size:12.5px;cursor:pointer;border:1px solid transparent}
@@ -64,7 +64,7 @@
 .hibtv-root .mini-row.on{color:var(--gold)}
 .hibtv-root .mini-row .ok{color:var(--green);font-size:9px}
 .hibtv-root .main{flex:1;overflow:auto;padding:18px 26px 32px;min-width:0}
-.hibtv-root .panel{width:326px;flex:0 0 326px;border-left:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:16px 14px 30px}
+.hibtv-root .panel{width:300px;flex:0 0 300px;border-left:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:16px 14px 30px}
 .hibtv-root .eyebrow{font:10.5px/1 var(--mono);letter-spacing:.16em;color:#6d665c;text-transform:uppercase;margin-bottom:10px}
 .hibtv-root .eyebrow em{color:var(--gold-dim);font-style:normal}
 .hibtv-root .h1{font-size:25px;line-height:1.25;font-weight:700;letter-spacing:.01em;margin:0 0 6px}
@@ -239,10 +239,10 @@
 .hibtv-root .hook .k{font-size:10px;letter-spacing:.14em;color:var(--gold-dim);margin-bottom:5px}
 .hibtv-root .hook .v{font-size:12px;color:#c8c0b3;line-height:1.7}
 .hibtv-root .beats{border:1px solid var(--line-2);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
-.hibtv-root .beat{display:grid;grid-template-columns:38px 96px 1fr 250px 56px;gap:10px;align-items:start;padding:9px 12px;border-bottom:1px solid var(--line-3);font-size:12px}
+.hibtv-root .beat{display:grid;grid-template-columns:38px 112px 1fr 230px 52px;gap:10px;align-items:start;padding:9px 12px;border-bottom:1px solid var(--line-3);font-size:12px}
 .hibtv-root .beat:hover{background:rgba(255,255,255,.018)}
 .hibtv-root .beat .n{font:10.5px var(--mono);color:#6d665c;padding-top:2px}
-.hibtv-root .beat .who{color:var(--gold-2);font-size:11.5px}
+.hibtv-root .beat .who{color:var(--gold-2);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hibtv-root .beat .who.act{color:#8f9fb0}
 .hibtv-root .beat .line{color:#d6cec0;line-height:1.7;outline:none}
 .hibtv-root .beat .line:focus{background:#0d0c0a;box-shadow:0 0 0 1px var(--gold-dim) inset;border-radius:4px;padding:0 3px}
@@ -260,7 +260,7 @@
 .hibtv-root .shot-hd{display:flex;align-items:center;gap:9px;padding:8px 11px;border-bottom:1px solid var(--line-3);flex-wrap:wrap}
 .hibtv-root .shot-hd .si{width:19px;height:19px;border-radius:4px;background:rgba(224,179,106,.16);color:var(--gold);font:10px/19px var(--mono);text-align:center}
 .hibtv-root .shot-hd .rng{font:10.5px var(--mono);color:#8f877b}
-.hibtv-root .shot-body{display:grid;grid-template-columns:190px 1fr;gap:12px;padding:11px}
+.hibtv-root .shot-body{display:grid;grid-template-columns:160px 1fr;gap:12px;padding:11px}
 .hibtv-root .shot-body .plate{aspect-ratio:16/10}
 .hibtv-root .shottext{font-size:11.5px;color:#b9b0a2;line-height:1.75}
 .hibtv-root .shottext .k{color:var(--gold-dim);font-size:10.5px;letter-spacing:.08em;margin-right:4px}
@@ -361,8 +361,10 @@
 .hibtv-root .art-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
 .hibtv-root .art-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
 .hibtv-root .art-card:hover{border-color:rgba(224,179,106,.22)}
-.hibtv-root .art-anchor{position:relative;min-width:0}
-.hibtv-root .art-anchor .plate{aspect-ratio:16/9;cursor:zoom-in}
+.hibtv-root .art-anchor{position:relative;min-width:0;display:flex;justify-content:center}
+/* plate 必须显式给宽度：.art-anchor 是 flex 容器，子项宽度按内容收缩会把占位压成 2px 细线；
+   锚点框统一 16:9 缩略图尺寸（真实画幅在点开的大图里看），避免竖版项目把卡片撑成一条横条。 */
+.hibtv-root .art-anchor .plate{width:100%;aspect-ratio:16/9;cursor:zoom-in}
 .hibtv-root .art-thumbs{display:grid;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
 .hibtv-root .art-thumbs .vthumb{aspect-ratio:16/9}
 .hibtv-root .art-thumbs .vthumb .lab{font-size:8px;padding:3px 1px 2px}
@@ -372,6 +374,7 @@
 .hibtv-root .art-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding-top:7px;border-top:1px dashed var(--line-3);font-size:10px;color:#7d766b}
 .hibtv-root .art-foot .link{margin-left:auto}
 @media(max-width:1240px){
+  .hibtv-root .shot-body{grid-template-columns:1fr}
   .hibtv-root .cast-grid, .hibtv-root .art-grid{grid-template-columns:1fr}
 }
 .hibtv-root .split{display:grid;grid-template-columns:1fr 1fr;gap:14px}

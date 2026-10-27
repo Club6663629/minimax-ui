@@ -386,6 +386,7 @@ async def _job_outline(db: Session, project: HibtvProject, job: HibtvJob) -> Non
         user_text=hibtv_llm.outline_prompt(project, script, art),
         fallback=lambda: hibtv_llm.outline_from_parse(project, script, art),
     )
+    hibtv_llm.ensure_reuse_plan(data)
     _progress(db, job, 80, "跑质量门")
     gates = hibtv_gates.run_gates("outline", data)
     save_doc(db, project.id, "outline", 0, data, gates=gates)
@@ -406,6 +407,7 @@ async def _job_cast(db: Session, project: HibtvProject, job: HibtvJob) -> None:
         user_text=hibtv_llm.cast_prompt(project, art, outline),
         fallback=lambda: hibtv_llm.cast_from_parse(project, art, outline),
     )
+    hibtv_llm.ensure_cast_ids(data)
     _progress(db, job, 90, "同步资产卡")
     save_doc(db, project.id, "cast", 0, data)
     sync_assets(db, project, "cast", data.get("characters") or [])
@@ -454,6 +456,7 @@ async def _job_script(db: Session, project: HibtvProject, job: HibtvJob) -> None
         fallback=lambda: hibtv_llm.script_from_parse(project, ep_row, outline),
         gates_hint=hint,
     )
+    hibtv_llm.clamp_target_seconds(data, script_parse, job.ep)
     _progress(db, job, 80, "跑质量门")
     gates = hibtv_gates.run_gates("script", data, outline=outline, art=_art_doc(db, project))
     save_doc(db, project.id, "script", job.ep, data, gates=gates)
@@ -477,6 +480,16 @@ async def _job_storyboard(db: Session, project: HibtvProject, job: HibtvJob) -> 
         user_text=hibtv_llm.storyboard_prompt(project, script_data, outline),
         fallback=lambda: hibtv_llm.storyboard_from_script(project, script_data, outline),
     )
+    script_ep = next((e for e in script_data.get("episodes") or []
+                      if int(e.get("ep") or 0) == int(job.ep)),
+                     (script_data.get("episodes") or [{}])[0])
+    # 生成侧先把「台词装不下 / 越场道具 / 段超上限」这三类必挂项消化掉，再跑门
+    hibtv_llm.fit_dialogue_seconds(data, script_ep)
+    hibtv_llm.prune_foreign_props(data, script_ep)
+    added = hibtv_llm.split_oversized(data, settings.hibtv_seg_max_seconds, job.ep)
+    fixed = hibtv_llm.ensure_segment_prompts(data, script_ep, outline)
+    if added or fixed:
+        logger.info("短剧分镜 E%02d 拆段 +%d、补齐提示词 %d 段", job.ep, added, fixed)
     _progress(db, job, 80, "跑质量门")
     gates = hibtv_gates.run_gates("storyboard", data, outline=outline,
                                   art=_art_doc(db, project), script=script_data)
@@ -509,6 +522,14 @@ def sync_segments(db: Session, project: HibtvProject, ep: int, storyboard: Dict)
         obj.idx = i
         obj.updated_at = now()
         count += 1
+    # 文档里已经没有的段：只清理从未出过片的孤儿行，避免旧段残留到段页/合成清单
+    keep = {str(seg.get("id") or "").strip() for seg in rows}
+    for seg_id, obj in existing.items():
+        if seg_id in keep:
+            continue
+        if obj.status != "none" or (jloads(obj.versions, []) or []):
+            continue
+        db.delete(obj)
     db.flush()
     return count
 

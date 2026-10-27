@@ -1,7 +1,7 @@
 /** 角色：每人一张卡（锚点大图 + 三视图 + 提示词 / 音色），出图与版本都在卡上。 */
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { hibtvApi } from "../api";
+import { hibtvApi, maskHost } from "../api";
 import { Stage } from "../HibtvLayout";
 import { AssetCard, useAssets } from "../components/AssetCard";
 import { Empty, GateChips, GateList, GenBar, Loading, PageHead } from "../components/ui";
@@ -19,20 +19,37 @@ export default function CastPage() {
     [data],
   );
   const groups = useMemo(() => {
-    const order = ["protagonist", "supporting", "minor"];
+    const order = ["protagonist", "supporting", "minor", "other"];
     const label: Record<string, string> = {
       protagonist: "主演",
       supporting: "配角",
       minor: "功能角色",
+      other: "其他",
+    };
+    // cast 文档的 importance 实际取值是 protagonist / major（novel-characters schema）；
+    // 以前只列 protagonist/supporting/minor，major 会被整个丢掉（页头写 4 人、页面只有 2 张卡）。
+    const bucket = (imp?: string): string => {
+      if (imp === "protagonist") return "protagonist";
+      if (imp === "minor") return "minor";
+      if (imp === "supporting" || imp === "major") return "supporting";
+      return imp ? "other" : "supporting";
     };
     return order
       .map((k) => ({
         key: k,
         label: label[k],
-        rows: assets.filter((a) => (a.data?.importance || "supporting") === k),
+        rows: assets.filter((a) => bucket(a.data?.importance) === k),
       }))
       .filter((g) => g.rows.length);
   }, [assets]);
+
+  const missingDerived = useMemo(
+    () => assets.reduce((n, a) => {
+      if (!a.views[a.anchor]?.path) return n;
+      return n + a.defs.slice(1).filter(([v]) => !a.views[v]?.path || a.views[v]?.stale).length;
+    }, 0),
+    [assets],
+  );
 
   const drawAll = async () => {
     if (!project) return;
@@ -52,6 +69,30 @@ export default function CastPage() {
     reload();
   };
 
+  const drawDerivedAll = async () => {
+    if (!project) return;
+    const pending = assets.filter(
+      (a) => a.views[a.anchor]?.path
+        && a.defs.slice(1).some(([v]) => !a.views[v]?.path || a.views[v]?.stale),
+    );
+    if (!pending.length) {
+      toast("所有派生视图都已就绪");
+      return;
+    }
+    for (const asset of pending) {
+      try {
+        await hibtvApi.assetImage(project.id, asset.id, {
+          action: "views",
+          views: asset.defs.slice(1).map(([v]) => v),
+        });
+      } catch {
+        /* 单张失败不影响其余 */
+      }
+    }
+    toast(`已排入派生队列：${pending.length} 人，共 ${missingDerived} 张图，按张扣积分`);
+    reload();
+  };
+
   const head = (
     <PageHead
       eyebrow="收敛层 · 谁 · CAST"
@@ -59,9 +100,12 @@ export default function CastPage() {
       lede="每个人一张卡：左边是正面全身锚点，右边是大头、侧面、背面。鼠标移到图上浮现四个图标——重新生成 / 改图 / 上传 / 删除；点图片直接看四视图大图。"
       right={
         <>
-          <GateChips gates={doc?.gates} />
+          <GateChips gates={doc?.gates} none="角色卡走 skill 的 cast schema，但没有接线 node 确定性校验；逐项检修看下方提示词与对齐检查" />
           <button className="btn" onClick={() => void drawAll()}>
             出全部锚点图
+          </button>
+          <button className="btn ghost" onClick={() => void drawDerivedAll()} disabled={!missingDerived}>
+            补齐派生{missingDerived ? `（${missingDerived} 张）` : " · 已齐"}
           </button>
           <button className="btn gold" onClick={() => void runJob("cast")}>
             {characters.length ? "重新生成角色卡" : "基于大纲生成全部"}
@@ -74,7 +118,7 @@ export default function CastPage() {
   const toolbar = (
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
-      <span className="chip">锚点模型 {status?.image?.worker || "qwen21"}</span>
+      <span className="chip">锚点模型 {maskHost(status?.image?.worker) || "qwen21"}</span>
       <span className="chip">派生模型 同锚点模型</span>
       <span className={`chip ${status?.anchorConfirm ? "gold" : "ghost"}`}>
         锚点出完先确认{status?.anchorConfirm ? " · 开" : " · 关"}

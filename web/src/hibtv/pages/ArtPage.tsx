@@ -53,7 +53,7 @@ export default function ArtPage() {
       lede="每个场景一组参考图：正面是锚点，俯视、背面、左侧、右侧都照着它改。鼠标移到图上浮现四个图标——重新生成 / 改图 / 上传 / 删除；点图片直接看多视图大图。"
       right={
         <>
-          <GateChips gates={doc?.gates} />
+          <GateChips gates={doc?.gates} none="美术设定走 skill 的 art schema，但没有接线 node 确定性校验（它的 validate 要求英文出图提示词与 ≥3 个一致性锚点）" />
           <button className="btn" onClick={() => void drawAll()}>
             出全部锚点图
           </button>

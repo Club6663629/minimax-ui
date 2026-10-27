@@ -73,3 +73,60 @@
   background: oklch(0.603 0.218 257);
   cursor: pointer;
 }
+
+/* 登录 / 注册纳入暗金体系：只作用于 .hb-auth，不影响工作台与其它页面 */
+.hb-auth {
+  background: #0a0908 !important;
+  color: #e9e3d7;
+}
+.hb-auth .panel {
+  background: #131110 !important;
+  border: 1px solid rgba(224, 179, 106, 0.16) !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.hb-auth h1 {
+  color: #eee7da !important;
+}
+.hb-auth .input {
+  background: #0d0c0a !important;
+  border: 1px solid rgba(255, 255, 255, 0.075) !important;
+  color: #e9e3d7 !important;
+}
+.hb-auth .input::placeholder {
+  color: #6f675c;
+}
+.hb-auth .input:focus {
+  border-color: rgba(224, 179, 106, 0.45) !important;
+  box-shadow: 0 0 0 3px rgba(224, 179, 106, 0.07) !important;
+}
+.hb-auth .btn-primary {
+  background: linear-gradient(160deg, #e0b36a, #c9964f) !important;
+  color: #241a0c !important;
+  font-weight: 600;
+}
+.hb-auth .bg-background-200 {
+  background: #191614 !important;
+}
+.hb-auth .bg-background-50 {
+  background: #211d19 !important;
+  box-shadow: none !important;
+}
+.hb-auth .text-foreground-950,
+.hb-auth .text-foreground-900 {
+  color: #eee7da !important;
+}
+.hb-auth .text-foreground-600,
+.hb-auth .text-foreground-500 {
+  color: #948b7e !important;
+}
+.hb-auth a {
+  color: #e0b36a !important;
+}
+/* body 仍是浅色 token：macOS 橡皮筋回弹 / 超宽屏会在暗金登录页四周露出白边 */
+body:has(.hb-auth) {
+  background: #0a0908;
+  color-scheme: dark;
+}
+.hb-auth .text-rose-600 {
+  color: #cf6a5f !important;
+}

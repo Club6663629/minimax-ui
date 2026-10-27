@@ -1,6 +1,6 @@
 /** 角色卡 / 场景卡 / 道具卡：同一套语言（锚点大图 + 派生视图 + 图上四图标 + 提示词区）。 */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hibtvApi } from "../api";
+import { hibtvApi, mediaUrl } from "../api";
 import { errText, useHibtv } from "../state";
 import type { HibtvAsset } from "../types";
 import { InlineEdit, MediaActs, Plate } from "./ui";
@@ -117,17 +117,17 @@ export function AssetCard({
   const anchor = asset.anchor;
   const anchorMeta = asset.views[anchor] || {};
   const derived = asset.defs.slice(1);
-  const stale = derived.some(([v]) => asset.views[v]?.stale);
   const review = asset.status === "review";
   const drawing = asset.status === "drawing";
   const prompt: string = asset.data?.image?.prompt || "";
   const voice: string = asset.data?.voice?.timbre || "";
+  // 道具/场景的 tag 不再复用 summary（正文已经显示过一句，标题行再重复一次）。
   const tag =
     asset.kind === "cast"
       ? asset.data?.persona?.identity || asset.data?.importance || "角色"
       : asset.data?.primary
         ? "主场景"
-        : asset.data?.summary || (asset.kind === "prop" ? "道具" : "场景");
+        : asset.kind === "prop" ? "道具" : "场景";
 
   const patch = async (body: { name?: string; hidden?: boolean; data?: Record<string, unknown> }) => {
     if (!project) return;
@@ -294,7 +294,9 @@ export function AssetCard({
       }}
     />
   );
-  const staleMark = (review || stale) && <div className="stale" />;
+  // 斜纹只标「这张图本身过期」：待确认（review）用红色 chip 表达，
+  // 派生图过期也只在该缩略图上画斜纹——不能因此把完好的锚点整张盖住。
+  const staleMark = anchorMeta.stale && <div className="stale" />;
 
   if (asset.kind === "cast") {
     return (
@@ -317,7 +319,7 @@ export function AssetCard({
             {derived.map(([v, label]) => (
               <div key={v} className="vthumb" onClick={bigView} title={`${label}（点开看大图）`}>
                 <span className="ph" style={{ position: "absolute", inset: 0, fontSize: 9 }} />
-                {asset.views[v]?.url && <img src={asset.views[v].url} alt={label} />}
+                {asset.views[v]?.url && <img src={mediaUrl(asset.views[v].url)} alt={label} />}
                 <span className="lab">{label}</span>
                 {asset.views[v]?.stale && <span className="stale" />}
               </div>
@@ -359,6 +361,14 @@ export function AssetCard({
             <span className="up">◍ 音色参考</span>
             <span className="ref">{voice || "未设"}</span>
           </div>
+          <div className="art-foot" style={{ borderTop: "none", paddingTop: 0 }}>
+            <span className="tiny dim">
+              {derived.filter(([v]) => asset.views[v]?.path).length}/{derived.length} 张派生
+            </span>
+            <span className="link" onClick={(e) => { e.stopPropagation(); void draw("views"); }}>
+              补齐派生视图
+            </span>
+          </div>
           <div className="cast-foot" onClick={bigView}>
             画像 · 弧光 · 关系 · 音色 · 全部视图 →
           </div>
@@ -386,7 +396,7 @@ export function AssetCard({
         {derived.map(([v, label]) => (
           <div key={v} className="vthumb" onClick={bigView} title={`${label}（点开看大图）`}>
             <span className="ph" style={{ position: "absolute", inset: 0, fontSize: 9 }} />
-            {asset.views[v]?.url && <img src={asset.views[v].url} alt={label} />}
+            {asset.views[v]?.url && <img src={mediaUrl(asset.views[v].url)} alt={label} />}
             <span className="lab">{label}</span>
             {asset.views[v]?.stale && <span className="stale" />}
           </div>

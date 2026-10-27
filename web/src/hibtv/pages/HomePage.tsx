@@ -31,7 +31,10 @@ const EMPTY_DRAFT: Draft = {
 };
 
 function stageText(p: { docs: Record<string, { status: string }> }): string {
-  const has = (k: string) => p.docs[k]?.status === "done";
+  // docs 的 key 形如 outline#0 / storyboard#1；以前用 p.docs["storyboard"] 查不到，
+  // 所以大纲/剧本/分镜全好了，项目卡还写着「已导入：待生成大纲」。
+  const has = (k: string) =>
+    Object.entries(p.docs || {}).some(([key, row]) => key.split("#")[0] === k && row?.status === "done");
   if (has("storyboard")) return "已生成到：分镜";
   if (has("script")) return "已生成到：剧本";
   if (has("art")) return "已生成到：美术";

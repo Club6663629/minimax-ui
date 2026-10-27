@@ -651,6 +651,13 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
         seg.data = hibtv_jobs.jdumps(data)
 
     plan = sum(float(c.get("seconds") or 0) for c in (data.get("cuts") or []))
+    cap = float(settings.hibtv_seg_max_seconds)
+    if plan > cap + 1e-6:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"本段计划 {plan:.1f}s，超过单次生成上限 {cap:g}s；“先拆镜头再出片”，"
+            f"否则会被吸附成 {cap:g}s 并丢掉尾台词",
+        )
     seconds = hibtv_jobs.snap_duration(plan or settings.hibtv_seg_max_seconds)
     cost = compute_cost(seconds, "768p")
     if user.credits < cost:
@@ -847,7 +854,7 @@ def undo_change(project_id: int, change_id: int,
         data = hibtv_jobs.jloads(doc.data, {})
         hibtv_jobs.set_json_path(data, change.path, old)
         hibtv_jobs.save_doc(db, project.id, kind, ep, data)
-        _resync(db, project, kind)
+        _resync(db, project, kind, ep)
 
     change.reverted = True
     db.commit()
