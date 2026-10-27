@@ -49,6 +49,9 @@ def status() -> Dict:
         "template_exists": advimage.TEMPLATE_PATH.exists(),
         "text_only": _PROBE,
         "size": [int(settings.hibtv_image_width), int(settings.hibtv_image_height)],
+        # 节点要求必填参考图时，纯文本出图退化为本地空白参考图；UI 靠这两个字段明示降级
+        "degraded": _PROBE is False,
+        "note": "节点要求参考图，纯文本出图已退回空白参考图" if _PROBE is False else "",
     }
 
 

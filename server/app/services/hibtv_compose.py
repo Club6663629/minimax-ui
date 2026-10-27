@@ -32,7 +32,11 @@ def ffprobe_bin() -> Optional[str]:
 
 
 def status() -> Dict:
-    return {"ffmpeg": ffmpeg_bin() or "", "ffprobe": ffprobe_bin() or ""}
+    """链路状态：返 `available` 布尔供 UI 直接判（只给路径时前端得自己推），
+    不可用时用 `note` 说人话。"""
+    ff, fp = ffmpeg_bin() or "", ffprobe_bin() or ""
+    return {"ffmpeg": ff, "ffprobe": fp, "available": bool(ff),
+            "note": "" if ff else "未装 ffmpeg，整集拼接不可用"}
 
 
 def probe_seconds(path: Path) -> float:

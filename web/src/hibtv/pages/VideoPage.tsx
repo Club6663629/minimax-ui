@@ -51,6 +51,10 @@ export default function VideoPage() {
 
   const segments = list?.segments || [];
   const latest = renders[0];
+  // 版本预览：后端还没有「选定 render」字段，先只切前端预览（刷新回最新版），
+  // 播放器 / 体积 / 时长 / 成片清单 / 导出都跟着 shown 走，避免“看到 v2 下到 v1”。
+  const [pickId, setPickId] = useState<number | null>(null);
+  const shown = renders.find((r) => r.id === pickId) || latest;
   const withVideo = segments.filter((s) => s.url).length;
   const cuts = segments.reduce((n, s) => n + (s.cuts || []).length, 0);
   const planSecs = segments.reduce((n, s) => n + (s.planSeconds || 0), 0);
@@ -135,16 +139,22 @@ export default function VideoPage() {
             <span className="chip ghost">字幕 · 后续版本</span>
           </div>
         </div>
-        {latest ? (
+        {shown ? (
           <a
             className="btn gold"
             style={{ width: "100%", textAlign: "center", display: "block" }}
-            href={`${mediaUrl(latest.url)}&download=1`}
+            href={`${mediaUrl(shown.url)}&download=1`}
           >
             导出 MP4
           </a>
         ) : (
-          <button className="btn gold" style={{ width: "100%" }} onClick={() => void compose()}>
+          <button
+            className="btn gold"
+            style={{ width: "100%" }}
+            onClick={() => void compose()}
+            disabled={!withVideo}
+            title={withVideo ? "按段顺序拼成本集" : "还没有任何一段出过片，先出一段再合成"}
+          >
             先合成成片
           </button>
         )}
@@ -154,9 +164,16 @@ export default function VideoPage() {
         <div className="inline" style={{ flexWrap: "wrap" }}>
           {renders.length ? (
             renders.map((r) => (
-              <span key={r.id} className={`chip i ${r.id === latest?.id ? "gold" : ""}`}>
+              <span
+                key={r.id}
+                className={`chip i ${r.id === shown?.id ? "gold" : ""}`}
+                style={{ cursor: "pointer" }}
+                title={r.id === latest?.id ? "最新合成版本（正在预览）" : "点一下预览这一版"}
+                onClick={() => setPickId(r.id)}
+              >
                 v{r.version}
-                {r.id === latest?.id ? " 当前" : ""}
+                {r.id === latest?.id ? " 最新" : ""}
+                {r.id === shown?.id ? " · 预览中" : ""}
               </span>
             ))
           ) : (
@@ -164,7 +181,7 @@ export default function VideoPage() {
           )}
         </div>
         <div className="tiny dim" style={{ marginTop: 6 }}>
-          重新合成会追加版本，不覆盖；旧版本可随时回切。
+          重新合成会追加版本，不覆盖；点任意版本可切到该版预览，导出跟当前预览版本走。
         </div>
       </div>
     </>
@@ -215,19 +232,19 @@ export default function VideoPage() {
           <span className="chip gold">
             {withVideo} / {segments.length} 段有片
           </span>
-          {latest && (
-            <span className="chip">{(latest.size / 1024 / 1024).toFixed(1)} MB</span>
+          {shown && (
+            <span className="chip">{(shown.size / 1024 / 1024).toFixed(1)} MB</span>
           )}
           <span style={{ marginLeft: "auto" }} />
-          {latest && <span className="chip">v{latest.version}</span>}
+          {shown && <span className="chip">v{shown.version}</span>}
         </div>
         <div className="card-bd">
           <VideoBox
-            src={latest?.url}
+            src={shown?.url}
             label={`第 ${ep} 集成片`}
             view={
-              latest
-                ? `${latest.durationSec.toFixed(1)}s · ${segments.length} 段 · v${latest.version}`
+              shown
+                ? `${shown.durationSec.toFixed(1)}s · ${segments.length} 段 · v${shown.version}`
                 : "还没有成片"
             }
             ratio={project.aspectRatio === "16:9" ? "16 / 9" : "9 / 16"}
@@ -247,8 +264,8 @@ export default function VideoPage() {
           </div>
           <div className="inline tiny dim" style={{ marginTop: 8, flexWrap: "wrap" }}>
             <span>计划 {planSecs.toFixed(1)}s</span>
-            {latest && <span>· 实测 {latest.durationSec.toFixed(1)}s</span>}
-            {latest && <span>· {latest.createdAt}</span>}
+            {shown && <span>· 实测 {shown.durationSec.toFixed(1)}s</span>}
+            {shown && <span>· {shown.createdAt}</span>}
             <span className="sp" style={{ marginLeft: "auto" }} />
             <Link to={`/hibtv/storyboard/${ep}`}>回本集段表 →</Link>
           </div>
@@ -325,18 +342,18 @@ export default function VideoPage() {
         </table>
       </div>
 
-      {latest && latest.cutlist?.length ? (
+      {shown && shown.cutlist?.length ? (
         <div className="card">
           <div className="card-hd">
             <span className="t">成片清单 · 计划 vs 实测</span>
-            <span className="chip">{latest.cutlist.length} 段</span>
+            <span className="chip">{shown.cutlist.length} 段</span>
             <span style={{ marginLeft: "auto" }} />
-            <a className="link tiny" href={`${mediaUrl(latest.url)}&download=1`}>
-              下载 v{latest.version}
+            <a className="link tiny" href={`${mediaUrl(shown.url)}&download=1`}>
+              下载 v{shown.version}
             </a>
           </div>
           <div className="card-bd">
-            {latest.cutlist.map((row, i) => {
+            {shown.cutlist.map((row, i) => {
               // 未探到 ffprobe 时 actual 为 null，退回按计划秒显示并标灰
               const plan = Number(row.plan || 0);
               const actual = row.actual === null || row.actual === undefined ? plan : Number(row.actual);
@@ -359,7 +376,7 @@ export default function VideoPage() {
         </div>
       ) : (
         <div className="tiny dim">
-          成片按 ffmpeg concat 顺序拼接（同参数优先 -c copy，不一致时回退重编码）；音频为 {status?.compose?.ffmpeg ? "各段原声" : "各段原声（未检测到 ffmpeg 时无法拼接）"}。
+          成片按 ffmpeg concat 顺序拼接（同参数优先 -c copy，不一致时回退重编码）；音频为 {status?.compose?.available ? "各段原声" : "各段原声（未检测到 ffmpeg 时无法拼接）"}。
         </div>
       )}
     </Stage>

@@ -22,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from ..config import HIBTV_DIR, settings
 from ..database import SessionLocal
-from ..models import (HibtvAsset, HibtvDoc, HibtvJob, HibtvProject, HibtvRender, HibtvSegment,
-                      Task, Upload, User)
+from ..models import (HibtvAsset, HibtvChange, HibtvDoc, HibtvJob, HibtvProject, HibtvRender,
+                      HibtvSegment, Task, Upload, User)
 from . import hibtv_compose, hibtv_gates, hibtv_image, hibtv_llm, hibtv_parse
 from .billing import add_credits
 
@@ -241,6 +241,14 @@ def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Di
     for code, asset in existing.items():
         if code not in seen:
             asset.hidden = True
+        elif asset.hidden and not db.query(HibtvChange).filter(
+                HibtvChange.project_id == project.id,
+                HibtvChange.what == f"asset:{asset.id}",
+                HibtvChange.path == "hidden",
+                HibtvChange.reverted.is_(False)).first():
+            # 文档里又出现这个 code（常见于撤销「从文档删掉这角色」）：
+            # 只恢复不是用户亲手隐藏的卡，否则隐藏的卡会被同步反复拉回来。
+            asset.hidden = False
     db.flush()
     return count
 

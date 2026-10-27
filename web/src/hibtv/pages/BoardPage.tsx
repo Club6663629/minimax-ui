@@ -560,6 +560,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
   const idx = segments.findIndex((s) => s.id === segId);
   const [seg, setSeg] = useState<Segment | null>(null);
   const [busy, setBusy] = useState(false);
+  // 这段正在出片（后端 seg.status=running）时锁住所有提交口：重复点会重复扣积分。
+  const generating = seg?.status === "running";
 
   const load = useCallback(async () => {
     if (!project) return;
@@ -574,6 +576,13 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     void load();
   }, [load]);
 
+  // 出片中每 5s 刷一次段状态，跑完自动解锁按钮
+  useEffect(() => {
+    if (seg?.status !== "running") return undefined;
+    const t = window.setInterval(() => void load(), 5000);
+    return () => window.clearInterval(t);
+  }, [seg?.status, load]);
+
   const cuts = seg?.cuts || [];
   const starts = useMemo(() => {
     const out: number[] = [];
@@ -587,6 +596,10 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
   const generate = async () => {
     if (!project) return;
+    if (seg?.status === "running") {
+      toast("这段正在出片，等它跑完再点，避免重复扣积分");
+      return;
+    }
     setBusy(true);
     try {
       const res = await hibtvApi.generateSegment(project.id, segId, {
@@ -730,7 +743,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         <div className="inline">
           <span className="chip">段长 {seg.planSeconds.toFixed(1)}s</span>
           <span style={{ marginLeft: "auto" }} />
-          <button className="btn sm gold" disabled={busy} onClick={() => void generate()}>
+          <button className="btn sm gold" disabled={busy || generating} onClick={() => void generate()}>
             重新生成视频
           </button>
         </div>
@@ -816,7 +829,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         <span className="chip">{cuts.length} 镜</span>
         {seg && seg.versions.length > 1 && <span className="chip gold">已出 {seg.versions.length} 版</span>}
         <span className="sp" style={{ marginLeft: "auto" }} />
-        <button className="btn xs gold" disabled={busy} onClick={() => void rebuild()}>
+        <button className="btn xs gold" disabled={busy || generating} onClick={() => void rebuild()}>
           ↻ 按当前镜头重算提示词
         </button>
         <button className="btn xs" onClick={() => navigate(`/hibtv/storyboard/${ep}`)}>
@@ -866,13 +879,13 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                   <span className="rng">
                     {from}–{to}s
                   </span>
-                  <span className="chip" title="双击改这一镜的秒数（1–5s）">
+                  <span className="chip" title="双击改这一镜的秒数（1–5.5s）">
                     <InlineEdit
                       value={Number(cut.seconds).toFixed(1)}
                       onSave={(v) => {
                         const n = Number(v.replace(/[^\d.]/g, ""));
                         if (!n || n < 1 || n > 5.5) {
-                          toast("单镜秒数需在 1–5 秒之间（切镜上限 5s）");
+                          toast("单镜秒数需在 1–5.5 秒之间（切镜上限 5.5s）");
                           return;
                         }
                         void patchSeg(`cuts.${i}.seconds`, Math.round(n * 10) / 10, `镜 ${i + 1} 秒数`);
@@ -927,7 +940,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               <span className="t">h3 视频提示词（逐字发给视频模型）</span>
               <span className="chip">对齐指令 + 视听描述</span>
               <span style={{ marginLeft: "auto" }} />
-              <button className="btn xs" onClick={() => void generate()} disabled={busy}>
+              <button className="btn xs" onClick={() => void generate()} disabled={busy || generating}>
                 重新生成视频
               </button>
             </div>

@@ -234,8 +234,8 @@ export default function SettingsPage() {
               )}
               {row(
                 "整集拼接",
-                status?.compose?.ffmpeg ? "ffmpeg 可用" : "未检测到 ffmpeg",
-                status?.compose?.note || (status?.compose?.ffmpeg ? `ffmpeg: ${status.compose.ffmpeg}` : ""),
+                status?.compose?.available ? "ffmpeg 可用" : "未检测到 ffmpeg",
+                status?.compose?.note || (status?.compose?.available ? `ffmpeg: ${status.compose.ffmpeg}` : ""),
               )}
               {row("段长上限", `${status?.segMaxSeconds || 10}s`, "与平台 5 / 8 / 10 / 15 档吸附")}
               {row(
