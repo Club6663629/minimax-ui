@@ -1302,7 +1302,12 @@ HIBTV_LLM_CONCURRENCY = 2
 
 def _claim_hibtv_job() -> Optional[int]:
     """领取一条短剧作业（带并发闸门，条件 UPDATE 防重复领取）。"""
+    from . import hibtv_jobs
+
     with SessionLocal() as db:
+        # 先回收僵尸 running：串行闸门只看 status=running，
+        # 中断遗留的作业不收拾掉，后续出图 / 拼接会永久排队。
+        hibtv_jobs.recover_running_jobs(db, only_stale=True)
         running = db.query(HibtvJob).filter(HibtvJob.status == "running").all()
         llm_running = len([j for j in running if j.kind in HIBTV_LLM_KINDS])
         busy = {j.kind for j in running if j.kind in HIBTV_SERIAL_KINDS}

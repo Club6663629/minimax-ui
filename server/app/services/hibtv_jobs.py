@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -512,10 +512,13 @@ async def run_job(job_id: int) -> None:
                 _fail(db, job, f"未知作业类型 {job.kind}")
                 return
             await handler(db, project, job)
-            job.status = "done"
-            job.progress = 100
-            job.stage = "完成"
-            job.finished_at = now()
+            # 中途被人工取消的作业保留 cancelled，不被收尾覆盖成 done
+            db.refresh(job)
+            if job.status != "cancelled":
+                job.status = "done"
+                job.progress = 100
+                job.stage = "完成"
+                job.finished_at = now()
             db.commit()
         except Exception as exc:  # noqa: BLE001 —— 作业失败必须收敛
             logger.exception("短剧作业 #%s(%s) 失败", job.id, job.kind)
@@ -557,6 +560,59 @@ def _refund(db: Session, project: HibtvProject, job: HibtvJob) -> None:
     payload["refunded"] = True
     job.payload = jdumps(payload)
     db.commit()
+
+
+def cancel_running(db: Session, project: HibtvProject, job: HibtvJob) -> None:
+    """取消运行中的串行作业：退款 + 复位出图态（已产出物保留）。调用方负责 commit。"""
+    job.status = "cancelled"
+    job.stage = "已取消"
+    job.finished_at = now()
+    _refund(db, project, job)
+    if job.kind == "images":
+        reset_drawing(db, project)
+
+
+# 僵尸作业判定阈值（秒）：进程被杀 / 节点失联时 running 不会自己收敛，
+# 而串行闸门只看 status=running，不回收就会把后续出图 / 拼接永久堵死。
+STALE_RUNNING_SECONDS = {"images": 1800, "compose": 3600}
+DEFAULT_STALE_RUNNING_SECONDS = 900
+
+
+def _is_stale_running(job: HibtvJob, ref: Optional[datetime] = None) -> bool:
+    limit = STALE_RUNNING_SECONDS.get(job.kind, DEFAULT_STALE_RUNNING_SECONDS)
+    start = job.started_at or job.created_at
+    if start is None:
+        return False
+    return (ref or datetime.now()) - start > timedelta(seconds=limit)
+
+
+def recover_running_jobs(db: Optional[Session] = None, *, only_stale: bool = True) -> int:
+    """把僵尸 running 作业收敛为 failed：退款 + 复位出图态，返回回收条数。
+
+    - 启动时（only_stale=False）：进程内还没有任何执行协程，running 必是孤儿；
+    - 运行中（only_stale=True）：只收敛 started_at 超时的，避免误伤在跑的作业。
+    """
+    own = db is None
+    db = db or SessionLocal()
+    try:
+        rows = db.query(HibtvJob).filter(HibtvJob.status == "running").all()
+        ref = datetime.now()
+        n = 0
+        for job in rows:
+            if only_stale and not _is_stale_running(job, ref):
+                continue
+            project = db.get(HibtvProject, job.project_id)
+            _fail(db, job, "作业中断（服务重启或执行协程丢失），已自动回收")
+            if project is not None:
+                _refund(db, project, job)
+                if job.kind == "images":
+                    reset_drawing(db, project)
+            logger.warning("回收僵尸短剧作业 #%s(%s)", job.id, job.kind)
+            n += 1
+        return n
+    finally:
+        if own:
+            db.close()
 
 
 def _parsed(db: Session, project: HibtvProject) -> tuple:

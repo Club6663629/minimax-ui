@@ -431,6 +431,11 @@ def cancel_job(project_id: int, job_id: int,
             payload["refunded"] = True
             job.payload = hibtv_jobs.jdumps(payload)
         db.commit()
+    elif job.status == "running" and job.kind in ("images", "compose"):
+        # 运行中的串行作业也要能取消：否则它一旦卡住，会把后续出图 / 拼接永久堵在队列里。
+        # 已产出物保留；执行协程收尾时发现 status=cancelled 不再覆写为 done。
+        hibtv_jobs.cancel_running(db, project, job)
+        db.commit()
     # 运行中的作业按段/按张收敛：已产出物保留（与原型一致）
     return hibtv_jobs.job_payload(job)
 

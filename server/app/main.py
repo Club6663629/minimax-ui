@@ -124,9 +124,27 @@ def _bootstrap() -> None:
             db.close()
 
 
+def _recover_hibtv_jobs() -> None:
+    """启动时收敛上一轮进程遗留的 running 短剧作业（此时必然无协程在跑）。"""
+    if not getattr(settings, "hibtv_enabled", False):
+        return
+    from .services import hibtv_jobs
+
+    db = SessionLocal()
+    try:
+        n = hibtv_jobs.recover_running_jobs(db, only_stale=False)
+        if n:
+            logger.warning("启动回收 %d 条中断的短剧作业", n)
+    except Exception:  # noqa: BLE001 —— 迁就启动，不让恢复失败阻断服务
+        logger.exception("短剧作业启动回收失败")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _bootstrap()
+    _recover_hibtv_jobs()
     start_worker()
     counts = pool.counts()
     logger.info(
