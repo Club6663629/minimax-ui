@@ -299,3 +299,22 @@ class AgreementConsent(Base):
     ip: Mapped[str] = mapped_column(String(64), default="")
     user_agent: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+
+
+class ApiKey(Base):
+    """长期 API Key（平台为租户/数字员工签发，不随 JWT 过期）。
+
+    key_hash: sha256(明文) 十六进制；明文只在签发时返回一次。
+    revoked_at 非空即失效；last_used_at 便于审计（每分钟最多回写一次）。
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16), default="")
+    label: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

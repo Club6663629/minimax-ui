@@ -1,4 +1,5 @@
-"""认证：bcrypt 密码哈希 + JWT + FastAPI 依赖。"""
+"""认证：bcrypt 密码哈希 + JWT + 长期 API Key + FastAPI 依赖。"""
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -50,6 +51,11 @@ def get_current_user(
 ) -> User:
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录")
+    if creds.credentials.startswith("hk_"):
+        user = _user_by_api_key(creds.credentials, db)
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API Key 无效或已吊销")
+        return user
     user_id = decode_token(creds.credentials)
     if user_id is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "登录已过期，请重新登录")
@@ -79,3 +85,26 @@ def get_advideo_access(user: User = Depends(get_current_user)) -> User:
     if not ok:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "广告片功能暂未对外开放")
     return user
+
+
+def _user_by_api_key(token: str, db: Session) -> Optional[User]:
+    """长期 API Key 鉴权（key 由 routers/internal.py 签发，库里只存 sha256）。"""
+    import hashlib
+
+    from .models import ApiKey
+
+    row = (
+        db.query(ApiKey)
+        .filter(
+            ApiKey.key_hash == hashlib.sha256(token.encode()).hexdigest(),
+            ApiKey.revoked_at.is_(None),
+        )
+        .first()
+    )
+    if row is None:
+        return None
+    now = datetime.now()
+    if row.last_used_at is None or (now - row.last_used_at).total_seconds() > 60:
+        row.last_used_at = now
+        db.commit()
+    return db.get(User, row.user_id)

@@ -150,6 +150,9 @@ class Settings(BaseSettings):
 
     # ---- 计费（积分），均可通过环境变量覆盖 ----
     signup_bonus: int = 50        # 注册赠送
+    # ---- 平台侧开通（dw-engine 租户开户，2026-10-26）----
+    # 共享密钥；留空 = /api/internal/* 整体关闭。写入 .env: PLATFORM_PROVISION_SECRET
+    platform_provision_secret: str = ""
     cost_ad_image: int = 2        # 电商广告片：每张候选广告图消耗积分（提交生成时按张数一次性扣除，出图阶段系统失败全额退还）
     cost_768p_5s: int = 10        # 768p · 5 秒
     cost_768p_8s: int = 15        # 768p · 8 秒

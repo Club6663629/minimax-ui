@@ -9,7 +9,7 @@ from .auth import hash_password
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import User  # noqa: F401  确保建表时包含所有模型
-from .routers import admin, auth, credits, files, hibtv, legal, ops, uploads, videos
+from .routers import admin, auth, credits, files, hibtv, legal, ops, uploads, videos, internal
 from .services import billing  # noqa: F401
 from .services.pool import pool
 from .services.worker import start_worker, stop_worker
@@ -157,6 +157,7 @@ app.include_router(admin.router)
 app.include_router(ops.router)
 app.include_router(legal.router)
 app.include_router(hibtv.router)
+app.include_router(internal.router)
 
 
 @app.get("/api/health")

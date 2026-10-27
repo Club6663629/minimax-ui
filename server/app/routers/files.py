@@ -22,6 +22,13 @@ router = APIRouter(prefix="/files", tags=["files"])
 def _user_from_query_token(token: Optional[str], db: Session) -> User:
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "缺少访问凭证")
+    if token.startswith("hk_"):
+        from ..auth import _user_by_api_key
+
+        user = _user_by_api_key(token, db)
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "访问凭证无效或已吊销")
+        return user
     user_id = decode_token(token)
     if user_id is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "访问凭证无效或已过期")
