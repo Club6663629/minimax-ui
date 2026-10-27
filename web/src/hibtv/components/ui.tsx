@@ -257,7 +257,7 @@ export function PageHead({
 }: {
   eyebrow: string;
   title: ReactNode;
-  lede: ReactNode;
+  lede?: ReactNode;
   right?: ReactNode;
 }) {
   return (
@@ -266,7 +266,7 @@ export function PageHead({
       <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
         <div>
           <div className="h1">{title}</div>
-          <p className="lede">{lede}</p>
+          {lede ? <p className="lede">{lede}</p> : null}
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>{right}</div>
       </div>

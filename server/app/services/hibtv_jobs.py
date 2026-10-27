@@ -133,7 +133,7 @@ SHEET_SPEC: Dict[str, Dict] = {
     "prop": {
         "cells": [("front", 0.0, 0.0, 1 / 3, 1.0), ("threeq", 1 / 3, 0.0, 1 / 3, 1.0),
                   ("top", 2 / 3, 0.0, 1 / 3, 1.0)],
-        "brief": "画面按列等分成 3 个等高画格：正面视图 / 3/4 侧面视图 / 俯视视图",
+        "brief": "画面横向单行恰好 3 个等宽画格：正面视图 / 3/4 侧面视图 / 俯视视图",
     },
 }
 # 无论视频横版还是竖版，设定稿统一 16:9（画格横向排列才能一遍读完）
@@ -150,8 +150,8 @@ SHEET_PROMPT: Dict[str, str] = {
         "第 1 格较窄（约占画幅宽度 22%）——正脸特写：头肩近景、证件照取景，头顶距画格上边约一成高，"
         "下巴在画格高度中部，下边切在锁骨，双眼平视镜头，五官清晰，不出现胸部以下；"
         "后 3 格各约占 26%——第 2 格正面全身：正对镜头，A 字站姿，双臂自然下垂且与躯干留出缝隙、掌背朝前，"
-        "头顶到脚底完整入镜；第 3 格 3/4 侧全身：镜头绕角色向左偏转约 45°，双眼都可见、鼻梁走向与"
-        "下颌线可见、肩线走向与侧身厚度可见，不得退成 90° 正侧只露一只眼；"
+        "头顶到脚底完整入镜；第 3 格 3/4 侧全身（three-quarter view，不是侧面照）：镜头绕角色向左偏转"
+        "约 45°，脸部与镜头仍保持 45° 朝向——双眼完整可见、鼻梁朝向侧前方、左右肩都可见且有前后遮挡关系；"
         "第 4 格背面全身：镜头绕人物旋转 180°，只画后脑发型、衣服背部结构与脚跟，不出现五官。"
         "正交视角（orthographic views, no perspective distortion）；四格是同一个人：五官、发型、体型、"
         "服装、配饰完全一致，身高一致，四格头顶与脚底各自对齐同一水平线；"
@@ -173,8 +173,10 @@ SHEET_PROMPT: Dict[str, str] = {
     ),
     "prop": (
         "道具设定参考图（prop reference sheet / product turnaround）：横向 16:9、纯白无缝背景，"
-        "画面按列等分成 3 个等高画格，格与格之间不画任何颜色的分隔线、无边框、无间隙"
-        "（NO dividing lines, NO frames, panels seamlessly adjacent）、不写任何文字："
+        "画面恰好分成 3 个等宽等高的画格，横向并排成单行（exactly three panels in one single row, "
+        "no second row），绝不出现第二排或更多画格；格与格之间不画任何颜色的分隔线、无边框、无间隙"
+        "（NO borders of any color, NO dividing lines, NO frames, panels seamlessly adjacent）、"
+        "不写任何文字，每格内只有一件道具："
         "第 1 格 正面视图：正对镜头平视，完整外观与主要细节；第 2 格 3/4 侧面视图：镜头绕道具"
         "旋转约 45°，展示厚度、圆角与立体感；第 3 格 俯视视图：从正上方俯看，展示顶面结构与"
         "开口 / 按钮位置。"
@@ -194,7 +196,8 @@ SHEET_NEGATIVE: Dict[str, str] = {
              "different body proportions, more than four panels, fewer than four panels, empty panel, "
              "cropped head, cropped feet, subject touching panel edge, overlapping panels, "
              "standing on different ground lines, second person, duplicated person, dynamic pose, "
-             "holding prop, full 90-degree profile, only one eye visible, perspective distortion, "
+             "holding prop, full 90-degree profile, side profile view, face turned completely sideways, "
+             "only one eye visible, perspective distortion, "
              "wide angle distortion, bokeh, depth of field, "
              "cast shadow, drop shadow, vignette, "
              "text, caption, letters, label, logo, watermark, signature, arrow, annotation, "
@@ -210,6 +213,8 @@ SHEET_NEGATIVE: Dict[str, str] = {
     "prop": ("hand, fingers, arm, person, holding by hand, text, caption, letters, price tag, label, "
              "logo, watermark, border line, dividing lines, panel borders, frames, "
              "more than three panels, fewer than three panels, empty panel, missing panel, "
+             "two rows, second row, stacked rows, grid layout, multiple objects, "
+             "more than one object per panel, duplicate object, "
              "overlapping panels, subject touching panel edge, different object in each panel, "
              "different material, changed proportions, inconsistent lighting direction, "
              "perspective distortion, wide angle distortion, bokeh, "

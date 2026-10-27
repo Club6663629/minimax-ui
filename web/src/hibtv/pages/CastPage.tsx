@@ -71,7 +71,6 @@ export default function CastPage() {
     <PageHead
       eyebrow="收敛层 · 谁 · CAST"
       title={<>角色 <span className="chip" style={{ verticalAlign: "middle" }}>{assets.length} 人</span></>}
-      lede="每个人一张 16:9 四视图设定稿：①头肩特写 ②正面全身 ③3/4 侧全身（约 45°，双眼可见）④背面全身，一次出图、格子自动裁好。卡片上直接显示整张（不再分格陈列），点图看大图；鼠标移到图上浮现四个图标——重出设定稿 / 改图 / 上传整张 / 删除。改这张即同步全部视角。"
       right={
         <>
           <GateChips gates={doc?.gates} none="角色卡走 skill 的 cast schema，但没有接线 node 确定性校验；逐项检修看下方提示词与对齐检查" />
