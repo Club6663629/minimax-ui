@@ -30,13 +30,15 @@ from .billing import add_credits
 logger = logging.getLogger(__name__)
 
 # 每类资产的视图定义：[view, 中文名]，第 1 个是锚点
+# 版式对齐《角色/场景/道具 设定与多视图规范》（assetspec2trl）：
+# 角色 4 格（§3.2，3/4 侧替换 90° 正侧）；场景 2×2 四宫格（§4.3）；道具 1×3 三视角（§5.2）
 VIEW_DEFS: Dict[str, List[List[str]]] = {
-    "cast": [["front", "正面全身"], ["big", "大头"], ["side", "侧面"], ["back", "背面"]],
-    "scene": [["front", "正面"], ["top", "俯视"], ["back", "背面"], ["left", "左侧"], ["right", "右侧"]],
-    "prop": [["front", "正面"], ["back", "背面"], ["left", "左侧"], ["right", "右侧"], ["top", "俯视"]],
+    "cast": [["front", "正面全身"], ["big", "大头"], ["side", "3/4 侧面"], ["back", "背面"]],
+    "scene": [["wide", "广角全景"], ["mid", "中景调度区"], ["close", "材质特写"], ["reverse", "反打机位"]],
+    "prop": [["front", "正面"], ["threeq", "3/4 侧面"], ["top", "俯视"]],
 }
 
-# 视图约束按资产类型分开：`top` 对场景是「俯视全景」，对道具是「俯看这一件」，
+# 视图约束按资产类型分开：同一个 `top` 对场景曾是「俯视全景」、对道具是「俯看这一件」，
 # 共用一份文案会把道具写成「空间俯视」。约束要写成硬命令（数量 / 占比 / 禁止项），
 # 只写「保持一致」模型会自由发挥——大头照最容易变成另一个人或带上手和场景。
 VIEW_HINT: Dict[str, Dict[str, str]] = {
@@ -49,35 +51,29 @@ VIEW_HINT: Dict[str, Dict[str, str]] = {
                "五官、脸型、眉形、眼型、鼻唇比例、发际线、发型发色严格沿用参考图，不美化、不换人；"
                "表情自然收敛，视线看向镜头；背景为中性纯色或极简虚化，不出现场景陈设、道具、文字、边框；"
                "画面里只有这一个人，不出现第二张脸、手或身体其他部位；头顶与下巴都不被画面裁掉",
-        "side": "同一个人物的正侧面全身（约 90° 侧身）：全身与头都朝画面右侧，只看得到右半边脸，"
-                "视线不看镜头（不写这句头会转回来）；能看清耳廓与鼻梁侧面轮廓，从头到脚完整入画；"
+        "side": "同一个人物的 3/4 侧面全身（镜头绕角色向左偏转约 45°）：双眼都可见、鼻梁走向与下颌线"
+                "可见、肩线走向与侧身厚度可见；视线随身体自然偏移，不直勾勾看镜头；从头到脚完整入画；"
                 "体型、发型、服装与参考图完全一致；只有这一个人，不出现正脸或镜像重复",
         "back": "镜头绕人物旋转 180° 后的背面全身：只画背面看得到的东西（后脑发型、衣服背部结构、"
                 "脚跟与鞋底），从头到脚完整入画；不出现脸、不出现纽扣口袋等正面细节、不回头露肩看镜头；"
                 "不出现第二张脸",
     },
     "scene": {
-        "front": "同一场景的正面广角全景：地面、墙面、主要家具与陈设的位置关系、材质、色调与参考图一致，"
-                 "光照方向与色温一致；画面里不出现人物、不出现文字招牌或水印；完整呈现该空间，不裁切主体陈设",
-        "top": "该场景的正上方俯视（俯角约 90°）：只画地面、家具与陈设的平面布局与相对位置，"
-               "家具之间的通道与摆放关系与参考图一致；不被天花板遮挡，不出现人物与文字",
-        "back": "从该空间相反方向回看的机位（与正面相差 180°）：同一空间、同一批家具陈设，"
-                "位置关系、材质与色调光照保持一致；不出现人物与文字，不新增参考图里没有的家具",
-        "left": "站在该空间内面向左侧的机位（只转 90°）：可见墙面、家具与陈设的侧面关系，"
-                "材质、色调与光照方向一致；不出现人物与文字，不新增参考图里没有的家具",
-        "right": "站在该空间内面向右侧的机位（只转 90°）：可见墙面、家具与陈设的侧面关系，"
-                 "材质、色调与光照方向一致；不出现人物与文字，不新增参考图里没有的家具",
+        "wide": "同一场景的广角全景：完整空间格局、边界与出入口，地面、墙面、主要家具与陈设的位置关系、"
+                "材质、色调与参考图一致；光照方向与色温一致；画面里不出现人物、文字招牌或水印；不裁切主体陈设",
+        "mid": "同一场景面向主调度区（案前 / 门口 / 主位前）的中景机位：画面里必须有能发生人物调度的区域，"
+               "家具位置、材质、色调与光照方向与参考图一致；不出现人物与文字，不新增参考图里没有的家具",
+        "close": "同一场景固定物件的材质/工艺特写：桌面纹理与磨损、墙面与地面交界处、雕花与灯具近景，"
+                 "材质、颜色与光照方向与参考图一致；是工艺细节特写，不是氛围空镜；不出现人物与文字",
+        "reverse": "从该空间另一端反向拍回主视图方向的机位：可见相反一侧的墙面与陈设，位置关系、材质与"
+                   "色调光照保持一致；不出现人物与文字，不新增参考图里没有的家具",
     },
     "prop": {
         "front": "同一件道具的正面产品图：单件完整居中、占画面高度约 70%，材质纹理、颜色、磨损与刻字"
                  "与参考图完全一致；浅灰或纯白无缝背景，柔和均匀布光；不出现手、人物、场景或包装盒，"
                  "不出现文字水印或价签；不改变道具形状与比例",
-        "back": "同一件道具的背面产品图：单件完整居中，材质颜色与参考图一致；浅色无缝背景；"
-                "不出现手、人物、文字水印；不改变形状与比例",
-        "left": "同一件道具的左侧面产品图：单件完整居中，可看清厚度与侧面结构，材质颜色与参考图一致；"
-                "浅色无缝背景；不出现手、人物、文字水印",
-        "right": "同一件道具的右侧面产品图：单件完整居中，可看清厚度与侧面结构，材质颜色与参考图一致；"
-                 "浅色无缝背景；不出现手、人物、文字水印",
+        "threeq": "同一件道具的 3/4 侧面产品图（镜头绕道具约 45°）：单件完整居中，能看清厚度、圆角与"
+                  "立体结构，材质颜色与参考图一致；浅色无缝背景；不出现手、人物、文字水印",
         "top": "同一件道具的正上方俯看：单件完整居中，可看清顶面结构与按钮/开口位置，材质颜色与参考图一致；"
                "浅色无缝背景；不出现手、人物、文字水印",
     },
@@ -92,8 +88,8 @@ VIEW_NEGATIVE: Dict[str, Dict[str, str]] = {
     "cast": {
         "big": "full body, standing figure, whole torso, hips, legs, shoes, lower garment, "
                "wide shot, medium shot, headroom gap, cropped head, cropped chin",
-        "side": "facing camera, frontal face, eye contact, looking at viewer, three-quarter view, "
-                "mirrored duplicate, second person",
+        "side": "facing camera, frontal face, eye contact, looking at viewer, full 90-degree profile, "
+                "only one eye visible, mirrored duplicate, second person",
         "back": "face, facial features, eyes, nose, mouth, buttons, pockets, zipper on chest, "
                 "front view, looking back over shoulder, turned head",
         "front": "cropped head, cropped feet, no headroom, sitting, kneeling",
@@ -116,28 +112,28 @@ NEGATIVE_BASE = ("extra person, duplicated person, cloned face, multiple people,
 SHEET_SPEC: Dict[str, Dict] = {
     # 宽度配比有硬约束：大头格窄于约 0.2 画幅（<0.4:1 的竖条）就会横向切掉头肩，
     # 0.22 / 0.26 / 0.26 / 0.26 是 16:9 下「不切头」与「全身格尽量宽」的折中。
-    # 全身格 0.26 × 2752 = 715px 宽、1536 高（0.47:1），比等分 4 格的 0.44:1 宽一档。
+    # 第 3 格用 3/4 侧而非 90° 正侧（规范「前提三」）：观众认人绝大多数在 3/4 附近角度。
     "cast": {
         "cells": [("big", 0.00, 0.0, 0.22, 1.0),
                   ("front", 0.22, 0.0, 0.26, 1.0),
                   ("side", 0.48, 0.0, 0.26, 1.0),
                   ("back", 0.74, 0.0, 0.26, 1.0)],
-        "brief": "画面按列分成 4 个等高画格：第 1 格较窄（约占画幅宽度 22%，正脸特写），"
-                 "后 3 格各约占 26%（正面全身 / 90° 正侧全身 / 背面全身）",
+        "brief": "画面按列分成 4 个等高画格：第 1 格较窄（约占画幅宽度 22%，头肩特写），"
+                 "后 3 格各约占 26%（正面全身 / 3/4 侧全身 / 背面全身）",
     },
+    # 场景用规范 §4.3 的 2×2 四宫格：每格恰好 1376×768（16:9），与信息异构的四种机位天然
+    # 匹配；旧版 5 格里 front/left/right 全是等高机位旋转，信息量重复——这是「角度没区别」的根因。
     "scene": {
-        "cells": [("front", 0.0, 0.0, 1 / 3, 0.5), ("left", 1 / 3, 0.0, 1 / 3, 0.5),
-                  ("right", 2 / 3, 0.0, 1 / 3, 0.5),
-                  ("back", 0.0, 0.5, 1 / 3, 0.5), ("top", 1 / 3, 0.5, 2 / 3, 0.5)],
-        "brief": "画面分 5 个画格：上排 正面主视图 / 左侧机位 / 右侧机位；"
-                 "下排 背面机位 + 横向占两格的正上方俯视平面图",
+        "cells": [("wide", 0.0, 0.0, 0.5, 0.5), ("mid", 0.5, 0.0, 0.5, 0.5),
+                  ("close", 0.0, 0.5, 0.5, 0.5), ("reverse", 0.5, 0.5, 0.5, 0.5)],
+        "brief": "画面 2×2 等分成 4 个画格（每格恰为 16:9）：左上 广角全景 / 右上 中景调度区 / "
+                 "左下 材质特写 / 右下 反打机位",
     },
+    # 道具用规范 §5.2 的 1×3 三视角：正面/3-4 侧/俯视。多一格就是多一份裁切与人工核对成本。
     "prop": {
-        "cells": [("front", 0.0, 0.0, 1 / 3, 0.5), ("left", 1 / 3, 0.0, 1 / 3, 0.5),
-                  ("right", 2 / 3, 0.0, 1 / 3, 0.5),
-                  ("back", 0.0, 0.5, 1 / 3, 0.5), ("top", 1 / 3, 0.5, 2 / 3, 0.5)],
-        "brief": "画面分 5 个画格：上排 正面主视图 / 左侧 / 右侧；"
-                 "下排 背面 + 横向占两格的俯视",
+        "cells": [("front", 0.0, 0.0, 1 / 3, 1.0), ("threeq", 1 / 3, 0.0, 1 / 3, 1.0),
+                  ("top", 2 / 3, 0.0, 1 / 3, 1.0)],
+        "brief": "画面按列等分成 3 个等高画格：正面视图 / 3/4 侧面视图 / 俯视视图",
     },
 }
 # 无论视频横版还是竖版，设定稿统一 16:9（画格横向排列才能一遍读完）
@@ -154,7 +150,8 @@ SHEET_PROMPT: Dict[str, str] = {
         "第 1 格较窄（约占画幅宽度 22%）——正脸特写：头肩近景、证件照取景，头顶距画格上边约一成高，"
         "下巴在画格高度中部，下边切在锁骨，双眼平视镜头，五官清晰，不出现胸部以下；"
         "后 3 格各约占 26%——第 2 格正面全身：正对镜头，A 字站姿，双臂自然下垂且与躯干留出缝隙、掌背朝前，"
-        "头顶到脚底完整入镜；第 3 格 90° 正侧全身：身体与头一起转向画面右侧，只看得到右半边脸，视线不看镜头；"
+        "头顶到脚底完整入镜；第 3 格 3/4 侧全身：镜头绕角色向左偏转约 45°，双眼都可见、鼻梁走向与"
+        "下颌线可见、肩线走向与侧身厚度可见，不得退成 90° 正侧只露一只眼；"
         "第 4 格背面全身：镜头绕人物旋转 180°，只画后脑发型、衣服背部结构与脚跟，不出现五官。"
         "正交视角（orthographic views, no perspective distortion）；四格是同一个人：五官、发型、体型、"
         "服装、配饰完全一致，身高一致，四格头顶与脚底各自对齐同一水平线；"
@@ -162,26 +159,30 @@ SHEET_PROMPT: Dict[str, str] = {
         "no cast shadow, no depth of field, no vignette）。"
     ),
     "scene": (
-        "场景设定参考图（location reference sheet）：横向 16:9、纯浅灰无缝背景，"
-        "画面分 5 个画格，只留均匀白边、不画分隔线、不写任何文字："
-        "上排 3 格——正面主视图、从左侧看的机位、从右侧看的机位，均为与视线齐平的建筑立面视角"
-        "（architectural elevation, eye-level, orthographic），不带广角畸变；"
-        "下排——背面机位，以及横向占两格的正上方俯视平面图（top-down floor plan）："
-        "墙体在离地 1.2 米处水平剖切，家具按真实比例摆放。"
-        "五格是同一个空间：地面、墙面、门窗、家具与陈设的相对位置、材质、色调、光照方向与色温完全一致，"
-        "五格使用同一焦距与同一日照方向（consistent focal length and sun direction），"
-        "俯视图的家具位置能与主视图一一对上；每个画格内空间完整入画、四周留 8% 安全边距，"
-        "主体陈设不触画格边缘；不出现人物。"
+        "场景设定参考图（location reference sheet）：横向 16:9，画面 2×2 等分成 4 个画格"
+        "（2 行 2 列，每格恰为 16:9 横幅），格与格之间不画任何颜色的分隔线、无边框、无间隙，"
+        "无缝相邻（NO borders of any color, NO dividing lines, NO frames, panels seamlessly adjacent），"
+        "不写任何文字："
+        "左上格 广角全景：完整空间格局、边界与出入口，最宽视场；"
+        "右上格 中景机位：面向空间主调度区（案前 / 门口 / 主位前），画面里必须有能发生人物调度的区域；"
+        "左下格 特写细节：固定物件的材质或工艺近景（桌面纹理、墙面与地面交界、雕花与灯具），"
+        "不是氛围空镜；右下格 反打机位：从空间另一端反向拍回主视图方向，可见相反一侧的墙面与陈设。"
+        "四格是同一个空间、同一时刻、同一组光源（光源方向、色温与主辅色完全一致），只有相机机位变化；"
+        "地面、门窗、家具与陈设的相对位置、材质与色调完全一致；每格四周留 8% 安全边距，"
+        "空间完整入画；不出现人物、动物、文字招牌与现代物品。"
     ),
     "prop": (
         "道具设定参考图（prop reference sheet / product turnaround）：横向 16:9、纯白无缝背景，"
-        "画面分 5 个画格，只留均匀白边、不画分隔线、不写任何文字："
-        "上排 3 格——正面主视图、左侧面、右侧面；下排——背面，以及横向占两格的正上方俯视。"
-        "正交视角、五格同一焦距（orthographic, consistent focal length），五格是同一件道具："
-        "材质、纹理、颜色、磨损与刻字完全一致；每格单件居中，占该格高度约 75%–85%，"
-        "四周留 8% 安全边距不触边缘；柔和均匀布光，无高光热点、无投影"
-        "（soft even light, no specular hotspot, no drop shadow），俯视格能看清顶面结构；"
-        "不出现手、人物、场景、包装盒与价签。"
+        "画面按列等分成 3 个等高画格，格与格之间不画任何颜色的分隔线、无边框、无间隙"
+        "（NO dividing lines, NO frames, panels seamlessly adjacent）、不写任何文字："
+        "第 1 格 正面视图：正对镜头平视，完整外观与主要细节；第 2 格 3/4 侧面视图：镜头绕道具"
+        "旋转约 45°，展示厚度、圆角与立体感；第 3 格 俯视视图：从正上方俯看，展示顶面结构与"
+        "开口 / 按钮位置。"
+        "正交视角、三格同一焦距（orthographic, consistent focal length），三格是同一件道具、"
+        "同一状态、同一光源方向与色温：形制、比例、材质、纹理、颜色、磨损与刻字完全一致；"
+        "每格单件居中，占该格高度约 70%–80%，四周留 8% 安全边距不触边缘；柔和均匀棚拍光，"
+        "无高光热点、无投影（soft even light, no specular hotspot, no drop shadow）；"
+        "不出现手、人物、场景、台面、包装盒与价签。"
     ),
 }
 
@@ -193,20 +194,25 @@ SHEET_NEGATIVE: Dict[str, str] = {
              "different body proportions, more than four panels, fewer than four panels, empty panel, "
              "cropped head, cropped feet, subject touching panel edge, overlapping panels, "
              "standing on different ground lines, second person, duplicated person, dynamic pose, "
-             "holding prop, perspective distortion, wide angle distortion, bokeh, depth of field, "
+             "holding prop, full 90-degree profile, only one eye visible, perspective distortion, "
+             "wide angle distortion, bokeh, depth of field, "
              "cast shadow, drop shadow, vignette, "
              "text, caption, letters, label, logo, watermark, signature, arrow, annotation, "
-             "color swatch, height chart, ruler, border line, colored background, "
-             "dramatic lighting, harsh shadow, deformed hands, extra limbs"),
-    "scene": ("person, people, human figure, crowd, silhouette, text, caption, signage, shop sign, "
-              "poster text, watermark, border line, empty panel, missing panel, overlapping panels, "
-              "subject touching panel edge, different room in each panel, different furniture layout, "
-              "different lighting direction, perspective distortion, wide angle distortion, fisheye, "
-              "bokeh, depth of field, drop shadow, adjacent lamp"),
+             "color swatch, height chart, ruler, border line, dividing lines, panel borders, frames, "
+             "colored background, dramatic lighting, harsh shadow, deformed hands, extra limbs"),
+    "scene": ("person, people, human figure, crowd, silhouette, animal, text, caption, signage, shop sign, "
+              "poster text, watermark, border line, dividing lines, panel borders, frames, "
+              "more than four panels, fewer than four panels, empty panel, missing panel, "
+              "overlapping panels, subject touching panel edge, different room in each panel, "
+              "different furniture layout, furniture changing position, different lighting direction, "
+              "different color temperature, different time of day, "
+              "perspective distortion, wide angle distortion, fisheye, bokeh, depth of field, drop shadow"),
     "prop": ("hand, fingers, arm, person, holding by hand, text, caption, letters, price tag, label, "
-             "logo, watermark, border line, empty panel, missing panel, overlapping panels, "
-             "subject touching panel edge, different object in each panel, different material, "
-             "changed proportions, perspective distortion, wide angle distortion, bokeh, "
+             "logo, watermark, border line, dividing lines, panel borders, frames, "
+             "more than three panels, fewer than three panels, empty panel, missing panel, "
+             "overlapping panels, subject touching panel edge, different object in each panel, "
+             "different material, changed proportions, inconsistent lighting direction, "
+             "perspective distortion, wide angle distortion, bokeh, "
              "depth of field, specular hotspot, drop shadow, "
              "packaging box, scene background, table reflection"),
 }
@@ -1222,13 +1228,13 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
         db.commit()
 
 
-# 段级出片的参考图约定：挂上去的是设定稿（一张里并排 4~5 个视角），
+# 段级出片的参考图约定：挂上去的是设定稿（一张里并排 3~4 个视角），
 # 视频模型很容易把整张版式复刻成九宫格，或把一格当成一个人。
 # 不改镜头正文结构，只在尾部追加“怎么用参考图”。
 REF_GUARD = (
-    "参考图约定：随附图片是角色、场景、道具的设定图（同一张里并排 4 个或 5 个视角），"
+    "参考图约定：随附图片是角色、场景、道具的设定图（同一张里并排多个视角），"
     "只作为外观证据——照着确认脸、发型、体型、服装、配色、材质与空间结构；"
-    "不要复刻它的分格排版，不要把同一角色画成多个人，不要输出九宫格或拼贴；"
+    "不要假设固定的分格数量或顺序，不要复刻它的分格排版，不要把同一角色画成多个人，不要输出九宫格或拼贴；"
     "景别、机位、构图与动作以上面的镜头描述为准。"
 )
 
@@ -1281,7 +1287,7 @@ def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> Li
         if asset is None:
             continue
         views = jloads(asset.views, {})
-        # 多视图设定稿：整张当 1 个参考（含 4/5 个视角），不拆成多张占预算
+        # 多视图设定稿：整张当 1 个参考（含多个视角），不拆成多张占预算
         sheet_uid = (views.get("__sheet") or {}).get("upload_id")
         if sheet_uid and int(sheet_uid) not in ids:
             ids.append(int(sheet_uid))

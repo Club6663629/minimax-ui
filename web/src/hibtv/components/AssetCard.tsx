@@ -121,9 +121,11 @@ export function AssetCard({
   // 一张设定稿就是唯一产物；没有它时才回退到旧数据里的锚点图
   const sheetSrc = sheet.url || anchorMeta.url;
   const hasSheet = Boolean(sheet.url || sheet.path);
-  const gridLabel = asset.kind === "cast" ? "四视图" : "五视图";
+  const gridLabel = asset.kind === "cast" ? "四视图" : asset.kind === "scene" ? "四宫格" : asset.kind === "prop" ? "三视图" : "多视图";
   // 出图画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 官方 16:9 2K）
   const sheetSize = (asset.sheetSpec?.size || []).join("×");
+  // 版式描述以后端格子表（从左到右/从上到下）为准，避免和 defs 陈列顺序不一致
+  const sheetBrief = asset.sheetSpec?.kinds?.[asset.kind]?.brief;
   const review = asset.status === "review";
   const drawing = asset.status === "drawing";
   const prompt: string = asset.data?.image?.prompt || "";
@@ -199,9 +201,10 @@ export function AssetCard({
             </div>
             <div className="tiny mut" style={{ marginTop: 4 }}>
               {hasSheet
-                ? `一张 16:9 设定稿${sheetSize ? ` · ${sheetSize}px` : ""}装下 ${asset.defs.length} 个视角：${asset.defs
-                    .map(([, label]) => label)
-                    .join(" / ")}。改这张即同步全部。`
+                ? `一张 16:9 设定稿${sheetSize ? ` · ${sheetSize}px` : ""} · ${
+                    sheetBrief ||
+                    `${asset.defs.length} 个视角：${asset.defs.map(([, label]) => label).join(" / ")}`
+                  }。改这张即同步全部。`
                 : "还没有设定稿；下面是旧数据里的单张锚点图。"}
             </div>
           </div>

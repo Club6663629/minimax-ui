@@ -242,7 +242,7 @@ export default function SettingsPage() {
                 "设定稿先确认",
                 status?.anchorConfirm ? "开" : "关",
                 status?.anchorConfirm
-                  ? "整张四/五视图设定稿出完先要你确认"
+                  ? "整张多视图设定稿出完先要你确认"
                   : "设定稿出完直接可用（格子同时裁好）",
               )}
             </div>

@@ -25,7 +25,7 @@ export default function ArtPage() {
     if (!project) return;
     const pending = shown.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path);
     if (!pending.length) {
-      toast("这一栏的设定稿都已出过；要换某一张的版式，点卡片上的「重出五视图」");
+      toast("这一栏的设定稿都已出过；要换某一张的版式，点卡片上的「重出设定稿」");
       return;
     }
     for (const asset of pending) {
@@ -50,7 +50,7 @@ export default function ArtPage() {
           </span>
         </>
       }
-      lede="每个场景/道具一张 16:9 五视图设定稿：主图 + 左侧 + 背面 + 右侧 + 俯视，一次出图、格子自动裁好。卡片上直接显示整张（不再分格陈列），点图看大图；鼠标移到图上浮现四个图标——重出设定稿 / 改图 / 上传整张 / 删除。改这张即同步全部视角。"
+      lede="每个场景/道具一张 16:9 设定稿：场景为 2×2 四宫格（广角全景 / 中景调度区 / 材质特写 / 反打机位），道具为三视角（正面 / 3/4 侧 / 俯视），一次出图、格子自动裁好。卡片上直接显示整张（不再分格陈列），点图看大图；鼠标移到图上浮现四个图标——重出设定稿 / 改图 / 上传整张 / 删除。改这张即同步全部视角。"
       right={
         <>
           <GateChips gates={doc?.gates} none="美术设定走 skill 的 art schema，但没有接线 node 确定性校验（它的 validate 要求英文出图提示词与 ≥3 个一致性锚点）" />
@@ -72,7 +72,7 @@ export default function ArtPage() {
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
       <span className="chip">设定稿模型 {status?.image?.worker || "qwen21"}</span>
-      <span className="chip">格子 比例裁切（列宽不等分）</span>
+      <span className="chip">格子 场景 2×2 · 道具 1×3</span>
       <span className="chip">设定稿 16:9 · {sheetSize}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span
