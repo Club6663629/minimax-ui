@@ -1,5 +1,5 @@
 /** 页面骨架：顶部导航（海白菜品牌）+ 协议更新横幅 + 内容区 + 页脚常驻法律文本入口。 */
-import { Clapperboard, Coins, ListChecks, LogOut, ShieldCheck } from "lucide-react";
+import { Clapperboard, Coins, Film, ListChecks, LogOut, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import BrandLogo from "./BrandLogo";
 import LegalNotice from "./LegalNotice";
@@ -39,6 +39,7 @@ export default function Layout() {
 
           <nav className="flex items-center gap-1">
             <NavItem to="/" icon={<Clapperboard size={15} />} label="创作" />
+            <NavItem to="/hibtv" icon={<Film size={15} />} label="短剧" />
             <NavItem to="/ledger" icon={<ListChecks size={15} />} label="台账" />
             {user?.role === "admin" && (
               <NavItem to="/admin" icon={<ShieldCheck size={15} />} label="管理" />

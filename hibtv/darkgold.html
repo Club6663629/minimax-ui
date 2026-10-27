@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>海白菜 · 暗金改造方案 · 可点击原型</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  /* 与 prototype.html 同一套暗金令牌 */
+  --bg:#0a0908;--bg-2:#0e0d0b;--panel:#131110;--panel-2:#191614;--panel-3:#211d19;
+  --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.04);
+  --brand:#e0b36a;--brand-2:#f3d7a8;--brand-dim:rgba(224,179,106,.45);
+  --brand-soft:rgba(224,179,106,.10);
+  --brand-grad:linear-gradient(180deg,#eac389,#dcaa5e);
+  --on-brand:#1b1611;
+  --text:#e9e3d7;--muted:#948b7e;--dim:#635c53;
+  --red:#cf6a5f;--green:#7cae8b;--blue:#7d9ab5;
+  --soft-1:rgba(255,255,255,.022);--soft-2:rgba(255,255,255,.05);
+  --media:#100e0c;
+  --shadow:0 26px 60px -34px rgba(0,0,0,.95);
+  --r:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --sans:"Noto Sans SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --serif:"Noto Sans SC","PingFang SC","Hiragino Sans GB",system-ui,sans-serif;
+}
+/* 明色对照：只换令牌，不改结构 —— 用来判断"换皮"是否保住海白菜的可读性 */
+body.light{
+  --bg:#f5f8fa;--bg-2:#fbfdfe;--panel:#ffffff;--panel-2:#f7fafc;--panel-3:#eef4f8;
+  --line:rgba(75,107,245,.20);--line-2:rgba(15,23,42,.11);--line-3:rgba(15,23,42,.07);
+  --brand:#4b6bf5;--brand-2:#2f4fd6;--brand-dim:rgba(75,107,245,.5);
+  --brand-soft:rgba(75,107,245,.09);
+  --brand-grad:linear-gradient(180deg,#5b7bff,#3f5ee6);
+  --on-brand:#ffffff;
+  --text:#152033;--muted:#586878;--dim:#8795a4;
+  --red:#c8524a;--green:#2f8f66;--blue:#3a6f9e;
+  --soft-1:rgba(15,23,42,.02);--soft-2:rgba(15,23,42,.055);
+  --shadow:0 18px 40px -30px rgba(20,35,60,.35);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.66 var(--sans);-webkit-font-smoothing:antialiased;min-height:100%;
+  transition:background .25s}
+a{color:var(--brand);text-decoration:none}
+button{font-family:var(--sans)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--soft-2);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+/* 顶部光斑：只是背景装饰，不占任何布局 */
+body::before{content:"";position:fixed;inset:0 0 auto;height:460px;pointer-events:none;z-index:0;
+  background:radial-gradient(52% 60% at 20% 0%,rgba(224,179,106,.09),transparent 64%),radial-gradient(40% 46% at 86% 0%,rgba(207,106,95,.05),transparent 62%)}
+body.light::before{background:radial-gradient(52% 60% at 20% 0%,rgba(75,107,245,.07),transparent 64%)}
+.shell{position:relative;z-index:1;display:flex;flex-direction:column;min-height:100vh}
+/* ---------- 顶部导航：尺寸与线上 Layout 一一对应（h-14 / max-w-7xl / px-4 / gap-4） ---------- */
+.nav{position:sticky;top:0;z-index:20;border-bottom:1px solid var(--line-3);background:rgba(10,9,8,.86);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+body.light .nav{background:rgba(245,248,250,.86)}
+.nav-in{max-width:1280px;margin:0 auto;height:56px;display:flex;align-items:center;gap:16px;padding:0 16px}
+.nav .menu{display:flex;align-items:center;gap:4px}
+.nvi{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:6px 12px;font-size:13px;line-height:1.4;color:var(--muted);background:none;border:none;cursor:pointer;white-space:nowrap}
+.nvi:hover{background:var(--soft-2);color:var(--text)}
+.nvi.on{background:var(--brand-soft);color:var(--brand-2)}
+.nvi .i{font:12px/1 var(--mono);opacity:.8}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:12px}
+.credit{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--brand-soft);color:var(--brand-2);font-size:13px;cursor:pointer}
+.credit:hover{background:rgba(224,179,106,.16)}
+body.light .credit,body.light .credit:hover{background:var(--brand-soft)}
+.mail{font-size:13px;color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ibtn{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:1px solid transparent;background:none;color:var(--muted);cursor:pointer;font-size:14px}
+.ibtn:hover{background:var(--soft-2);color:var(--text)}
+/* 协议更新横幅（线上 LegalNotice，可关闭） */
+.legal{border-bottom:1px solid var(--line);background:var(--brand-soft)}
+.legal-in{max-width:1280px;margin:0 auto;padding:8px 16px;display:flex;align-items:center;gap:12px;font-size:12px;color:var(--brand-2)}
+.legal-in .sp{flex:1;line-height:1.7}
+.legal-in a{text-decoration:underline;color:var(--brand-2)}
+.legal-in .x{border:none;background:none;color:var(--brand-2);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:6px}
+/* ---------- 内容区：与线上 main（max-w-7xl px-4 py-6）一致 ---------- */
+.main{flex:1;width:100%;max-width:1280px;margin:0 auto;padding:24px 16px}
+.wrap{max-width:100%}
+/* 页脚（线上 footer：法律四入口 + 版权 + 版本） */
+.foot{border-top:1px solid var(--line-3);padding:20px 16px;text-align:center;font-size:12px;color:var(--dim)}
+.foot .links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px;margin-bottom:8px}
+.foot .links a{color:var(--muted)}
+.foot .links a:hover{color:var(--brand-2);text-decoration:underline}
+.foot p{margin:0;line-height:1.9}
+/* 方案工具条：固定右下、不占文档流，线上页面截图不受影响 */
+.dock{position:fixed;right:16px;bottom:16px;z-index:35;display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--line);border-radius:11px;background:rgba(19,17,16,.94);backdrop-filter:blur(10px);box-shadow:var(--shadow)}
+body.light .dock{background:rgba(255,255,255,.95)}
+.dock .lbl{font:9.5px var(--mono);letter-spacing:.12em;color:var(--dim);padding:0 4px 0 2px}
+/* ---------- 品牌 ---------- */
+.lockup{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.lockup .word{font:600 17px var(--sans);letter-spacing:.1em;color:var(--text);margin-right:-.1em;white-space:nowrap}
+.mk{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;border-radius:10px;transition:.2s}
+.mk img{width:100%;height:100%;object-fit:contain;display:block;user-select:none}
+.mk .fb{display:none;font:600 15px/1 var(--sans);color:var(--brand-2)}
+.mk.fail img{display:none}
+.mk.fail .fb{display:block}
+.mk.raw img{filter:drop-shadow(0 4px 12px rgba(0,0,0,.55))}
+.mk.glow img{filter:drop-shadow(0 0 10px rgba(224,179,106,.5)) drop-shadow(0 3px 9px rgba(0,0,0,.65))}
+.mk.badge{background:radial-gradient(130% 130% at 28% 18%,#1c1813,#0c0a08);border:1px solid var(--line);padding:3px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
+.mk.badge img{filter:saturate(.7) brightness(.94) contrast(1.04)}
+.mk.mono img{filter:grayscale(1) brightness(1.02) sepia(1) saturate(2.7) hue-rotate(-8deg)}
+body.light .mk.badge{background:#fff;border-color:var(--line-2)}
+body.light .mk.raw img,body.light .mk.glow img{filter:drop-shadow(0 4px 12px rgba(20,35,60,.18))}
+/* ---------- typography ---------- */
+.eyebrow{font:10.5px/1 var(--mono);letter-spacing:.18em;color:var(--dim);text-transform:uppercase;margin-bottom:10px}
+.eyebrow em{color:var(--brand-dim);font-style:normal}
+.h2{font-size:13.5px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.h2::before{content:"";width:2px;height:12px;background:var(--brand);border-radius:2px}
+.h3{font-size:12.5px;font-weight:600;color:var(--text);margin:0 0 8px}
+.lede{color:var(--muted);font-size:12.5px;max-width:860px;margin:0}
+.lede em{color:var(--brand-2);font-style:normal}
+.mut{color:var(--muted)}.dim{color:var(--dim)}
+.mono{font-family:var(--mono)}
+.tiny{font-size:10.5px}.small{font-size:11.5px}
+.sec{margin-top:28px}
+hr.rule{border:none;border-top:1px solid var(--line-3);margin:16px 0}
+/* ---------- buttons / chips ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 14px;border-radius:12px;border:1px solid var(--line-2);background:var(--soft-1);color:var(--text);font-size:13px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--line);color:var(--brand-2);background:var(--brand-soft)}
+.btn.primary{background:var(--brand-grad);border-color:transparent;color:var(--on-brand);font-weight:600;box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 10px 26px -16px var(--brand-dim)}
+.btn.primary:hover{filter:brightness(1.06);color:var(--on-brand)}
+.btn.ghost{background:transparent}
+.btn.sm{height:28px;padding:0 10px;font-size:11.5px;border-radius:8px}
+.btn.xs{height:24px;padding:0 8px;font-size:10.5px;border-radius:6px}
+.btn.pill{border-radius:999px}
+.btn.primary.pill{height:40px;padding:0 20px;font-size:13.5px}
+.btn.dis{opacity:.4;pointer-events:none}
+.btn.on{border-color:var(--brand-dim);color:var(--brand-2);background:var(--brand-soft)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:5px;background:var(--soft-2);border:1px solid var(--line-2);color:var(--muted);font-size:11px;white-space:nowrap}
+.chip.gold{background:var(--brand-soft);border-color:var(--line);color:var(--brand-2)}
+.chip.red{background:rgba(207,106,95,.12);border-color:rgba(207,106,95,.3);color:var(--red)}
+.chip.green{background:rgba(124,174,139,.1);border-color:rgba(124,174,139,.28);color:var(--green)}
+.chip.ghost{background:transparent}
+.chip.i{cursor:pointer}
+.chip.i:hover{border-color:var(--line);color:var(--brand-2)}
+.chip.pill{border-radius:999px}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
+.dot.gold{background:var(--brand)}.dot.red{background:var(--red)}.dot.gray{background:var(--dim)}
+/* ---------- forms ---------- */
+.field{margin-bottom:13px}
+.label{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);margin-bottom:6px}
+.label .req{color:var(--brand);font-size:10px}
+.label .auto{margin-left:auto;font:10px var(--mono);color:var(--dim)}
+.input,.select,.textarea{width:100%;background:var(--bg-2);border:1px solid var(--line-2);border-radius:12px;color:var(--text);font:13px var(--sans);padding:10px 14px;outline:none}
+.input:focus,.select:focus,.textarea:focus{border-color:var(--brand-dim);box-shadow:0 0 0 3px var(--brand-soft)}
+.textarea{resize:vertical;min-height:64px;line-height:1.7}
+.select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 15px,calc(100% - 10px) 15px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.row4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.switch{display:inline-flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:11.5px}
+.switch input{display:none}
+.switch .track{width:26px;height:15px;border-radius:8px;background:var(--soft-2);border:1px solid var(--line-2);position:relative;transition:.15s}
+.switch .track::after{content:"";position:absolute;top:1.5px;left:1.5px;width:10px;height:10px;border-radius:50%;background:var(--muted);transition:.15s}
+.switch input:checked + .track{background:var(--brand-soft);border-color:var(--brand-dim)}
+.switch input:checked + .track::after{left:13px;background:var(--brand)}
+/* ---------- cards / tables ---------- */
+.card{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line-2);border-radius:var(--r)}
+.card.pad{padding:16px}
+.card-hd{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line-3)}
+.card-hd .t{font-size:12.5px;color:var(--text)}
+.card-hd .r{margin-left:auto;font:10.5px var(--mono);color:var(--dim)}
+.card-bd{padding:14px}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl th{text-align:left;font-weight:500;color:var(--dim);font-size:10.5px;letter-spacing:.1em;padding:8px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.tbl td{padding:10px;border-bottom:1px solid var(--line-3);color:var(--text);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--soft-1)}
+.tbl tr.click{cursor:pointer}
+.tbl .id{font:11px var(--mono);color:var(--brand-dim)}
+.tbl .nm{color:var(--text)}
+.tbl .num{font:11.5px var(--mono);text-align:right}
+.tbl .nw{white-space:nowrap}
+.tbl .pos{color:var(--green);font:11.5px var(--mono);text-align:right}
+.tbl .neg{color:var(--red);font:11.5px var(--mono);text-align:right}
+.note{border-left:2px solid var(--brand-dim);background:var(--brand-soft);border-radius:0 8px 8px 0;padding:11px 13px;color:var(--muted);font-size:12px;line-height:1.85}
+.note b{color:var(--brand-2);font-weight:500}
+ul.list{margin:8px 0 0;padding-left:17px;color:var(--muted);font-size:12px;line-height:1.95}
+ul.list b{color:var(--text);font-weight:500}
+ul.list em{color:var(--brand-dim);font-style:normal}
+code{font:11px var(--mono);background:var(--brand-soft);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--brand-2)}
+pre.code{margin:0;background:var(--bg-2);border:1px solid var(--line-2);border-radius:9px;padding:12px 14px;overflow:auto;font:11px/1.85 var(--mono);color:var(--muted)}
+pre.code i{color:var(--brand-2);font-style:normal}
+pre.code em{color:var(--green);font-style:normal}
+.empty{border:1px dashed var(--line-2);border-radius:12px;padding:30px 20px;text-align:center;background:radial-gradient(120% 90% at 50% -10%,var(--brand-soft),transparent 60%)}
+.empty .glyph{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:var(--brand);font:14px var(--serif);margin:0 auto 10px}
+.empty .t{color:var(--text);font-size:13px;margin-bottom:4px}
+.empty .s{color:var(--dim);font-size:11.5px}
+/* ---------- segmented / tabs / stepper ---------- */
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--soft-1);border:1px solid var(--line-2)}
+.seg .s{padding:5px 11px;border-radius:6px;font-size:11.5px;color:var(--muted);cursor:pointer;border:none;background:none;display:inline-flex;align-items:center;gap:5px}
+.seg .s:hover{color:var(--text)}
+.seg .s.on{background:var(--brand-soft);color:var(--brand-2);box-shadow:inset 0 0 0 1px var(--line)}
+/* 线上圆角胶囊版（画面比例等）：形状对齐 rounded-full bg-background-200 p-1 */
+.seg.pill{border:none;border-radius:999px;background:var(--soft-2);padding:4px}
+.seg.pill .s{border-radius:999px;padding:4px 12px;font-size:12px}
+/* 线上 segmented（rounded-xl bg-background-200 p-1 text-sm） */
+.seg.lg{padding:4px;border-radius:12px;background:var(--soft-2);border:none}
+.seg.lg .s{padding:6px 16px;border-radius:8px;font-size:13px}
+.seg.lg .s.on{background:var(--panel-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+body.light .seg.lg .s.on{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(15,23,42,.1)}
+.seg.pill .s.on{background:var(--panel-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.3)}
+body.light .seg.pill .s.on{background:#fff;color:var(--text);box-shadow:0 1px 2px rgba(15,23,42,.1)}
+/* 提交区（线上 panel p-5 居中，不做粘底） */
+.subpanel{border:1px solid var(--line-2);border-radius:12px;background:linear-gradient(180deg,var(--panel-2),var(--panel));padding:20px}
+.tabs{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.tab{height:27px;padding:0 10px;border-radius:6px;border:1px solid var(--line-2);color:var(--muted);font-size:11.5px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:none}
+.tab:hover{color:var(--text);border-color:var(--line)}
+.tab.on{background:var(--brand-soft);border-color:var(--line);color:var(--brand-2)}
+.tab .n{font:10px var(--mono);opacity:.7}
+/* 模式切换：与线上 ModeTabs 一致（居中、胶囊容器、胶囊按钮，尺寸不变） */
+.modewrap{display:flex;justify-content:center}
+.mtabs{display:inline-flex;padding:4px;border-radius:999px;background:var(--soft-2)}
+.mtab{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 14px;border:none;border-radius:999px;background:none;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}
+.mtab:hover{color:var(--text)}
+.mtab.on{background:var(--panel-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.32)}
+body.light .mtab.on{background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.1)}
+/* 线上内容块间距：space-y-6 */
+.cstack{display:flex;flex-direction:column;gap:24px;margin-top:24px}
+/* 页面标题：对齐线上 h1 18px / h2 16px，不做衬线放大 */
+.page-h{font-size:18px;font-weight:600;line-height:1.4;color:var(--text);margin:0}
+.ptitle{font-size:16px;font-weight:600;line-height:1.4;color:var(--text)}
+.stepper{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:14px 0 18px}
+.step{display:flex;align-items:center;gap:8px;padding:7px 12px 7px 10px;border:1px solid var(--line-2);background:var(--soft-1);cursor:pointer;font-size:11.5px;color:var(--muted)}
+.step:first-child{border-radius:8px 0 0 8px}
+.step:last-child{border-radius:0 8px 8px 0}
+.step .n{width:16px;height:16px;border-radius:50%;border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font:9.5px var(--mono);color:var(--dim)}
+.step.done .n{background:var(--brand);border-color:var(--brand);color:var(--on-brand)}
+.step.on{background:var(--brand-soft);border-color:var(--line);color:var(--brand-2)}
+.step.on .n{border-color:var(--brand);color:var(--brand)}
+.step:hover{color:var(--brand-2)}
+/* ---------- media placeholders ---------- */
+.plate{position:relative;overflow:hidden;border-radius:9px;border:1px solid var(--line-2);background:var(--media);display:flex;align-items:center;justify-content:center;isolation:isolate}
+.plate .ph{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;
+  background:radial-gradient(120% 80% at 50% 0%,rgba(224,179,106,.12),transparent 62%),
+  repeating-linear-gradient(0deg,rgba(255,255,255,.026) 0 1px,transparent 1px 26px),
+  repeating-linear-gradient(90deg,rgba(255,255,255,.026) 0 1px,transparent 1px 26px),
+  linear-gradient(165deg,#241f19,#15120f 58%,#0e0d0b)}
+.plate .ph b{font:500 10px/1.4 var(--mono);letter-spacing:.09em;color:#a79d8d;padding:0 8px}
+.plate .ph i{font-style:normal;font:9px var(--mono);letter-spacing:.12em;color:#6f675c}
+.plate .ph::before{content:"";width:30px;height:30px;border-radius:50%;border:1px solid rgba(224,179,106,.22);box-shadow:inset 0 0 16px rgba(224,179,106,.1);margin-bottom:2px}
+.plate.k-video .ph::before{border-radius:3px}
+.plate.k-video .ph::after{content:"";position:absolute;width:0;height:0;border-left:6px solid rgba(224,179,106,.55);border-top:4px solid transparent;border-bottom:4px solid transparent;margin-left:2px}
+.plate .badge{position:absolute;z-index:3;left:6px;top:6px}
+.refthumb .plate,.cand .plate,.pick .plate{position:absolute;inset:0;border:none;border-radius:0}
+select.toolchip{appearance:none;padding-right:20px;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 12px) 12px,calc(100% - 8px) 12px;background-size:4px 4px,4px 4px;background-repeat:no-repeat}
+.plate .corner{position:absolute;z-index:3;right:6px;bottom:6px}
+.plate .tools{position:absolute;z-index:4;inset:0 0 auto;display:flex;gap:5px;padding:6px;background:linear-gradient(180deg,rgba(0,0,0,.72),transparent);opacity:0;transition:.15s}
+.plate:hover .tools{opacity:1}
+.ic{width:24px;height:24px;border-radius:6px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.5);color:#e9e3d7;font-size:11px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.ic:hover{border-color:var(--brand-dim);color:var(--brand-2);background:rgba(224,179,106,.16)}
+.prog{height:4px;border-radius:3px;background:var(--soft-2);overflow:hidden}
+.prog > i{display:block;height:100%;background:linear-gradient(90deg,#c99b55,#f3d7a8);border-radius:3px;transition:width .35s}
+body.light .prog > i{background:linear-gradient(90deg,#5b7bff,#8fa6ff)}
+/* ---------- product: composer ---------- */
+.composer{border:1px solid var(--line-2);border-radius:16px;background:linear-gradient(180deg,var(--panel-2),var(--panel));box-shadow:var(--shadow);padding:20px}
+.compose-grid{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:16px;align-items:start}
+.refgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.refslot{aspect-ratio:1;border:1px dashed var(--line-2);border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--dim);cursor:pointer;background:var(--soft-1);font-size:10px;text-align:center;padding:4px}
+.refslot:hover{border-color:var(--brand-dim);color:var(--brand-2);background:var(--brand-soft)}
+.refslot .plus{font:16px/1 var(--mono)}
+.refthumb{position:relative;aspect-ratio:1;border-radius:9px;overflow:hidden;border:1px solid var(--line-2);cursor:pointer}
+.refthumb:hover{border-color:var(--brand-dim)}
+.refthumb .x{position:absolute;z-index:4;top:3px;right:3px;width:16px;height:16px;border-radius:4px;background:rgba(0,0,0,.62);color:#e9e3d7;font:10px/16px var(--mono);text-align:center;opacity:0;transition:.15s}
+.refthumb .ph b{font-size:8.5px;letter-spacing:0;line-height:1.35;padding:0 5px}
+.refthumb .ph i{font-size:8px;letter-spacing:.06em}
+.refthumb .ph::before{width:20px;height:20px;margin-bottom:1px}
+.refslot.wide{aspect-ratio:4/3}
+.refthumb:hover .x{opacity:1}
+.refthumb .lab{position:absolute;z-index:3;left:0;right:0;bottom:0;font:8.5px var(--mono);color:#cfc6b7;background:linear-gradient(0deg,rgba(0,0,0,.8),transparent);padding:8px 3px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+.promptbox{position:relative}
+.promptbox textarea{min-height:126px;width:100%;resize:none;background:transparent;border:none;outline:none;color:var(--text);font:13px/1.8 var(--sans);padding:2px 0}
+.promptbox textarea::placeholder{color:var(--dim)}
+.promptfoot{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:10.5px;color:var(--dim)}
+.promptfoot .cnt{margin-left:auto;font-family:var(--mono)}
+.toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line-3)}
+.toolbar .sp{margin-left:auto;display:flex;align-items:center;gap:10px}
+.toolchip{display:inline-flex;align-items:center;gap:6px;height:27px;padding:0 9px;border-radius:999px;border:1px solid var(--line-2);background:var(--soft-1);color:var(--muted);font-size:11.5px;cursor:pointer}
+.toolchip:hover{border-color:var(--line);color:var(--brand-2)}
+.toolchip.on{border-color:var(--brand-dim);color:var(--brand-2);background:var(--brand-soft)}
+.toolchip .k{font:10px var(--mono);color:var(--dim)}
+.cost{display:inline-flex;align-items:center;gap:5px;font:12.5px var(--mono);color:var(--text)}
+.cost b{font-weight:600}
+.pop{position:absolute;z-index:30;right:0;bottom:44px;width:250px;border:1px solid var(--line);border-radius:10px;background:var(--panel-3);box-shadow:var(--shadow);padding:10px}
+.pop .r{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pop .r .k{font-size:10.5px;color:var(--dim);width:44px;flex:0 0 44px}
+.pop .r .seg{flex:1}
+.pop .r .seg .s{flex:1;justify-content:center;padding:4px 0}
+/* ---------- product: tasks ---------- */
+/* 作品卡：与线上 TaskCard 同构（panel p-4：chip 行 → 提示词 → 成片 → 操作行） */
+.tasks{display:grid;gap:16px;grid-template-columns:1fr 1fr;align-items:start}
+.task{border:1px solid var(--line-2);border-radius:16px;background:var(--panel);padding:16px}
+.task:hover{border-color:var(--line)}
+.task .chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.task .chips .when{margin-left:auto;font-size:11.5px;color:var(--dim)}
+.task .prompt{margin:0 0 12px;font-size:13.5px;line-height:1.7;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.task .video{position:relative;height:200px;border-radius:12px;overflow:hidden;border:1px solid var(--line-2);margin-bottom:10px}
+.task .video .plate{position:absolute;inset:0;border:none;border-radius:0}
+.task .foot{display:flex;align-items:center;gap:8px}
+.task .foot .cost{font-size:11.5px;color:var(--dim)}
+.task .foot .del{margin-left:auto;width:26px;height:26px;border-radius:8px;border:none;background:none;color:var(--dim);cursor:pointer;font-size:13px}
+.task .foot .del:hover{background:var(--soft-2);color:var(--red)}
+.task .up{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-3);font-size:11.5px;color:var(--dim)}
+.task .run{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11.5px;color:var(--dim)}
+.task .run .prog{flex:1}
+.task .err{display:flex;align-items:flex-start;gap:10px;border-radius:12px;background:rgba(207,106,95,.08);padding:10px 12px;font-size:11.5px;line-height:1.7;color:var(--red);margin-bottom:10px}
+.status{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 7px;border-radius:999px;font-size:10.5px;border:1px solid transparent;white-space:nowrap}
+.status.run{background:var(--brand-soft);border-color:var(--line);color:var(--brand-2)}
+.status.done{background:rgba(124,174,139,.12);border-color:rgba(124,174,139,.28);color:var(--green)}
+.status.fail{background:rgba(207,106,95,.12);border-color:rgba(207,106,95,.3);color:var(--red)}
+.spin{display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--brand-dim);border-top-color:var(--brand);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ---------- product: director ---------- */
+.shots{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.shot{border:1px solid var(--line-2);border-radius:12px;background:var(--panel);padding:16px}
+.shot:hover{border-color:var(--line)}
+.shot .hd{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.shot .no{width:24px;height:24px;border-radius:6px;background:var(--brand-soft);border:1px solid var(--line);color:var(--brand);display:flex;align-items:center;justify-content:center;font:600 11px var(--mono)}
+.shot .hd .sp{margin-left:auto;display:flex;align-items:center;gap:6px}
+.shot .body{display:grid;grid-template-columns:minmax(0,1fr) 216px;gap:12px}
+.shot .refgrid{display:flex;flex-wrap:wrap;gap:6px}
+.shot .refthumb{width:54px;height:54px;aspect-ratio:auto}
+.shot .refslot{width:54px;height:54px;aspect-ratio:auto;font-size:9px;gap:0;padding:2px}
+.shot .refthumb .ph b{display:none}
+.shot .refthumb .ph i{font-size:7.5px;letter-spacing:0}
+.shot .refthumb .ph::before{width:18px;height:18px}
+.shot textarea{min-height:58px;font-size:12px}
+.secrow{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);margin-top:8px}
+.secrow .val{font:11.5px var(--mono);color:var(--brand-2);margin-left:auto}
+input[type=range]{-webkit-appearance:none;appearance:none;height:4px;border-radius:99px;background:var(--soft-2);outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--brand);border:2px solid var(--panel);box-shadow:0 0 0 1px var(--brand-dim)}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border:none;border-radius:50%;background:var(--brand)}
+/* ---------- product: advideo ---------- */
+.cands{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px}
+.cand{position:relative;border:1px solid var(--line-2);border-radius:10px;overflow:hidden;cursor:pointer;aspect-ratio:9/16}
+.cand:hover{border-color:var(--line)}
+.cand.on{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand-dim),0 12px 30px -22px var(--brand)}
+.cand .tick{position:absolute;z-index:5;right:6px;top:6px;width:17px;height:17px;border-radius:50%;border:1px solid rgba(224,179,106,.5);background:rgba(0,0,0,.55);color:transparent;font:10px/16px var(--mono);text-align:center}
+.cand.on .tick{background:var(--brand);border-color:var(--brand);color:var(--on-brand)}
+.cand .ph b{font-size:9px}
+/* ---------- product: assets ---------- */
+.astats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.astat{display:flex;align-items:center;gap:12px;border:1px solid var(--line-2);border-radius:12px;background:var(--panel);padding:16px}
+.astat .ico{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--brand-soft);color:var(--brand);font-size:15px;flex:0 0 auto}
+.astat b{display:block;font-size:20px;font-weight:600;line-height:1.2;color:var(--text)}
+.astat i{display:block;font-style:normal;font-size:11.5px;color:var(--dim);margin-top:2px}
+.afilter{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pillf{display:inline-flex;border-radius:999px;background:var(--soft-2);padding:4px}
+.pillf button{display:inline-flex;align-items:center;gap:6px;border:none;background:none;border-radius:999px;padding:6px 16px;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.pillf button:hover{color:var(--text)}
+.pillf button.on{background:var(--brand-grad);color:var(--on-brand);font-weight:600}
+.assets{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px}
+.asset{position:relative;border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:var(--panel);cursor:pointer}
+.asset:hover{border-color:var(--brand-dim)}
+.asset .plate{aspect-ratio:16/9;border:none;border-radius:0}
+.asset .kind{position:absolute;z-index:3;left:8px;top:8px;height:20px;padding:0 8px;border-radius:999px;display:inline-flex;align-items:center;background:var(--brand-grad);color:var(--on-brand);font-size:11px;font-weight:600}
+.asset.k-video .kind{background:#6f8fae;color:#0d1116}
+.asset.k-audio .kind{background:var(--green);color:#0d1116}
+.asset .tools{position:absolute;z-index:4;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;background:rgba(0,0,0,.55);opacity:0;transition:.15s}
+.asset:hover .tools{opacity:1}
+.asset .tools .ic{width:32px;height:32px;border-radius:999px;background:var(--text);color:#141210;border:none;font-size:14px}
+.asset .ft{padding:12px;border-top:1px solid var(--line-3)}
+.asset .fn{font-size:13.5px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.asset .fs{font-size:11.5px;color:var(--muted);margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px}
+.storage{display:flex;align-items:center;gap:10px;margin-top:12px}
+.storage .bar{flex:1;height:5px;border-radius:3px;background:var(--soft-2);overflow:hidden;display:flex}
+.storage .bar i{display:block;height:100%}
+.dropzone{border:1px dashed var(--line);border-radius:10px;padding:16px;text-align:center;background:var(--brand-soft);cursor:pointer;margin-top:10px}
+.dropzone:hover{background:rgba(224,179,106,.14)}
+.dropzone .t{font-size:12px;color:var(--text)}
+.dropzone .s{font:10px var(--mono);color:var(--dim);margin-top:3px}
+.search{display:flex;align-items:center;gap:6px;border:1px solid var(--line-2);border-radius:7px;background:var(--bg-2);padding:0 9px;height:27px}
+.search input{background:none;border:none;outline:none;color:var(--text);font:11.5px var(--sans);width:150px}
+.search input::placeholder{color:var(--dim)}
+/* ---------- product: ledger / admin ---------- */
+.stat{padding:14px 15px;border:1px solid var(--line-2);border-radius:11px;background:linear-gradient(180deg,var(--panel-2),var(--panel))}
+.stat .k{font:10.5px var(--mono);letter-spacing:.1em;color:var(--dim);text-transform:uppercase}
+.stat .v{font-size:22px;font-weight:600;color:var(--text);margin-top:4px;letter-spacing:.01em}
+.stat .s{font-size:10.5px;color:var(--dim);margin-top:2px}
+.pager{display:flex;align-items:center;gap:6px;margin-top:12px;font:11px var(--mono);color:var(--dim)}
+.node{padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
+.node .r1{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.node .nm{font:11.5px var(--mono);color:var(--text)}
+.node .meta{font:10px var(--mono);color:var(--dim);line-height:1.8}
+/* ---------- drawer / modal / toast ---------- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:.2s;z-index:40}
+.scrim.on{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:420px;max-width:92vw;background:var(--bg-2);border-left:1px solid var(--line);z-index:50;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .24s ease}
+.drawer.on{transform:none}
+.drawer-hd{display:flex;align-items:center;gap:8px;padding:13px 14px;border-bottom:1px solid var(--line-3)}
+.drawer-hd .t{font-size:12.5px;color:var(--text)}
+.drawer-hd .x{margin-left:auto;width:24px;height:24px;border-radius:6px;border:1px solid var(--line-2);background:none;color:var(--muted);cursor:pointer}
+.drawer-bd{flex:1;overflow:auto;padding:12px 14px}
+.drawer-ft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--line-3)}
+.drawer-ft .sp{margin-left:auto}
+.pick{position:relative;border:1px solid var(--line-2);border-radius:8px;overflow:hidden;cursor:pointer;aspect-ratio:4/3}
+.pick:hover{border-color:var(--line)}
+.pick.on{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand-dim)}
+.pick .tick{position:absolute;z-index:4;right:4px;top:4px;width:15px;height:15px;border-radius:4px;background:rgba(0,0,0,.55);border:1px solid var(--line-2);color:transparent;font:9px/13px var(--mono);text-align:center}
+.pick.on .tick{background:var(--brand);border-color:var(--brand);color:var(--on-brand)}
+.pick .fn{position:absolute;z-index:3;left:0;right:0;bottom:0;font:8.5px var(--mono);color:#cfc6b7;background:linear-gradient(0deg,rgba(0,0,0,.8),transparent);padding:8px 4px 3px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal{position:fixed;inset:0;z-index:60;display:none;place-items:center;background:rgba(0,0,0,.6);padding:20px}
+.modal.on{display:grid}
+.modal-box{width:100%;max-width:380px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--shadow);padding:16px}
+.toast{position:fixed;left:50%;bottom:28px;transform:translate(-50%,16px);opacity:0;pointer-events:none;z-index:70;
+  display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:var(--panel-3);color:var(--text);font-size:12px;box-shadow:var(--shadow);transition:.22s}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast .k{color:var(--brand);font-family:var(--mono);font-size:10.5px;letter-spacing:.1em}
+/* ---------- proposal ---------- */
+.hero{position:relative;padding:26px 0 22px;border-bottom:1px solid var(--line-3);overflow:hidden}
+.hero .kick{font:10.5px/1 var(--mono);letter-spacing:.2em;color:var(--brand-dim);text-transform:uppercase;margin-bottom:14px}
+.hero h1{font-size:clamp(24px,3.4vw,36px);line-height:1.28;margin:0 0 12px;font-weight:700;letter-spacing:.01em}
+.hero h1 em{font-style:normal;color:var(--brand-2)}
+.hero .lede{max-width:760px;font-size:13px}
+.hero-meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}
+.hero-act{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}
+.tok{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-top:10px}
+.tok .t{border:1px solid var(--line-2);border-radius:9px;padding:9px;background:var(--panel)}
+.tok .sw{height:34px;border-radius:6px;border:1px solid var(--line-2);margin-bottom:7px}
+.tok .n{font:10.5px var(--mono);color:var(--text)}
+.tok .v{font:9.5px var(--mono);color:var(--dim);margin-top:2px;word-break:break-all}
+.tok .u{font-size:10.5px;color:var(--muted);margin-top:5px}
+.matrix{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.matrix .card{padding:15px}
+.matrix .k{width:24px;height:24px;border-radius:7px;border:1px solid var(--line);background:var(--brand-soft);color:var(--brand);display:flex;align-items:center;justify-content:center;font:12px var(--serif);margin-bottom:9px}
+.matrix .t{font-size:12.5px;color:var(--text);margin-bottom:4px}
+.matrix .d{font-size:11.5px;color:var(--muted);line-height:1.8}
+.checks{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.checks div{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line-3);border-radius:8px;padding:9px 11px;font-size:11.5px;color:var(--muted);background:var(--soft-1)}
+.checks b{color:var(--brand);font-weight:500;flex:0 0 auto}
+.risk{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.risk .r{border:1px solid var(--line-2);border-radius:9px;padding:11px 12px;background:var(--panel)}
+.risk .r .t{font-size:11.5px;color:var(--text);margin-bottom:3px;display:flex;gap:6px;align-items:center}
+.risk .r .d{font-size:11px;color:var(--muted);line-height:1.75}
+/* ---------- auth：与线上 AuthPage 同构（独立于 Layout、min-h-screen 居中、max-w-md 单卡） ---------- */
+body.bare .nav,body.bare .legal,body.bare .foot{display:none}
+body.bare .main{max-width:none;padding:0}
+.authwrap{position:relative;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px 16px;overflow:hidden}
+.agl{position:absolute;width:384px;height:384px;border-radius:50%;filter:blur(64px);pointer-events:none}
+.agl.a{top:-160px;left:25%;background:rgba(224,179,106,.16)}
+.agl.b{bottom:-160px;right:25%;background:rgba(207,106,95,.12)}
+body.light .agl.a{background:rgba(75,107,245,.16)}
+body.light .agl.b{background:rgba(124,174,139,.16)}
+.authcard{position:relative;width:100%;max-width:448px;padding:32px;border:1px solid var(--line-2);border-radius:16px;background:linear-gradient(180deg,var(--panel-2),var(--panel));box-shadow:var(--shadow)}
+.authcard .hd{text-align:center;margin-bottom:32px}
+.authcard .hd .mk{display:flex;margin:0 auto 12px}
+.authcard .hd h1{font-size:20px;font-weight:600;line-height:1.4;margin:0;color:var(--text)}
+.authcard .hd p{margin:4px 0 0;font-size:13px;color:var(--muted)}
+.atabs{display:grid;grid-template-columns:1fr 1fr;border-radius:12px;background:var(--soft-2);padding:4px;margin-bottom:24px}
+.atab{border:none;background:none;border-radius:8px;padding:8px 0;font-size:13px;color:var(--muted);cursor:pointer}
+.atab:hover{color:var(--text)}
+.atab.on{background:var(--panel-2);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.32)}
+body.light .atab.on{background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.1)}
+.aform{display:flex;flex-direction:column;gap:16px}
+.aagree{display:flex;align-items:flex-start;gap:8px;font-size:11.5px;line-height:1.7;color:var(--muted);cursor:pointer}
+.aagree input{margin-top:2px;accent-color:var(--brand)}
+.afoot{margin:16px 0 0;text-align:center;font-size:11.5px;line-height:1.8;color:var(--muted)}
+@media(max-width:1120px){
+  .compose-grid{grid-template-columns:1fr}
+  .tasks{grid-template-columns:1fr}
+  .assets{grid-template-columns:repeat(3,1fr)}
+  .astats{grid-template-columns:repeat(3,1fr)}
+  .g4,.tok{grid-template-columns:repeat(2,1fr)}
+  .matrix,.g3,.checks,.risk{grid-template-columns:1fr}
+  .g2{grid-template-columns:1fr}
+  .shot .body{grid-template-columns:1fr}
+  .cands{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="nav">
+    <div class="nav-in">
+      <div class="lockup" id="brandLockup" data-act="nav" data-arg="create" title="海白菜 · 创作"></div>
+      <nav class="menu" id="navMenu"></nav>
+      <div class="nav-r">
+        <button class="credit" data-act="nav" data-arg="ledger" title="积分台账"><span>◆</span><span id="navCredits">128</span></button>
+        <span class="mail">creator@hibtv.cn</span>
+        <button class="ibtn" data-act="logout" title="退出登录">⏻</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="legal" id="legalBar">
+    <div class="legal-in">
+      <span class="sp">我们更新了<a href="#/proposal">《用户协议》《隐私政策》</a>等文本（版本 1.0）。继续使用本服务即视为接受更新后的版本。</span>
+      <button class="x" data-act="dismissLegal" title="知道了">×</button>
+    </div>
+  </div>
+
+  <main class="main" id="view"></main>
+
+  <footer class="foot">
+    <div class="links">
+      <a data-act="legalLink" data-arg="用户协议">用户协议</a>
+      <a data-act="legalLink" data-arg="隐私政策">隐私政策</a>
+      <a data-act="legalLink" data-arg="AI 标识说明">AI 标识说明</a>
+      <a data-act="legalLink" data-arg="积分与计费规则">积分与计费规则</a>
+    </div>
+    <p>海白菜 · Powered by MiniMax H3 + ComfyUI</p>
+    <p>版本 1.0 · 更新日期 2026-09-30</p>
+  </footer>
+</div>
+
+<div class="dock">
+  <span class="lbl">方案稿</span>
+  <button class="btn xs" data-act="nav" data-arg="proposal">说明</button>
+  <button class="btn xs" data-act="theme" id="themeBtn">明色对照</button>
+  <button class="btn xs" data-act="cycleLogo" id="logoBtn">标识：徽章</button>
+</div>
+
+<div class="scrim" id="scrim" data-act="closeDrawer"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-hd"><span class="t" id="drawerTitle">从素材库选择</span><button class="x" data-act="closeDrawer">×</button></div>
+  <div class="drawer-bd" id="drawerBody"></div>
+  <div class="drawer-ft">
+    <span class="tiny dim mono" id="drawerHint">最多可选 9 个</span>
+    <div class="sp"></div>
+    <button class="btn sm ghost" data-act="closeDrawer">取消</button>
+    <button class="btn sm primary" data-act="confirmPick">加入</button>
+  </div>
+</aside>
+
+<div class="modal" id="modal"><div class="modal-box" id="modalBox"></div></div>
+<div class="toast" id="toast"><span class="k">OK</span><span id="toastMsg"></span></div>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------------- 路由 ---------------- */
+const ROUTES = [
+  { k: 'create', label: '创作', crumb: ['创作'] },
+  { k: 'director', label: '分镜模式', crumb: ['创作', '分镜模式'] },
+  { k: 'advideo', label: '广告片', crumb: ['创作', '广告片'] },
+  { k: 'assets', label: '资产管理', crumb: ['创作', '资产管理'] },
+  { k: 'ledger', label: '使用台账', crumb: ['使用台账'] },
+  { k: 'admin', label: '管理后台', crumb: ['管理后台'] },
+  { k: 'auth', label: '登录 / 注册', crumb: ['登录 / 注册'] },
+  { k: 'proposal', label: '设计提案', crumb: ['设计提案'] },
+];
+/* 顶部导航完全按线上 Layout：创作 / 短剧 / 台账 / 管理（图标位用字符占位，不改变间距） */
+const NAV = [
+  { k: 'create', label: '创作', i: '▤', group: ['create', 'director', 'advideo', 'assets'] },
+  { k: 'hibtv', label: '短剧', i: '▦', group: ['hibtv'] },
+  { k: 'ledger', label: '台账', i: '▣', group: ['ledger'] },
+  { k: 'admin', label: '管理', i: '◈', group: ['admin'] },
+];
+const LOGO_SHORT = { raw: '原图', glow: '发光', badge: '徽章', mono: '金色' };
+
+/* ---------------- 素材库（演示数据） ---------------- */
+const ASSETS = [
+  { id: 'a1', n: 'CAST-01 正面锚点', k: 'image', s: '1.8 MB', t: '10-26 11:02' },
+  { id: 'a2', n: 'CAST-03 侧面视图', k: 'image', s: '1.2 MB', t: '10-26 11:03' },
+  { id: 'a3', n: 'SCN-02 雨夜街道', k: 'image', s: '2.4 MB', t: '10-26 11:10' },
+  { id: 'a4', n: 'PROP-01 黑伞特写', k: 'image', s: '0.9 MB', t: '10-26 11:12' },
+  { id: 'a5', n: 'REF-07 霓虹参考帧', k: 'image', s: '1.5 MB', t: '10-25 22:40' },
+  { id: 'a6', n: 'CAM-02 手持跟拍', k: 'video', s: '12.6 MB', t: '10-25 22:41' },
+  { id: 'a7', n: 'E01 成片粗剪', k: 'video', s: '150.6 MB', t: '10-25 20:10' },
+  { id: 'a8', n: 'VOX-01 女主音色', k: 'audio', s: '3.2 MB', t: '10-24 18:22' },
+  { id: 'a9', n: 'BGM-03 低压氛围', k: 'audio', s: '5.8 MB', t: '10-24 18:30' },
+  { id: 'a10', n: 'AD-01 商品主图', k: 'image', s: '2.1 MB', t: '10-23 09:14' },
+];
+
+const COST_PER_SEC = { '768p': 2, '2k': 3.6, '4k': 6 };
+const resCost = (sec, res) => Math.round(sec * COST_PER_SEC[res]);
+
+/* 品牌标识：与线上首页同一张图（BrandMark.tsx 的 1200×1200 PNG），已随方案落地到本目录 */
+const LOGO_SRC = 'brand-mark.png';
+const LOGO_LABEL = { raw: '原图直放', glow: '原图 + 外发光', badge: '暗场徽章', mono: '金色单色' };
+function markHTML(size, mode) {
+  const m = mode || state.logo;
+  const st = `width:${size}px;height:${size}px`;
+  return `<span class="mk ${m}" style="${st}"><img src="${LOGO_SRC}" alt="海白菜" draggable="false" onerror="this.parentNode.classList.add('fail')"><span class="fb">海</span></span>`;
+}
+
+/* ---------------- 状态 ---------------- */
+const state = {
+  route: 'proposal',
+  theme: 'dark',
+  logo: 'badge',
+  pop: false,
+  mode: 'r2v',
+  refs: ['a1', 'a3'],
+  first: null,
+  last: null,
+  res: '768p',
+  dur: 8,
+  aspect: '9:16',
+  scene: 'drama',
+  enhance: true,
+  prompt: '',
+  auth: { mode: 'login' },
+  tasks: [
+    { id: 't101', title: '雨夜霓虹下的短发女孩，缓慢推近，头发被风吹起', status: 'running', progress: 62, sec: 10, res: '2k', aspect: '9:16', mode: '单段', at: '今天 11:24' },
+    { id: 't102', title: '上门龙婿 · 第 1 集 · 22 段 / 64 镜', status: 'done', progress: 100, sec: 276, res: '768p', aspect: '9:16', mode: '分镜', at: '昨天 21:40' },
+    { id: 't103', title: '极简护肤广告 · 15s · 9:16', status: 'done', progress: 100, sec: 15, res: '2k', aspect: '9:16', mode: '广告片', at: '昨天 16:02' },
+    { id: 't104', title: '首尾帧过渡：夜景切到日出', status: 'fail', progress: 100, sec: 5, res: '768p', aspect: '16:9', mode: '单段', at: '10-25 09:12' },
+  ],
+  style: '冷调夜戏：低饱和蓝绿 + 暖白路灯，浅景深，35mm 手持质感，雨夜反光。',
+  shots: [
+    { p: '固定机位，男主推门而入，雨水顺着伞骨落下，冷白顶光', sec: 8, refs: ['a1'] },
+    { p: '手持跟拍，穿过走廊，霓虹招牌在玻璃上反光，脚步与雨声叠在一起', sec: 10, refs: ['a2', 'a5'] },
+    { p: '特写：手指按下电梯键，红色指示灯亮起，画外电梯提示音', sec: 5, refs: [] },
+  ],
+  adv: { step: 'form', img: 'a10', name: '极简护肤精华 30ml', point: '', points: ['成分单一', '18 小时续航不干', '按压泵头'], auto: true, sec: 15, aspect: '9:16', picked: [2], progress: 0 },
+  assets: { filter: 'all', q: '' },
+  ledger: { tab: 'tasks' },
+  admin: { tab: 'overview', cloud: 'on', users: [
+    { id: 'U-1024', email: 'creator@hibtv.cn', role: '用户', credits: 128, tasks: 24 },
+    { id: 'U-1025', email: 'studio@hibtv.cn', role: '用户', credits: 860, tasks: 96 },
+    { id: 'U-0991', email: 'admin@hibtv.cn', role: '管理员', credits: 9999, tasks: 7 },
+    { id: 'U-1033', email: 'guest@hibtv.cn', role: '用户', credits: 0, tasks: 0 },
+  ] },
+  drawer: { open: false, target: null, picked: [] },
+};
+
+/* ---------------- 通用片段 ---------------- */
+const KIND_LABEL = { image: '图片', video: '视频', audio: '音频' };
+const assetById = (id) => ASSETS.find((a) => a.id === id);
+
+function ph(label, tag) {
+  return `<div class="ph"><b>${esc(label)}</b><i>${esc(tag || '')}</i></div>`;
+}
+function plate(label, tag, cls = '') {
+  return `<div class="plate ${cls}">${ph(label, tag)}</div>`;
+}
+function seg(items, cur, act, k = '') {
+  return `<div class="seg">${items.map((it) => `<button class="s ${it === cur ? 'on' : ''}" data-act="${act}" data-arg="${it}" ${k ? `data-k="${k}"` : ''}>${it}</button>`).join('')}</div>`;
+}
+function drawerOpenBtn(target, text, cls) {
+  return `<div class="${cls || 'refslot'}" data-act="openDrawer" data-arg="${target}"><span class="plus">+</span>${text}</div>`;
+}
+function refThumb(id, ctx) {
+  const a = assetById(id) || { n: '未命名', k: 'image' };
+  return `<div class="refthumb" title="${esc(a.n)}">${plate(a.n, KIND_LABEL[a.k], 'k-' + a.k)}
+    <span class="x" data-act="delRef" data-arg="${id}" data-ctx="${ctx || 'main'}">×</span></div>`;
+}
+function cost() { return resCost(state.dur, state.res); }
+function statusPill(t) {
+  if (t.status === 'running') return `<span class="status run"><i class="spin"></i>生成中</span>`;
+  if (t.status === 'done') return `<span class="status done">已完成</span>`;
+  return `<span class="status fail">失败</span>`;
+}
+
+/* ================= 方案总览 ================= */
+const TOKENS = [
+  ['--bg', '#0a0908', '画面底', 'var(--bg)'],
+  ['--bg-2', '#0e0d0b', '次级底', 'var(--bg-2)'],
+  ['--panel', '#131110', '面板', 'var(--panel)'],
+  ['--panel-3', '#211d19', '浮起层', 'var(--panel-3)'],
+  ['--line', 'rgba(224,179,106,.16)', '金线', 'var(--line)'],
+  ['--brand', '#e0b36a', '主金', 'var(--brand)'],
+  ['--brand-2', '#f3d7a8', '亮金', 'var(--brand-2)'],
+  ['--text', '#e9e3d7', '正文', 'var(--text)'],
+  ['--muted', '#948b7e', '次要', 'var(--muted)'],
+  ['--green', '#7cae8b', '成功', 'var(--green)'],
+];
+
+function proposalHTML() {
+  return `<div class="wrap">
+  <section class="hero">
+    <div class="kick">HAIBAICAI · DARK-GOLD RESKIN · V1 提案</div>
+    <h1>把工作台搬进暗场，<br><em>只留一束金色</em></h1>
+    <p class="lede">只换「光」，不动「骨骼」。顶部导航、协议横幅、内容容器、页脚、登录页与四个创作模式，全部按线上 <code>web/</code> 的 Layout 与页面组件原样复刻：间距、字号、圆角、控件尺寸、信息顺序一处不改，变量只有颜色令牌与 logo。令牌与 <b>prototype.html</b> 同源：近黑暖底 <code>#0a0908</code> + 主金 <code>#e0b36a</code> + 米白正文 <code>#e9e3d7</code>。浅色版退到「对照基线」，随时可切回同屏比较。</p>
+    <div class="hero-meta">
+      <span class="chip gold">布局、间距、字号与线上一致</span>
+      <span class="chip">只替换颜色令牌与 logo</span>
+      <span class="chip">8 个页面可点</span>
+      <span class="chip">明暗一键对照</span>
+      <span class="chip green">不动 web/ 任何代码</span>
+    </div>
+    <div class="hero-act">
+      <button class="btn primary" data-act="nav" data-arg="create">从创作页开始看 →</button>
+      <button class="btn" data-act="theme">切明色对照</button>
+      <button class="btn ghost" data-act="scrollTo" data-arg="plan">逐页清单</button>
+    </div>
+  </section>
+
+  <section class="sec" id="s1">
+    <div class="eyebrow">01 / WHY DARK GOLD</div>
+    <div class="h2">三条判断，决定换皮而不是换结构</div>
+    <div class="matrix">
+      <div class="card"><div class="k">影</div><div class="t">看的是画面，不是表单</div><div class="d">这个工作台的主体是缩略图与成片。浅底会把画面压成「表格里的图片」，暗底让画面自己发光；金色只承担状态与行动，不参与装饰。</div></div>
+      <div class="card"><div class="k">牌</div><div class="t">一个品牌，两种语境</div><div class="d">官网与物料继续用晴空蓝 + 薄荷青；产品内是长时间伏案的「暗房」。两者共用字形、间距与圆角，只换亮度和主色。</div></div>
+      <div class="card"><div class="k">同</div><div class="t">与线上同一套骨架</div><div class="d">外壳参数逐条对齐 Layout.tsx（56px 顶栏 / 1280 容器 / 24+16 内边距 / 四链接页脚），页面参数对齐各页面 TSX。原型与真实产品的截图像素级叠得住，评审不必再「看图说话」。</div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="eyebrow">02 / TOKENS</div>
+    <div class="h2">十个令牌，就是全部改造</div>
+    <div class="tok">${TOKENS.map(([k, v, u, cssvar]) => `<div class="t"><div class="sw" style="background-color:#0f0d0b;background-image:linear-gradient(${v},${v})"></div><div class="n">${k}</div><div class="v">${v}</div><div class="u">${u}</div></div>`).join('')}</div>
+    <div class="note" style="margin-top:12px">
+      <b>为什么不直接用黑色 + 金色硬编码：</b>所有颜色只从这 10 个变量派生。切换明色对照时，只替换变量值、结构一行不动 —— 这也是落地时最省事的路径：先改令牌层，再逐页清「白底残留」。
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="eyebrow">03 / COMPONENT MAPPING</div>
+    <div class="h2">组件从「浅色天青」到「暗金」的对照</div>
+    <div class="card" style="overflow:auto">
+      <table class="tbl">
+        <thead><tr><th style="width:120px">组件</th><th style="width:30%">现网（浅色天青）</th><th style="width:36%">暗金方案</th><th>取舍说明</th></tr></thead>
+        <tbody>
+          <tr><td class="nm">顶部导航</td><td class="mut">background-50/85 + 蓝色胶囊选中态</td><td>#0a0908/90 + 金线底边，当前项金色柔底</td><td class="mut small">sticky、blur、高度与内边距全部不动，只换令牌</td></tr>
+          <tr><td class="nm">模式切换</td><td class="mut">rounded-full + background-200</td><td>胶囊形状与尺寸不变，只换底与选中填充</td><td class="mut small">形状是线上识别度的一部分，不趁换色改圆角</td></tr>
+          <tr><td class="nm">主行动按钮</td><td class="mut">bg-primary-500 + rounded-full</td><td>仍是 rounded-full，换金色渐变 + 顶部内高光</td><td class="mut small">暗底上蓝色会「跳」，金色才是唯一的高亮</td></tr>
+          <tr><td class="nm">输入面</td><td class="mut">白底 + background-300 描边</td><td>#0e0d0b + 发丝线 + 聚焦 3px 金环</td><td class="mut small">圆角沿用 rounded-xl，不改成直角硬边</td></tr>
+          <tr><td class="nm">素材槽</td><td class="mut">虚线 background-300</td><td>虚线金 28% + 悬停金底 6%</td><td class="mut small">与 prototype 的 upbox 完全一致</td></tr>
+          <tr><td class="nm">任务卡</td><td class="mut">panel + p-4：状态 chip 行 → 提示词 → 成片 → 操作</td><td>同一顺序、同一 padding，只换底色与发丝线</td><td class="mut small">暗底不用大阴影分层，用边界分层</td></tr>
+          <tr><td class="nm">表格</td><td class="mut">灰底 hover、深色标题</td><td>行 hover 白 1.6%，表头金色 mono 小字</td><td class="mut small">数字与时间统一 mono，长时间看台账不累</td></tr>
+          <tr><td class="nm">抽屉 / 弹窗</td><td class="mut">白底 + 阴影</td><td>#0e0d0b + 金边 + 55% 黑遮罩</td><td class="mut small">靠边线而非阴影，避免暗底上「糊成一片」</td></tr>
+          <tr><td class="nm">时长滑杆</td><td class="mut">浅灰轨 + 蓝色 thumb</td><td>4px 暗轨 + 金色 thumb（外描 1px）</td><td class="mut small">分镜模式里最常摸的控件，值得单独调</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" id="plan">
+    <div class="eyebrow">04 / PAGE BY PAGE</div>
+    <div class="h2">逐页清单 · 点任意一行直接进那一页</div>
+    <div class="card" style="overflow:auto">
+      <table class="tbl">
+        <thead><tr><th style="width:150px">页面</th><th style="width:40%">主要改造</th><th>交互保真（本原型已可点）</th><th style="width:64px"></th></tr></thead>
+        <tbody>
+          <tr class="click" data-act="nav" data-arg="create"><td class="nm">创作 · 单段模式</td><td class="mut">输入卡与作品卡共用一套「面板 + 发丝线」，参考素材槽改虚线金</td><td class="mut small">参考素材抽屉、设置弹层、积分随参数重算、提交后任务卡进度</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="director"><td class="nm">创作 · 分镜模式</td><td class="mut">「分镜编辑」面板 + 比例胶囊，段卡去白底改发丝线，提交区居中</td><td class="mut small">时长滑杆实时改总时长/积分、增删段、每段独立参考</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="advideo"><td class="nm">创作 · 广告片</td><td class="mut">四步 stepper 改金线推进，候选图用金色描边代替蓝色高亮</td><td class="mut small">四步可来回切、候选图多选、自动确认开关、费用联动</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="assets"><td class="nm">创作 · 资产管理</td><td class="mut">六张统计卡 + 搜索与胶囊筛选 + 4 列素材网格（16:9 封面）</td><td class="mut small">筛选、搜索、上传、删除、存储构成条</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="ledger"><td class="nm">使用台账</td><td class="mut">生成记录 / 积分流水双表统一表头、状态与差额配色</td><td class="mut small">双 tab、分页、状态 chip、+/- 积分标色</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="admin"><td class="nm">管理后台</td><td class="mut">统计卡、云端实例控制、用户表、Worker 池</td><td class="mut small">五 tab、开机/关机、调整积分弹窗（会写回表格）</td><td class="dim mono">进入 →</td></tr>
+          <tr class="click" data-act="nav" data-arg="auth"><td class="nm">登录 / 注册</td><td class="mut">与线上一致：不包 Layout、满屏居中、max-w-md 单卡，56px logo + 双 tab</td><td class="mut small">登录/注册切换、协议入口、提交后回到创作页</td><td class="dim mono">进入 →</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" id="brand">
+    <div class="eyebrow">05 / BRAND MARK</div>
+    <div class="h2">logo 上暗场：四种处理，点一下全站生效</div>
+    <div class="grid g4">
+      ${[['raw', '原图直放', '与线上首页同一个文件，冷暖原样保留。最忠于品牌，但在暖金底上会「跳」。'],
+        ['glow', '原图 + 金色外发光', '用暖金光把冷色水花兜住，亮度不变、边界变柔。'],
+        ['badge', '暗场徽章', '深色圆角底 + 1px 金线 + 降饱和 30%，把 logo 当一枚徽章嵌进暗场。'],
+        ['mono', '金色单色', '一层 filter 把图形压成金调、保留高光；与界面同源，适合水印与导出封面。']].map(([k, t, d]) => `
+        <div class="card pad" style="cursor:pointer;${state.logo === k ? 'border-color:var(--brand-dim);box-shadow:inset 0 0 0 1px var(--line)' : ''}" data-act="logo" data-arg="${k}">
+          <div style="height:88px;display:flex;align-items:center;justify-content:center;border-radius:9px;background:radial-gradient(120% 100% at 30% 0%,rgba(224,179,106,.1),transparent 60%),#0f0d0b;border:1px solid var(--line-3);margin-bottom:10px">${markHTML(58, k)}</div>
+          <div style="font-size:12.5px;color:var(--text);display:flex;align-items:center;gap:6px">${t}${state.logo === k ? '<span class="chip gold tiny">当前</span>' : ''}</div>
+          <div class="mut" style="margin-top:4px;font-size:11.5px;line-height:1.7">${d}</div>
+        </div>`).join('')}
+    </div>
+    <div class="note" style="margin-top:12px">
+      <b>建议：产品内用「暗场徽章」。</b>线上 logo 是 1200×1200 的透明 PNG（约 592 KB，带高光与 C2PA 元数据），冷色水花单独放在暖金底上会互相抢；给它一圈深色与一根金线，品牌色一颗像素不用改，冲突就被边界切开了。单色金留给水印、导出封面与单色印刷。四档都只靠 CSS 一层 class 切换，不换图、不增素材；也可用 <code>?logo=badge</code> 直开对照。
+    </div>
+    <div class="checks" style="margin-top:10px">
+      <div><b>尺</b><span>顶栏 34px、登录页 56px、物料 58px 起，与线上 BrandLogo 的 size 传参一致；四周留白 ≥ logo 边长的 1/6</span></div>
+      <div><b>档</b><span>1200px 原图只做源文件；产品内导出 96/192px WebP（≈ 8–20 KB），首屏不必背 0.6 MB</span></div>
+      <div><b>禁</b><span>不旋转、不改色相、不加投影以外的特效；单色金版不得用于正式品牌露出</span></div>
+      <div><b>底</b><span>浅色 / 彩色底直接用原图；只有暗底才需要徽章或单色金</span></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="eyebrow">06 / ROLLOUT</div>
+    <div class="h2">三步落地，先改令牌再清残留</div>
+    <div class="g3 grid">
+      <div class="card pad"><div class="k mono tiny dim">STEP 1</div><div class="h3" style="margin-top:6px">令牌层：tailwind.config.js</div><p class="small mut" style="margin:0 0 10px">background / foreground / primary / accent 四组值换成暗金 oklch。页面 TSX 不动一行，先看整体气质对不对。</p><pre class="code">background.50  → <i>#0a0908</i>
+background.100 → <i>#131110</i>
+foreground.900 → <i>#e9e3d7</i>
+primary.500    → <i>#e0b36a</i>
+accent.500     → <i>#7cae8b</i></pre></div>
+      <div class="card pad"><div class="k mono tiny dim">STEP 2</div><div class="h3" style="margin-top:6px">组件层：index.css</div><p class="small mut" style="margin:0 0 10px">.panel / .btn-primary / .btn-ghost / .input / .chip / .range-slider 只换颜色值；圆角、内边距、字号一律沿用原来的 Tailwind 类。</p><pre class="code">.panel { <i>bg:#131110; border:1px rgba(224,179,106,.16)</i> }
+.btn-primary { <i>linear-gradient(180deg,#eac389,#dcaa5e)</i> }
+.range-slider { <i>track:#2a2621; thumb:#e0b36a</i> }</pre></div>
+      <div class="card pad"><div class="k mono tiny dim">STEP 3</div><div class="h3" style="margin-top:6px">残留层：逐页走查</div><p class="small mut" style="margin:0 0 10px">只补「白底残留」的 class：<code>bg-white</code>、<code>text-foreground-950</code>、<code>shadow-sm</code>、<code>bg-rose-50</code>。不重构结构，不动业务逻辑。</p><pre class="code">grep -rn "bg-white\|bg-rose-50\|shadow-lg" web/src
+→ 逐条替换为暗金令牌或 <i>:root</i> 变量</pre></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="eyebrow">07 / RISKS</div>
+    <div class="h2">四个要先说清楚的取舍</div>
+    <div class="risk">
+      <div class="r"><div class="t"><span class="dot gold"></span>品牌一致性</div><div class="d">晴空蓝是否彻底退场？建议产品内暗金、官网保留蓝，以 logo 与字形统一；若两边都换，需同步改 5 份法律页与导出物料。</div></div>
+      <div class="r"><div class="t"><span class="dot gold"></span>浅色素材发光</div><div class="d">白底商品图、UI 截图上暗底会「浮」起来。素材卡需加 1px 内描边 + 6% 暗罩，已在原型中落地。</div></div>
+      <div class="r"><div class="t"><span class="dot gold"></span>对比度边界</div><div class="d">正文 14:1、主金 9.8:1 达标；<code>--dim #635c53</code> 仅 3.4:1，只能做辅助标签，不能承载关键信息 —— 原型已遵守。</div></div>
+      <div class="r"><div class="t"><span class="dot gold"></span>台账打印</div><div class="d">暗底不适合打印与截图汇报，台账需保留一套浅色样式表（<code>@media print</code>），不随主题走。</div></div>
+    </div>
+    <div class="note" style="margin-top:14px"><b>本文件是什么：</b>一份可点击的设计方案，全部为前端演示数据，不接后端、不改线上代码。页面结构与线上逐页对齐，只替换了颜色令牌与 logo；logo 与线上同源，已放在同目录 <code>brand-mark.png</code>，默认用「暗场徽章」，加 <code>?logo=raw</code> 可看线上原样。落地步骤见第 06 节，确认风格后再动 <code>web/</code>。</div>
+  </section>
+  </div>`;
+}
+
+/* ================= 创作 · 单段模式 ================= */
+function taskCard(t) {
+  const done = t.status === 'done';
+  const spend = resCost(t.sec, t.res);
+  return `<div class="task" data-task="${t.id}">
+    <div class="chips">
+      ${statusPill(t)}
+      <span class="chip">${t.mode}</span>
+      <span class="chip">${t.aspect}</span>
+      <span class="chip">${t.sec}s</span>
+      <span class="chip">${t.res}</span>
+      <span class="when">${t.at}</span>
+    </div>
+    <p class="prompt" title="${esc(t.title)}">${esc(t.title)}</p>
+    ${done ? `<div class="video">${plate(t.mode + ' · ' + t.res, t.aspect, 'k-video')}</div>
+    <div class="foot">
+      <button class="btn sm" data-act="toast" data-arg="播放演示成片（原型不含真实视频）">播放</button>
+      <button class="btn sm ghost" data-act="toast" data-arg="已开始下载">下载</button>
+      <span class="cost">消耗 ${spend} 积分</span>
+      <button class="del" title="删除" data-act="delTask" data-arg="${t.id}">✕</button>
+    </div>
+    ${t.res === '768p' ? `<div class="up"><span>◈</span><span>高清升级：</span><button class="chip gold i" data-act="toast" data-arg="已提交升级到 2K（+15 积分）">2K +15</button><button class="chip gold i" data-act="toast" data-arg="已提交升级到 4K（+30 积分）">4K +30</button></div>` : ''}` : ''}
+    ${t.status === 'fail' ? `<div class="err"><span>⚠</span><span style="flex:1">参考图分辨率不足，请换 ≥720p 的图后重试</span><button class="btn ghost sm" data-act="toast" data-arg="已重新提交 · 积分未重复扣除">重试</button></div>` : ''}
+    ${t.status === 'running' ? `<div class="run"><div class="prog"><i style="width:${Math.round(t.progress)}%"></i></div><span>生成中 · <span data-live="pg">${Math.round(t.progress)}%</span></span></div>` : ''}
+  </div>`;
+}
+
+function modeTabsHTML(active) {
+  const items = [['create', '单段模式', '▤'], ['director', '分镜模式', '▥'], ['advideo', '广告片', '▦'], ['assets', '资产管理', '▧']];
+  return `<div class="modewrap"><div class="mtabs">${items.map(([k, t, i]) => `<button class="mtab ${active === k ? 'on' : ''}" data-act="nav" data-arg="${k}">${i} ${t}</button>`).join('')}</div></div>`;
+}
+
+function createHTML() {
+  const refs = state.mode === 'r2v' ? state.refs : [];
+  return `<div class="wrap">
+  ${modeTabsHTML('create')}
+  <div class="cstack">
+    <div class="composer">
+      <div class="compose-grid">
+        <div>
+          <div class="label">参考素材<span class="req">·</span><span class="auto" data-live="refcount">${refs.length} / 9</span></div>
+          <div class="refgrid">
+            ${refs.map((id) => refThumb(id)).join('')}
+            ${refs.length < 9 ? drawerOpenBtn('ref', '添加素材') : ''}
+          </div>
+          <div class="tiny dim" style="margin-top:7px;line-height:1.7">支持图片 / 视频 / 音频混传；提示词用 <code>&lt;Picture N&gt;</code> 按类型序号引用。</div>
+        </div>
+        <div class="promptbox">
+          <div class="label">提示词<span class="auto">可引用 &lt;Picture N&gt;</span></div>
+          <textarea data-bind="prompt" maxlength="2000" placeholder="描述您想要生成的视频内容，例如：一个孩子在公园里放风筝，金色阳光，镜头上移。">${esc(state.prompt)}</textarea>
+          <div class="promptfoot"><span>提示词越具体，画面越稳</span><span class="cnt" data-live="count">${state.prompt.length} / 2000</span></div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <span class="toolchip"><span>◈</span>MiniMax H3</span>
+        <button class="toolchip ${state.mode === 'r2v' ? 'on' : ''}" data-act="setMode" data-arg="r2v">全能参考</button>
+        <button class="toolchip ${state.mode === 'flf2v' ? 'on' : ''}" data-act="setMode" data-arg="flf2v">首 / 尾帧</button>
+        <span class="popwrap" style="position:relative">
+          <button class="toolchip ${state.pop ? 'on' : ''}" data-act="pop"><span class="k">设置</span>${state.res} · ${state.dur}s · ${state.aspect}</button>
+          ${state.pop ? `<div class="pop">
+            <div class="r"><span class="k">分辨率</span>${seg(['768p', '2k', '4k'], state.res, 'setRes')}</div>
+            <div class="r"><span class="k">时长</span>${seg([5, 8, 10], state.dur, 'setDur')}</div>
+            <div class="r"><span class="k">比例</span>${seg(['16:9', '9:16', '1:1'], state.aspect, 'setAspect')}</div>
+            <div class="tiny dim" style="line-height:1.7;border-top:1px solid var(--line-3);padding-top:8px">分辨率与时长决定积分；超分默认关闭，不额外计费。</div>
+          </div>` : ''}
+        </span>
+        <select class="toolchip" data-bind="scene">
+          <option value="general" ${state.scene === 'general' ? 'selected' : ''}>通用</option>
+          <option value="drama" ${state.scene === 'drama' ? 'selected' : ''}>AI 短剧</option>
+          <option value="ecommerce" ${state.scene === 'ecommerce' ? 'selected' : ''}>电商</option>
+          <option value="music" ${state.scene === 'music' ? 'selected' : ''}>音乐创作</option>
+        </select>
+        <button class="toolchip ${state.enhance ? 'on' : ''}" data-act="enhance" title="智能提示词增强">✦ 增强</button>
+        <div class="sp">
+          <span class="cost" title="按 ${state.dur}s × ${state.res} 计">◆ <b data-live="cost">${cost()}</b> 积分</span>
+          <button class="btn primary pill" data-act="submit">创作</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="ptitle">我的作品</div>
+        <span class="tiny dim">共 ${state.tasks.length} 条</span>
+      </div>
+      ${state.tasks.length ? `<div class="tasks">${state.tasks.map(taskCard).join('')}</div>` : `<div class="subpanel" style="text-align:center;color:var(--muted)"><div style="font-size:24px;margin-bottom:8px">✦</div><div style="font-size:13px">还没有作品，输入提示词开始创作吧</div></div>`}
+    </div>
+  </div>
+  </div>`;
+}
+/* ================= 创作 · 分镜模式 ================= */
+const dTotalSec = () => state.shots.reduce((a, s) => a + s.sec, 0);
+const dTotalCost = () => Math.round(dTotalSec() * 2.2);
+
+function directorHTML() {
+  return `<div class="wrap">
+  ${modeTabsHTML('director')}
+  <div class="cstack">
+    <div class="subpanel">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="ptitle">分镜编辑</div>
+        <div class="seg pill">${['16:9', '9:16', '1:1'].map((a) => `<button class="s ${state.aspect === a ? 'on' : ''}" data-act="setAspect" data-arg="${a}">${a}</button>`).join('')}</div>
+      </div>
+      <textarea class="textarea" data-bind="style" style="min-height:78px;background:var(--bg-2)">${esc(state.style)}</textarea>
+      <div class="tiny dim" style="text-align:right;margin-top:4px"><span data-live="stylelen">${state.style.length}</span> / 2000</div>
+    </div>
+
+    <div class="shots" style="margin-top:0">
+      ${state.shots.map((s, i) => `<div class="shot">
+        <div class="hd">
+          <span class="no">${i + 1}</span>
+          <span style="font-size:14px;font-weight:600">分镜 ${i + 1}</span>
+          <span class="sp">
+            <button class="ic" title="删除这一段" data-act="delShot" data-arg="${i}">×</button>
+          </span>
+        </div>
+        <div class="body">
+          <div>
+            <textarea class="textarea" data-bind="shotPrompt" data-arg="${i}" placeholder="这一段发生什么：机位、人物动作、光线、声音">${esc(s.p)}</textarea>
+            <div class="secrow">
+              <span>时长</span>
+              <input type="range" min="1" max="10" step="1" value="${s.sec}" data-bind="sec" data-arg="${i}" style="flex:1;max-width:220px">
+              <span class="val" data-live="sec-${i}">${s.sec}.0s</span>
+            </div>
+          </div>
+          <div>
+            <div class="label" style="margin-bottom:5px">参考图<span class="auto">≤ 9</span></div>
+            <div class="refgrid">
+              ${s.refs.map((id) => refThumb(id, 'shot:' + i)).join('')}
+              ${drawerOpenBtn('shot:' + i, '添加')}
+            </div>
+          </div>
+        </div>
+      </div>`).join('')}
+    </div>
+
+    <div class="subpanel" style="text-align:center">
+      <div class="inline" style="justify-content:center;gap:16px">
+        <span class="mut">共 ${state.shots.length} 段 · ${dTotalSec()} 秒</span>
+        <span class="cost">◆ 预计消耗 <b data-live="totalcost">${dTotalCost()}</b> 积分</span>
+      </div>
+      <div class="inline" style="justify-content:center;gap:12px;margin-top:12px">
+        <button class="btn ghost" data-act="addShot">+ 添加分镜</button>
+        <button class="btn primary" data-act="submitDirector">生成完整视频</button>
+      </div>
+    </div>
+  </div>
+  </div>`;
+}
+
+/* ================= 创作 · 广告片 ================= */
+const AD_STEPS = [['form', '商品信息'], ['images', '候选广告图'], ['review', '确认整组'], ['video', '广告成片']];
+const adTotal = () => 4 * 3 + resCost(state.adv.sec, '2k');
+
+function advideoHTML() {
+  const a = state.adv;
+  const idx = AD_STEPS.findIndex((s) => s[0] === a.step);
+  const stepper = AD_STEPS.map(([k, t], i) => `<div class="step ${k === a.step ? 'on' : ''} ${i < idx ? 'done' : ''}" data-act="advStep" data-arg="${k}"><span class="n">${i + 1}</span>${t}</div>`).join('');
+  return `<div class="wrap">
+  ${modeTabsHTML('advideo')}
+  <div class="cstack">
+  <div class="stepper" style="margin:0">${stepper}</div>
+
+  ${a.step === 'form' ? `<div class="g2 grid" style="align-items:start">
+    <div class="card pad">
+      <div class="h3">商品信息</div>
+      <div class="row2">
+        <div>
+          <div class="label">商品主图<span class="req">·</span></div>
+          ${a.img ? `<div class="refthumb" style="aspect-ratio:4/3">${plate(assetById(a.img).n, '商品主图', 'k-image')}<span class="x" data-act="clearAdvImg">×</span></div>` : drawerOpenBtn('adv', '上传 / 选素材', 'refslot wide')}
+        </div>
+        <div>
+          <div class="label">品名</div>
+          <input class="input" data-bind="advName" value="${esc(a.name)}" placeholder="例如：极简护肤精华 30ml">
+          <div class="label" style="margin-top:10px">时长 / 比例</div>
+          <div class="inline"><span class="tiny dim">时长</span>${[10, 15, 30].map((n) => `<button class="s" style="border:1px solid var(--line-2);border-radius:6px;padding:4px 9px;font-size:11.5px;background:${a.sec === n ? 'var(--brand-soft)' : 'none'};color:${a.sec === n ? 'var(--brand-2)' : 'var(--muted)'}" data-act="setAdvSec" data-arg="${n}">${n}s</button>`).join('')}<span class="tiny dim" style="margin-left:6px">比例</span>${seg(['16:9', '9:16', '1:1'], a.aspect, 'setAspect')}</div>
+        </div>
+      </div>
+      <div class="field" style="margin-top:12px">
+        <div class="label">卖点<span class="auto">建议 2–4 条</span></div>
+        <div class="inline" style="margin-bottom:7px">
+          ${a.points.map((p, i) => `<span class="chip gold">${esc(p)}<span style="cursor:pointer;margin-left:2px" data-act="delPoint" data-arg="${i}">×</span></span>`).join('')}
+        </div>
+        <div class="inline"><input class="input" data-bind="point" value="${esc(a.point)}" placeholder="加一条卖点，回车确认" style="flex:1"><button class="btn sm" data-act="addPoint">添加</button></div>
+      </div>
+      <div class="inline" style="margin-top:12px">
+        <button class="toolchip ${a.auto ? 'on' : ''}" data-act="toggleAuto">${a.auto ? '自动确认候选图：开' : '自动确认候选图：关'}</button>
+        <span class="tiny dim">开启后候选图出完直接进视频阶段</span>
+      </div>
+    </div>
+    <div class="card pad">
+      <div class="h3">这一单会花多少</div>
+      <table class="tbl">
+        <tbody>
+          <tr><td>候选广告图 × 4</td><td class="num">12</td></tr>
+          <tr><td>视频 ${a.sec}s · 2k</td><td class="num">${resCost(a.sec, '2k')}</td></tr>
+          <tr><td class="nm">合计</td><td class="num" style="color:var(--brand-2)">${adTotal()}</td></tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top:12px">确认候选图之后才扣视频费，选图阶段只扣广告图费用。</div>
+      <button class="btn primary" style="width:100%;margin-top:12px" data-act="advGen">生成候选广告图</button>
+    </div>
+  </div>` : ''}
+
+  ${a.step === 'images' ? `<div class="card pad">
+    <div class="inline"><div class="h3" style="margin:0">候选广告图</div><span class="chip tiny">4 张 · 同一提示词批量出图</span><span class="sp" style="margin-left:auto"></span><button class="btn sm" data-act="advRegen">重新生成这一组</button></div>
+    <div class="cands">
+      ${[1, 2, 3, 4].map((n) => `<div class="cand ${a.picked.includes(n) ? 'on' : ''}" data-act="advPick" data-arg="${n}">${plate('候选 ' + n, a.aspect, 'k-image')}<span class="tick">✓</span></div>`).join('')}
+    </div>
+    <div class="inline" style="margin-top:14px">
+      <span class="tiny dim">已选 ${a.picked.length} / 4 · 整组一起进视频，保持组内一致</span>
+      <span style="margin-left:auto"></span>
+      <button class="btn" data-act="advStep" data-arg="form">返回修改</button>
+      <button class="btn primary" data-act="advStep" data-arg="review">确认这一组</button>
+    </div>
+  </div>` : ''}
+
+  ${a.step === 'review' ? `<div class="g2 grid" style="align-items:start">
+    <div class="card pad">
+      <div class="h3">确认整组</div>
+      <div class="row3" style="margin-bottom:12px">
+        ${a.picked.map((n) => `<div class="plate k-image" style="aspect-ratio:9/16">${ph('候选 ' + n, a.aspect)}</div>`).join('')}
+      </div>
+      <table class="tbl">
+        <tbody>
+          <tr><td class="mut">品名</td><td class="nm">${esc(a.name)}</td></tr>
+          <tr><td class="mut">卖点</td><td class="nm">${a.points.map(esc).join(' · ')}</td></tr>
+          <tr><td class="mut">成片</td><td class="nm">${a.sec}s · ${a.aspect} · 2k</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card pad">
+      <div class="h3">确认后开始出片</div>
+      <p class="small mut">候选图已固定，不再重抽。视频阶段只读这组图，不会再改画面风格。</p>
+      <div class="inline" style="margin-top:10px"><span class="cost">◆ <b>${resCost(a.sec, '2k')}</b> 积分</span><span class="tiny dim">视频部分</span></div>
+      <div class="inline" style="margin-top:14px"><button class="btn" data-act="advStep" data-arg="images">回去改图</button><button class="btn primary" data-act="advGo">生成广告片</button></div>
+    </div>
+  </div>` : ''}
+
+  ${a.step === 'video' ? `<div class="g2 grid" style="align-items:start">
+    <div class="card" style="overflow:hidden">
+      <div style="position:relative;aspect-ratio:16/9">${plate('AD-01 成片', a.sec + 's · ' + a.aspect, 'k-video')}
+        <span class="badge chip gold tiny">${a.progress >= 100 ? '已完成' : '生成中'}</span></div>
+      <div class="card-bd">
+        <div class="prog"><i data-live="advbar" style="width:${a.progress}%"></i></div>
+        <div class="inline" style="margin-top:9px"><span class="tiny mono dim">${esc(a.name)}</span><span class="tiny mono" style="margin-left:auto;color:var(--brand-2)" data-live="advpct">${a.progress}%</span></div>
+      </div>
+    </div>
+    <div class="card pad">
+      <div class="h3">${a.progress >= 100 ? '成片已就绪' : '正在合成'}</div>
+      <p class="small mut" style="margin:0 0 12px">${a.progress >= 100 ? '可下载 1080×1920 MP4，或从这组候选图新建一条广告片。' : '4 张候选图已锁定，正在按 9:16 合成；原型里用定时器模拟进度。'}</p>
+      <div class="inline">
+        <button class="btn ${a.progress >= 100 ? 'primary' : ''}" data-act="toast" data-arg="已开始下载成片">下载</button>
+        <button class="btn ghost" data-act="advReset">新建广告片</button>
+      </div>
+      <div class="note" style="margin-top:12px">历史上这条任务会留在「我的作品」里，不会因为新建而丢失。</div>
+    </div>
+  </div>` : ''}
+  </div>
+  </div>`;
+}
+
+/* ================= 资产管理 ================= */
+function assetCard(a) {
+  return `<div class="asset k-${a.k}">
+    <div style="position:relative">${plate(a.n, KIND_LABEL[a.k], 'k-' + a.k)}
+      <span class="kind">${KIND_LABEL[a.k]}</span>
+      <div class="tools"><span class="ic" data-act="toast" data-arg="下载 ${esc(a.n)}">↓</span><span class="ic" data-act="toast" data-arg="${esc(a.n)} 已加入参考">＋</span><span class="ic" data-act="delAsset" data-arg="${a.id}">×</span></div>
+    </div>
+    <div class="ft"><div class="fn" title="${esc(a.n)}">${esc(a.n)}</div><div class="fs"><span>${a.t}</span><span>${a.s}</span></div></div>
+  </div>`;
+}
+function filterAssets() {
+  const q = state.assets.q.trim().toLowerCase();
+  return ASSETS.filter((a) => (state.assets.filter === 'all' || a.k === state.assets.filter) && (!q || a.n.toLowerCase().includes(q)));
+}
+function renderAssetGrid() {
+  const box = $('#assetGrid');
+  if (!box) return;
+  const list = filterAssets();
+  box.innerHTML = list.length ? list.map(assetCard).join('') : '<div class="empty" style="grid-column:1/-1"><div class="glyph">空</div><div class="t">没找到匹配的素材</div><div class="s">换个关键词，或切回「全部」</div></div>';
+  const n = $('#assetCount');
+  if (n) n.textContent = list.length + ' 个';
+}
+function assetsHTML() {
+  const counts = { image: 0, video: 0, audio: 0 };
+  ASSETS.forEach((a) => { counts[a.k] += 1; });
+  return `<div class="wrap">
+  ${modeTabsHTML('assets')}
+  <div class="cstack">
+  <div class="astats">
+    <div class="astat"><span class="ico">▤</span><div><b>${ASSETS.length}</b><i>素材总数</i></div></div>
+    <div class="astat"><span class="ico">◫</span><div><b>182.1 <span style="font-size:12px">MB</span></b><i>存储占用 / 2 GB</i></div></div>
+    <div class="astat"><span class="ico">▣</span><div><b>${counts.image}</b><i>图片</i></div></div>
+    <div class="astat"><span class="ico">▦</span><div><b>${counts.video}</b><i>视频</i></div></div>
+    <div class="astat"><span class="ico">♪</span><div><b>${counts.audio}</b><i>音频</i></div></div>
+    <div class="astat"><span class="ico">✦</span><div><b>0</b><i>重复节省</i></div></div>
+  </div>
+
+  <div class="afilter">
+    <label class="search">⌕<input data-bind="assetSearch" value="${esc(state.assets.q)}" placeholder="搜索素材名称…"></label>
+    <div class="pillf">
+      ${[['all', '全部'], ['image', '图片 ' + counts.image], ['video', '视频 ' + counts.video], ['audio', '音频 ' + counts.audio]].map(([k, t]) => `<button class="${state.assets.filter === k ? 'on' : ''}" data-act="assetFilter" data-arg="${k}">${t}</button>`).join('')}
+    </div>
+    <span class="tiny dim" style="margin-left:auto"><span id="assetCount">${ASSETS.length} 个</span> · 182.1 MB</span>
+    <button class="btn primary sm" data-act="upload">上传素材</button>
+  </div>
+
+  <div class="dropzone" data-act="upload">
+    <div class="t">拖文件到这里，或点击选择</div>
+    <div class="s">JPG / PNG / WEBP · MP4 / MOV · MP3 / WAV · 单文件 ≤ 200 MB</div>
+  </div>
+
+  <div class="storage">
+    <span class="tiny mono dim">存储</span>
+    <div class="bar"><i style="width:34%;background:var(--brand)"></i><i style="width:12%;background:rgba(224,179,106,.45)"></i><i style="width:6%;background:var(--green)"></i></div>
+    <span class="tiny mono dim">182.1 MB / 2 GB</span>
+  </div>
+
+  <div class="assets" id="assetGrid">${filterAssets().map(assetCard).join('')}</div>
+  <div class="note" style="margin-top:16px">删除会同时解除任务里的引用，但不会重跑历史任务；已出片的成片保留。</div>
+  </div>
+  </div>`;
+}
+
+/* ================= 台账 ================= */
+const CREDIT_LOGS = [
+  ['今天 11:24', 'consume', '单段模式 · 10s · 2k', -36],
+  ['今天 10:02', 'signup', '注册赠送', 200],
+  ['昨天 21:40', 'consume', '分镜模式 · 22 段 · 276s', -552],
+  ['昨天 16:02', 'consume', '广告片 · 15s · 2k', -66],
+  ['昨天 09:12', 'refund', '生成失败退还', 10],
+  ['10-25 09:12', 'redeem', '兑换充值 · HB-8F2C', 500],
+];
+const LOG_LABEL = { signup: '注册赠送', consume: '生成消耗', refund: '失败退还', redeem: '兑换充值', adjust: '管理员调整' };
+function ledgerHTML() {
+  const tab = state.ledger.tab;
+  return `<div class="wrap">
+  <div class="inline" style="gap:8px;margin-bottom:16px">
+    <h1 class="page-h">使用台账</h1>
+    <div class="seg lg" style="margin-left:8px">
+      <button class="s ${tab === 'tasks' ? 'on' : ''}" data-act="ledgerTab" data-arg="tasks">生成记录</button>
+      <button class="s ${tab === 'credits' ? 'on' : ''}" data-act="ledgerTab" data-arg="credits">积分流水</button>
+    </div>
+  </div>
+
+  ${tab === 'tasks' ? `<div class="card" style="overflow:auto">
+    <table class="tbl">
+      <thead><tr><th style="width:96px">任务</th><th>内容</th><th style="width:78px">模式</th><th style="width:104px">参数</th><th style="width:112px">状态</th><th style="width:120px">时间</th><th style="width:64px" class="num">耗时</th></tr></thead>
+      <tbody>
+        ${state.tasks.map((t, i) => `<tr><td class="id">${t.id}</td><td class="nm">${esc(t.title)}</td><td class="mut">${t.mode}</td><td class="mono small mut nw">${t.sec}s · ${t.res}</td><td>${statusPill(t)}</td><td class="mut small mono nw">${t.at}</td><td class="num mut nw">${['1分42秒', '6分18秒', '3分05秒', '—'][i] || '—'}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  </div>` : `<div class="card" style="overflow:auto">
+    <table class="tbl">
+      <thead><tr><th style="width:130px">时间</th><th style="width:100px">类型</th><th>说明</th><th style="width:90px" class="num">积分</th></tr></thead>
+      <tbody>
+        ${CREDIT_LOGS.map(([at, k, d, v]) => `<tr><td class="mut small mono">${at}</td><td><span class="chip ${k === 'consume' ? '' : k === 'refund' ? 'green' : 'gold'} tiny">${LOG_LABEL[k]}</span></td><td class="nm">${d}</td><td class="${v > 0 ? 'pos' : 'neg'}">${v > 0 ? '+' : ''}${v}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`}
+  <div class="pager"><span>第 1 / 3 页</span><button class="btn xs ghost" data-act="toast" data-arg="已是第一页">上一页</button><button class="btn xs" data-act="toast" data-arg="已翻到第 2 页（演示）">下一页</button></div>
+  <div class="note" style="margin-top:14px">台账是唯一需要打印的页面：建议单独保留 <code>@media print</code> 浅色样式，不随主题切换。</div>
+  </div>`;
+}
+
+/* ================= 管理后台 ================= */
+function adminHTML() {
+  const tab = state.admin.tab;
+  const tabs = [['overview', '概览'], ['users', '用户管理'], ['codes', '兑换码'], ['tasks', '任务监控'], ['workers', 'Worker 池']];
+  return `<div class="wrap">
+  <div class="inline" style="gap:8px;margin-bottom:16px">
+    <h1 class="page-h">管理后台</h1>
+    <div class="seg lg" style="margin-left:8px">${tabs.map(([k, t]) => `<button class="s ${tab === k ? 'on' : ''}" data-act="adminTab" data-arg="${k}">${t}</button>`).join('')}</div>
+  </div>
+
+  ${tab === 'overview' ? `<div class="row4" style="margin-bottom:12px">
+    ${[['今日任务', '38', '+12 对昨日'], ['今日消耗', '1,284', '积分'], ['在线节点', '3 / 4', 'node45 · 246 · 51'], ['失败率', '2.6%', '近 24h']].map(([k, v, s]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('')}
+  </div>
+  <div class="g2 grid" style="align-items:start">
+    <div class="card pad">
+      <div class="inline"><div class="h3" style="margin:0">云端实例</div><span class="chip ${state.admin.cloud === 'on' ? 'green' : ''} tiny" style="margin-left:6px"><span class="dot ${state.admin.cloud === 'on' ? '' : 'gray'}"></span>${state.admin.cloud === 'on' ? '运行中' : '已关机'}</span></div>
+      <p class="small mut" style="margin:8px 0 10px">autodl · A100 40G · 按小时计费。关机后排队任务会保留在队列里。</p>
+      <div class="inline"><button class="btn sm primary" data-act="cloud" data-arg="on">开机</button><button class="btn sm" data-act="cloud" data-arg="off">关机</button><span class="tiny dim">上次心跳 12s 前</span></div>
+    </div>
+    <div class="card" style="overflow:hidden">
+      <div class="card-hd"><span class="t">最近任务</span><span class="r">实时</span></div>
+      <table class="tbl">
+        <thead><tr><th>任务</th><th>节点</th><th>状态</th></tr></thead>
+        <tbody>${state.tasks.slice(0, 3).map((t, i) => `<tr><td class="id">${t.id}</td><td class="mono small mut">node0${i + 5}</td><td>${statusPill(t)}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>
+  </div>` : ''}
+
+  ${tab === 'users' ? `<div class="card" style="overflow:auto"><table class="tbl">
+    <thead><tr><th style="width:96px">ID</th><th>邮箱</th><th style="width:88px">角色</th><th style="width:90px" class="num">积分</th><th style="width:80px" class="num">任务</th><th style="width:110px"></th></tr></thead>
+    <tbody>${state.admin.users.map((u) => `<tr><td class="id">${u.id}</td><td class="nm">${esc(u.email)}</td><td><span class="chip tiny ${u.role === '管理员' ? 'gold' : ''}">${u.role}</span></td><td class="num">${u.credits}</td><td class="num mut">${u.tasks}</td><td><button class="btn xs" data-act="adjust" data-arg="${u.id}">调整积分</button></td></tr>`).join('')}</tbody>
+  </table></div>` : ''}
+
+  ${tab === 'codes' ? `<div class="g2 grid" style="align-items:start">
+    <div class="card pad"><div class="h3">生成兑换码</div>
+      <div class="row2"><div><div class="label">面值</div><input class="input" id="codeVal" value="500"></div><div><div class="label">数量</div><input class="input" id="codeCnt" value="5"></div></div>
+      <button class="btn primary" style="margin-top:10px;width:100%" data-act="genCodes">生成</button></div>
+    <div class="card" style="overflow:hidden"><div class="card-hd"><span class="t">最近生成</span><span class="r">未使用 5 / 5</span></div>
+      <table class="tbl"><tbody>${['HB-8F2C-91D4', 'HB-2A7E-55C1', 'HB-6D90-B3F7'].map((c) => `<tr><td class="id">${c}</td><td class="mut small">500 积分</td><td class="num"><button class="btn xs ghost" data-act="toast" data-arg="已复制 ${c}">复制</button></td></tr>`).join('')}</tbody></table></div>
+  </div>` : ''}
+
+  ${tab === 'tasks' ? `<div class="card" style="overflow:auto"><table class="tbl">
+    <thead><tr><th style="width:96px">任务</th><th>内容</th><th style="width:80px">用户</th><th style="width:96px">节点</th><th style="width:86px">状态</th><th style="width:80px" class="num">积分</th></tr></thead>
+    <tbody>${state.tasks.map((t, i) => `<tr><td class="id">${t.id}</td><td class="nm">${esc(t.title)}</td><td class="mut small">U-1024</td><td class="mono small mut">node0${i + 5}</td><td>${statusPill(t)}</td><td class="num">${resCost(t.sec, t.res)}</td></tr>`).join('')}</tbody>
+  </table></div>` : ''}
+
+  ${tab === 'workers' ? `<div class="row4">
+    ${[['node45', 'A100 40G', '生成', true, '2 仓 · 队列 1'], ['node246', '4090 24G', '生成', true, '3 仓 · 队列 0'], ['node51', '4090 24G', '生成', true, '2 仓 · 队列 4'], ['node205', '3090 24G', '超分', false, '心跳丢失 4m']].map(([n, g, r, ok, m]) => `<div class="node"><div class="r1"><span class="dot ${ok ? '' : 'red'}"></span><span class="nm">${n}</span><span class="chip tiny ghost" style="margin-left:auto">${r}</span></div><div class="meta">${g}<br>${m}</div></div>`).join('')}
+  </div>` : ''}
+  </div>`;
+}
+
+/* ================= 登录 / 注册 ================= */
+function authHTML() {
+  const reg = state.auth.mode === 'register';
+  return `<div class="authwrap">
+  <div class="agl a"></div><div class="agl b"></div>
+  <div class="authcard">
+    <div class="hd">
+      ${markHTML(56)}
+      <h1>海白菜</h1>
+      <p>AI 视频创作平台</p>
+    </div>
+    <div class="atabs">
+      <button class="atab ${reg ? '' : 'on'}" data-act="authMode" data-arg="login">登录</button>
+      <button class="atab ${reg ? 'on' : ''}" data-act="authMode" data-arg="register">注册</button>
+    </div>
+    <div class="aform">
+      <input class="input" type="email" placeholder="邮箱" value="creator@hibtv.cn">
+      ${reg ? '<input class="input" placeholder="昵称" maxlength="30">' : ''}
+      <input class="input" type="password" placeholder="${reg ? '密码（至少 6 位）' : '密码'}" value="········">
+      ${reg ? `<label class="aagree"><input type="checkbox" checked><span>我已阅读并同意<a href="#" data-act="legalLink" data-arg="用户协议">《用户协议》</a><a href="#" data-act="legalLink" data-arg="隐私政策">《隐私政策》</a><a href="#" data-act="legalLink" data-arg="AI 标识说明">《AI 标识说明》</a></span></label>` : ''}
+      <button class="btn primary pill" style="width:100%" data-act="login">${reg ? '注册并领取试用积分' : '登录'}</button>
+    </div>
+    <p class="afoot">${reg ? '新用户注册即赠试用积分，立即体验视频生成' : `登录即表示你同意<a href="#" data-act="legalLink" data-arg="用户协议">《用户协议》</a>和<a href="#" data-act="legalLink" data-arg="隐私政策">《隐私政策》</a>`}</p>
+  </div>
+  </div>`;
+}
+
+/* ================= 抽屉 / 弹窗 ================= */
+function renderDrawer() {
+  const d = state.drawer;
+  const single = d.target === 'first' || d.target === 'last' || d.target === 'adv';
+  $('#drawerTitle').textContent = d.target === 'adv' ? '选择商品主图' : '从素材库选择';
+  $('#drawerHint').textContent = single ? '单选' : `已选 ${d.picked.length} / 9`;
+  $('#drawerBody').innerHTML = `
+    <div class="tabs" style="margin-bottom:10px">${[['all', '全部'], ['image', '图片'], ['video', '视频'], ['audio', '音频']].map(([k, t]) => `<button class="tab ${(state.drawer.filter || 'all') === k ? 'on' : ''}" data-act="drawerFilter" data-arg="${k}">${t}</button>`).join('')}</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr 1fr;gap:8px">
+      ${ASSETS.filter((a) => { const f = state.drawer.filter || 'all'; return f === 'all' || a.k === f; }).map((a) => `<div class="pick ${d.picked.includes(a.id) ? 'on' : ''}" data-act="pick" data-arg="${a.id}">${plate(a.n, KIND_LABEL[a.k], 'k-' + a.k)}<span class="tick">✓</span><span class="fn">${esc(a.n)}</span></div>`).join('')}
+    </div>`;
+}
+function openDrawer(target) {
+  state.drawer = { open: true, target, picked: [], filter: 'all' };
+  renderDrawer();
+  $('#drawer').classList.add('on');
+  $('#scrim').classList.add('on');
+}
+function closeDrawer() {
+  state.drawer.open = false;
+  $('#drawer').classList.remove('on');
+  $('#scrim').classList.remove('on');
+}
+function openAdjust(id) {
+  const u = state.admin.users.find((x) => x.id === id);
+  if (!u) return;
+  $('#modalBox').innerHTML = `
+    <div class="h3" style="font-size:13.5px">调整积分 · ${u.id}</div>
+    <p class="small mut" style="margin:0 0 12px">${esc(u.email)} · 当前 ${u.credits} 积分</p>
+    <div class="row2">
+      <div><div class="label">增减</div><input class="input" id="adjAmt" value="100" placeholder="可负数"></div>
+      <div><div class="label">备注</div><input class="input" id="adjNote" placeholder="补偿 / 活动"></div>
+    </div>
+    <div class="inline" style="margin-top:14px;justify-content:flex-end"><button class="btn sm ghost" data-act="closeModal">取消</button><button class="btn sm primary" data-act="adjustSave" data-arg="${u.id}">确认调整</button></div>`;
+  $('#modal').classList.add('on');
+}
+function closeModal() { $('#modal').classList.remove('on'); }
+function toast(msg, tag) {
+  $('#toastMsg').textContent = msg;
+  const k = $('#toast .k');
+  if (k) k.textContent = tag || 'OK';
+  const el = $('#toast');
+  el.classList.add('on');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('on'), 2300);
+}
+
+/* ================= 页面表 ================= */
+const PAGES = { proposal: proposalHTML, create: createHTML, director: directorHTML, advideo: advideoHTML, assets: assetsHTML, ledger: ledgerHTML, admin: adminHTML, auth: authHTML };
+
+function syncChrome() {
+  // /login 在线上不包在 Layout 里：隐藏顶部导航、协议横幅与页脚，只留满屏表单
+  document.body.classList.toggle('bare', state.route === 'auth');
+  $('#brandLockup').innerHTML = markHTML(34) + '<span class="word">海白菜</span>';
+  $('#navMenu').innerHTML = NAV.map((n) => `<button class="nvi ${n.group.includes(state.route) ? 'on' : ''}" data-act="nav" data-arg="${n.k}" title="${n.label}"><span class="i">${n.i}</span>${n.label}</button>`).join('');
+  $('#themeBtn').textContent = state.theme === 'light' ? '回到暗金' : '明色对照';
+  $('#logoBtn').textContent = '标识：' + (LOGO_SHORT[state.logo] || '徽章');
+}
+function render(resetScroll) {
+  const view = $('#view');
+  view.innerHTML = (PAGES[state.route] || PAGES.create)();
+  syncChrome();
+  if (resetScroll) window.scrollTo(0, 0);
+}
+function go(k) {
+  if (location.hash === '#/' + k) { state.route = k; render(true); }
+  else location.hash = '#/' + k;
+}
+
+/* ================= 事件 ================= */
+function setLive(sel, val) { const el = $(sel); if (el) el.textContent = val; }
+function syncCost() { setLive('[data-live="cost"]', cost()); }
+function syncDirector() {
+  setLive('[data-live="totalsec"]', dTotalSec());
+  setLive('[data-live="totalcost"]', dTotalCost());
+}
+
+const ACTION = {
+  nav: (a) => {
+    if (PAGES[a]) return go(a);
+    if (a === 'hibtv') return toast('短剧工作台是另一套布局，不在本次换色范围', 'SCOPE');
+    toast('暂未接入：' + a, 'HINT');
+  },
+  cycleLogo: () => {
+    const order = ['badge', 'raw', 'glow', 'mono'];
+    const next = order[(order.indexOf(state.logo) + 1) % order.length];
+    state.logo = next; render(); toast('标识：' + LOGO_LABEL[next]);
+  },
+  logo: (a) => { state.logo = a; render(); toast('标识方案：' + (LOGO_LABEL[a] || a)); },
+  theme: () => {
+    state.theme = state.theme === 'dark' ? 'light' : 'dark';
+    document.body.classList.toggle('light', state.theme === 'light');
+    syncChrome();
+    toast(state.theme === 'light' ? '已切到现网浅色版：结构一致，只换令牌' : '已回到暗金主题', 'THEME');
+  },
+  dismissLegal: () => { const el = $('#legalBar'); if (el) el.remove(); },
+  legalLink: (a) => toast('线上为 /legal/*.html：' + a, 'LEGAL'),
+  pop: () => { state.pop = !state.pop; render(); },
+  setMode: (a) => { state.mode = a; state.pop = false; render(); toast(a === 'r2v' ? '全能参考：可混传图片 / 视频 / 音频' : '首尾帧：分别指定第一帧与最后一帧'); },
+  enhance: () => { state.enhance = !state.enhance; render(); toast(state.enhance ? '提示词增强已开启（qwen-flash）' : '提示词增强已关闭'); },
+  setRes: (a) => { state.res = a; render(); toast('分辨率 ' + a + ' · 积分已重算'); },
+  setDur: (a) => { state.dur = +a; render(); },
+  setAspect: (a) => { state.aspect = a; render(); },
+  submit: () => {
+    if (!state.prompt.trim()) { toast('先写一句提示词，再开始创作', 'HINT'); return; }
+    const t = { id: 'T' + (1000 + state.tasks.length + 5), title: state.prompt.slice(0, 42), status: 'running', progress: 4, sec: state.dur, res: state.res, aspect: state.aspect, mode: '单段', at: '刚刚' };
+    state.tasks.unshift(t);
+    state.prompt = '';
+    render();
+    toast('已提交 · ' + resCost(t.sec, t.res) + ' 积分已冻结，完成结算', 'QUEUE');
+  },
+  filter: () => toast('已切换筛选（演示）'),
+  delTask: (a) => { state.tasks = state.tasks.filter((t) => t.id !== a); render(); toast('已删除 ' + a + '（成片与积分记录保留）'); },
+  scrollTo: (a) => { const el = document.getElementById(a); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); },
+  openDrawer: (a) => openDrawer(a),
+  closeDrawer: () => closeDrawer(),
+  drawerFilter: (a) => { state.drawer.filter = a; renderDrawer(); },
+  pick: (a) => {
+    const d = state.drawer;
+    const single = d.target === 'first' || d.target === 'last' || d.target === 'adv';
+    if (single) d.picked = [a];
+    else d.picked = d.picked.includes(a) ? d.picked.filter((x) => x !== a) : d.picked.concat([a]).slice(0, 9);
+    renderDrawer();
+  },
+  confirmPick: () => {
+    const d = state.drawer, ids = d.picked.slice();
+    if (!ids.length) { toast('先选一个素材', 'HINT'); return; }
+    if (d.target === 'ref') state.refs = Array.from(new Set(state.refs.concat(ids))).slice(0, 9);
+    else if (d.target === 'first') state.first = ids[0];
+    else if (d.target === 'last') state.last = ids[0];
+    else if (d.target === 'adv') state.adv.img = ids[0];
+    else if (d.target && d.target.indexOf('shot:') === 0) state.shots[+d.target.split(':')[1]].refs = ids;
+    closeDrawer(); render(); toast('已加入 ' + ids.length + ' 个素材');
+  },
+  delRef: (a, el) => {
+    const ctx = el.dataset.ctx || 'main';
+    if (ctx.indexOf('shot:') === 0) state.shots[+ctx.split(':')[1]].refs = state.shots[+ctx.split(':')[1]].refs.filter((x) => x !== a);
+    else state.refs = state.refs.filter((x) => x !== a);
+    render();
+  },
+  addShot: () => { state.shots.push({ p: '', sec: 5, refs: [] }); render(true); toast('已添加一段 · 时长默认 5s'); },
+  delShot: (a) => { state.shots.splice(+a, 1); render(); toast('已删除第 ' + (+a + 1) + ' 段'); },
+  submitDirector: () => {
+    if (!state.shots.length) { toast('至少留一段', 'HINT'); return; }
+    const total = dTotalSec();
+    const t = { id: 'T' + (2000 + state.tasks.length), title: '分镜任务 · ' + state.shots.length + ' 段 / ' + total + 's', status: 'running', progress: 3, sec: total, res: '768p', aspect: state.aspect, mode: '分镜', at: '刚刚' };
+    state.tasks.unshift(t);
+    render(true);
+    toast('已提交 ' + state.shots.length + ' 段 · 预计 ' + dTotalCost() + ' 积分', 'QUEUE');
+  },
+  advStep: (a) => { state.adv.step = a; render(true); },
+  advPick: (a) => {
+    const n = +a, p = state.adv.picked;
+    state.adv.picked = p.includes(n) ? p.filter((x) => x !== n) : p.concat([n]).sort();
+    if (!state.adv.picked.length) state.adv.picked = [n];
+    render();
+  },
+  advGen: () => {
+    if (!state.adv.img) { toast('先选一张商品主图', 'HINT'); return; }
+    state.adv.step = 'images'; render(true);
+    toast('正在出 4 张候选广告图 · 12 积分', 'GEN');
+  },
+  advRegen: () => toast('已按同一提示词重抽一组 · 12 积分', 'GEN'),
+  advGo: () => { state.adv.step = 'video'; state.adv.progress = 0; render(true); toast('候选图已锁定，开始合成 9:16 成片', 'GEN'); advTick(true); },
+  advReset: () => { state.adv = { step: 'form', img: 'a10', name: '极简护肤精华 30ml', point: '', points: ['成分单一', '18 小时续航不干', '按压泵头'], auto: true, sec: 15, aspect: '9:16', picked: [2], progress: 0 }; render(true); toast('已新建一条广告片'); },
+  setAdvSec: (a) => { state.adv.sec = +a; render(); },
+  toggleAuto: () => { state.adv.auto = !state.adv.auto; render(); toast(state.adv.auto ? '自动确认：候选图出完直接进视频' : '手动确认：候选图出完需要你点确认'); },
+  addPoint: () => {
+    const v = state.adv.point.trim();
+    if (!v) { toast('先输入一条卖点', 'HINT'); return; }
+    state.adv.points.push(v); state.adv.point = ''; render(); toast('已添加卖点：' + v);
+  },
+  delPoint: (a) => { state.adv.points.splice(+a, 1); render(); },
+  clearAdvImg: () => { state.adv.img = null; render(); },
+  assetFilter: (a) => { state.assets.filter = a; render(); },
+  delAsset: (a) => { const i = ASSETS.findIndex((x) => x.id === a); const n = ASSETS[i].n; ASSETS.splice(i, 1); render(); toast('已删除 ' + n); },
+  upload: () => toast('演示：真实上传走 /api/uploads，原型只加一张占位素材', 'UPLOAD'),
+  ledgerTab: (a) => { state.ledger.tab = a; render(); },
+  adminTab: (a) => { state.admin.tab = a; render(); },
+  cloud: (a) => { state.admin.cloud = a; render(); toast(a === 'on' ? '已开机 · 等待心跳' : '已关机 · 队列任务保留'); },
+  adjust: (a) => openAdjust(a),
+  closeModal: () => closeModal(),
+  adjustSave: (a) => {
+    const amt = parseInt($('#adjAmt').value, 10) || 0;
+    const u = state.admin.users.find((x) => x.id === a);
+    if (u) u.credits += amt;
+    closeModal(); render(); toast('已调整 ' + amt + ' 积分 · 已写入流水');
+  },
+  genCodes: () => toast('已生成 5 个兑换码（演示）', 'ADMIN'),
+  authMode: (a) => { state.auth.mode = a; render(); toast(a === 'login' ? '登录：输入邮箱与密码' : '注册：昵称 + 密码，勾选协议后赠试用积分'); },
+  login: () => { go('create'); toast('已登录 · 演示账号 creator@hibtv.cn'); },
+  logout: () => { go('auth'); toast('已退出登录（演示）'); },
+  toast: (a) => toast(a),
+};
+
+document.addEventListener('click', (e) => {
+  // 点空白处收起设置弹层
+  if (state.pop && !e.target.closest('.popwrap')) { state.pop = false; render(); }
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  e.preventDefault();
+  const fn = ACTION[el.dataset.act];
+  if (fn) fn(el.dataset.arg, el);
+});
+
+document.addEventListener('input', (e) => {
+  const t = e.target, b = t.dataset.bind;
+  if (!b) return;
+  if (b === 'prompt') { state.prompt = t.value; setLive('[data-live="count"]', t.value.length + ' / 2000'); }
+  else if (b === 'style') state.style = t.value;
+  else if (b === 'shotPrompt') state.shots[+t.dataset.arg].p = t.value;
+  else if (b === 'sec') {
+    const i = +t.dataset.arg;
+    state.shots[i].sec = +t.value;
+    setLive(`[data-live="sec-${i}"]`, t.value + '.0s');
+    setLive(`[data-live="segcost-${i}"]`, resCost(+t.value, '768p') + ' 积分');
+    syncDirector();
+  }
+  else if (b === 'advName') state.adv.name = t.value;
+  else if (b === 'point') state.adv.point = t.value;
+  else if (b === 'assetSearch') { state.assets.q = t.value; renderAssetGrid(); }
+  else if (b === 'scene') { state.scene = t.value; }
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.dataset.bind === 'scene') state.scene = e.target.value;
+});
+
+/* 广告片成片进度（演示定时器） */
+function advTick(start) {
+  clearInterval(advTick._t);
+  if (!start) return;
+  advTick._t = setInterval(() => {
+    const a = state.adv;
+    if (a.step !== 'video') { clearInterval(advTick._t); return; }
+    a.progress = Math.min(100, a.progress + 6 + Math.random() * 8);
+    const bar = $('[data-live="advbar"]'), pct = $('[data-live="advpct"]');
+    if (bar) bar.style.width = a.progress.toFixed(0) + '%';
+    if (pct) pct.textContent = a.progress.toFixed(0) + '%';
+    if (a.progress >= 100) { clearInterval(advTick._t); render(); toast('成片完成 · 可下载或从这组图再建一条', 'DONE'); }
+  }, 650);
+}
+
+/* 任务进度（演示定时器） */
+setInterval(() => {
+  let done = false;
+  state.tasks.forEach((t) => {
+    if (t.status !== 'running') return;
+    t.progress = Math.min(100, t.progress + 3 + Math.random() * 5);
+    if (t.progress >= 100) { t.status = 'done'; t.progress = 100; done = true; toast('生成完成 · 可播放与下载', 'DONE'); }
+    const card = document.querySelector(`[data-task="${t.id}"]`);
+    if (card) {
+      const bar = card.querySelector('.prog > i');
+      if (bar) bar.style.width = Math.round(t.progress) + '%';
+      const pg = card.querySelector('[data-live="pg"]');
+      if (pg) pg.textContent = Math.round(t.progress) + '%';
+    }
+  });
+  if (done) render();
+}, 1400);
+
+/* ---------------- 启动 ---------------- */
+function boot() {
+  const k = (location.hash || '').replace(/^#\/?/, '');
+  state.route = PAGES[k] ? k : 'create';
+  // 便于截图与分享：?light=1 直接以现网浅色版打开；?logo=badge 指定标识处理
+  if (new URLSearchParams(location.search).get('light') === '1') {
+    state.theme = 'light';
+    document.body.classList.add('light');
+  }
+  const lg = new URLSearchParams(location.search).get('logo');
+  if (lg && LOGO_LABEL[lg]) state.logo = lg;
+  render(true);
+  toast('这是方案预览：页面结构与线上一致，只换颜色与标识', 'READY');
+}
+window.addEventListener('hashchange', () => {
+  const k = (location.hash || '').replace(/^#\/?/, '');
+  state.route = PAGES[k] ? k : 'proposal';
+  render(true);
+});
+boot();
+</script>
+</body>
+</html>

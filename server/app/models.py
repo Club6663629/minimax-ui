@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -131,6 +131,154 @@ class RedeemCode(Base):
     used_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvProject(Base):
+    """短剧工作台项目：一次「定稿剧本 + 美术设定」的导入。
+
+    状态：draft（已建项目，待解析）→ outlining（解析/大纲中）→ ready（可进入制作）
+    """
+
+    __tablename__ = "hibtv_projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    genre: Mapped[str] = mapped_column(String(64), default="")
+    episodes: Mapped[int] = mapped_column(Integer, default=1)
+    minutes_min: Mapped[int] = mapped_column(Integer, default=2)
+    minutes_max: Mapped[int] = mapped_column(Integer, default=5)
+    aspect_ratio: Mapped[str] = mapped_column(String(8), default="9:16")
+
+    script_name: Mapped[str] = mapped_column(String(255), default="")
+    script_path: Mapped[str] = mapped_column(String(512), default="")
+    script_text: Mapped[str] = mapped_column(Text, default="")
+    art_name: Mapped[str] = mapped_column(String(255), default="")
+    art_path: Mapped[str] = mapped_column(String(512), default="")
+    art_text: Mapped[str] = mapped_column(Text, default="")
+    # 必须保留的名场面 / 场次（自由文本）
+    keeps: Mapped[str] = mapped_column(Text, default="")
+    # 解析汇总：{episodes, scenes, lines, cast, scene, prop, effect}
+    detected: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvDoc(Base):
+    """内核文档：outline / cast / art / script / storyboard，data 存 skill schema 的原始 JSON。
+
+    ep=0 表示全集级文档（outline/cast/art），>0 表示分集文档（script/storyboard 按集存）。
+    """
+
+    __tablename__ = "hibtv_docs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))     # outline|cast|art|script|storyboard
+    ep: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    # 质量门结果：{status: ok|fail|skipped, problems: [...], checked_at, runner}
+    gates: Mapped[str] = mapped_column(Text, default="{}")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="empty")  # empty|running|done|failed
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvAsset(Base):
+    """角色 / 场景 / 道具卡：一条资产对应一个锚点图 + N 个派生视图。"""
+
+    __tablename__ = "hibtv_assets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(8), index=True)   # cast|scene|prop
+    code: Mapped[str] = mapped_column(String(16), default="")  # C01|S01|P01
+    name: Mapped[str] = mapped_column(String(120), default="")
+    # 卡片内容：提示词 / 音色 / 层级 / 关系 / 原文案
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    # 视图表：{view: {path, upload_id, version, uploaded, stale, task_id}}
+    views: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="empty")  # empty|drawing|review|done
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvSegment(Base):
+    """分镜段：一段 = 一次 H3 生成（≤ HIBTV_SEG_MAX_SECONDS 秒），可多版本、可回切。"""
+
+    __tablename__ = "hibtv_segments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    ep: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    seg_id: Mapped[str] = mapped_column(String(16), default="")   # E01-01
+    idx: Mapped[int] = mapped_column(Integer, default=0)
+    # 段内容：{id, sceneIndex, seconds, cuts[], h3Prompt, blocking, soundscape, music}
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="none")  # none|running|done|failed
+    current_version: Mapped[int] = mapped_column(Integer, default=0)
+    # [{v, task_id, path, seconds, at}]
+    versions: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvRender(Base):
+    """整集成片：ffmpeg 拼接产物 + cutlist（计划秒 vs 实测秒）。"""
+
+    __tablename__ = "hibtv_renders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    ep: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    path: Mapped[str] = mapped_column(String(512), default="")
+    duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    cutlist: Mapped[str] = mapped_column(Text, default="[]")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvJob(Base):
+    """短剧作业：LLM 生成 / 出图 / 拼接，统一状态机供前端轮询。"""
+
+    __tablename__ = "hibtv_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))       # outline|cast|art|script|storyboard|images|compose
+    ep: Mapped[int] = mapped_column(Integer, default=0)
+    ref: Mapped[str] = mapped_column(String(32), default="")  # 资产 code / 段号等
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    stage: Mapped[str] = mapped_column(String(120), default="")
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class HibtvChange(Base):
+    """变更底账：就地编辑 / 生成覆盖 / 删除，都可撤销。"""
+
+    __tablename__ = "hibtv_changes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    who: Mapped[str] = mapped_column(String(32), default="你")
+    what: Mapped[str] = mapped_column(String(255), default="")
+    path: Mapped[str] = mapped_column(String(255), default="")
+    from_value: Mapped[str] = mapped_column(Text, default="")
+    to_value: Mapped[str] = mapped_column(Text, default="")
+    reverted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
 class AgreementConsent(Base):

@@ -352,3 +352,54 @@ class LegalCurrentOut(BaseModel):
 class LegalAckIn(BaseModel):
     entry: str = "update_notice"
     versions: Optional[dict] = None
+
+
+# ---- 短剧工作台（/api/hibtv） ----
+class HibtvProjectPatch(BaseModel):
+    name: Optional[str] = None
+    genre: Optional[str] = None
+    episodes: Optional[int] = None
+    minutes_min: Optional[int] = None
+    minutes_max: Optional[int] = None
+    aspect_ratio: Optional[str] = None
+    keeps: Optional[str] = None
+
+
+class HibtvDocPatch(BaseModel):
+    """就地编辑：按 JSON 路径写一个字段（变更页可撤销）。"""
+    path: str
+    value: object = None
+    ep: int = 0
+
+
+class HibtvJobIn(BaseModel):
+    kind: Literal["outline", "cast", "art", "script", "storyboard", "images", "compose"]
+    ep: int = 0
+    payload: dict = {}
+
+
+class HibtvAssetPatch(BaseModel):
+    name: Optional[str] = None
+    hidden: Optional[bool] = None
+    data: Optional[dict] = None
+
+
+class HibtvImageIn(BaseModel):
+    """出图动作：anchor=只出锚点；all=补齐全部视图；views=指定视图；regen=单视图重出。"""
+    action: Literal["anchor", "all", "views", "regen", "confirm"] = "anchor"
+    view: str = ""
+    views: list[str] = []
+    hint: str = ""
+
+
+class HibtvSegmentGenerateIn(BaseModel):
+    prompt: Optional[str] = None
+
+
+class HibtvSegmentChooseIn(BaseModel):
+    v: int
+
+
+class HibtvRenderIn(BaseModel):
+    ep: int = 1
+

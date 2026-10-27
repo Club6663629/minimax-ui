@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>hibtv · 短剧工作台 · 交付总览</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --bg:#0a0908;--bg-2:#0e0d0b;--panel:#131110;--panel-2:#191614;
+  --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.045);
+  --gold:#e0b36a;--gold-2:#f3d7a8;--gold-dim:rgba(224,179,106,.45);
+  --text:#e9e3d7;--muted:#948b7e;--dim:#635c53;--red:#cf6a5f;--green:#7cae8b;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --sans:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --serif:"Songti SC","Noto Serif SC","STSong",serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.75 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}
+a:hover{color:var(--gold-2)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px}
+.topbar{position:sticky;top:0;z-index:20;height:52px;display:flex;align-items:center;gap:14px;padding:0 28px;background:rgba(10,9,8,.92);border-bottom:1px solid var(--line-3);backdrop-filter:blur(8px)}
+.logo{width:40px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--mono);letter-spacing:.02em;color:var(--gold-2);background:linear-gradient(160deg,rgba(224,179,106,.16),rgba(224,179,106,.02));border:1px solid var(--line)}
+.topbar .nm{font-size:13px;color:#d9d1c3}
+.topbar .nm em{font-style:normal;color:var(--dim);margin-left:8px;font-size:12px}
+.topbar nav{margin-left:auto;display:flex;gap:6px}
+.topbar nav a{height:30px;display:inline-flex;align-items:center;padding:0 11px;border-radius:7px;border:1px solid var(--line-2);color:#cfc8bb;font-size:12px}
+.topbar nav a:hover{border-color:var(--line);color:var(--gold-2);background:rgba(224,179,106,.06)}
+.topbar nav a.on{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+/* hero */
+.hero{position:relative;padding:66px 0 42px;overflow:hidden;border-bottom:1px solid var(--line-3)}
+.hero::before{content:"";position:absolute;inset:-30% -10% auto;height:520px;
+  background:radial-gradient(60% 60% at 28% 8%,rgba(224,179,106,.16),transparent 62%),radial-gradient(50% 50% at 82% 0%,rgba(207,106,95,.1),transparent 60%);
+  pointer-events:none}
+.kick{position:relative;font:10.5px/1 var(--mono);letter-spacing:.22em;color:var(--gold-dim);text-transform:uppercase;margin-bottom:16px}
+h1{position:relative;font-size:clamp(28px,4.4vw,46px);line-height:1.24;margin:0 0 16px;font-weight:700;letter-spacing:.01em}
+h1 em{font-style:normal;color:var(--gold-2)}
+.lede{position:relative;max-width:720px;color:#a9a093;font-size:14px}
+.hero-meta{position:relative;display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:5px;background:rgba(255,255,255,.035);border:1px solid var(--line-2);color:#b5ac9f;font-size:11.5px;white-space:nowrap}
+.chip.gold{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+.chip.green{background:rgba(124,174,139,.1);border-color:rgba(124,174,139,.28);color:#9fc9ac}
+.chip.red{background:rgba(207,106,95,.12);border-color:rgba(207,106,95,.3);color:#e09a92}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:34px;padding:0 15px;border-radius:8px;border:1px solid var(--line-2);background:rgba(255,255,255,.025);color:#d3cbbe;font:13px var(--sans);cursor:pointer}
+.btn:hover{border-color:var(--line);color:var(--gold-2);background:rgba(224,179,106,.07)}
+.btn.gold{background:linear-gradient(180deg,#eac389,#dcaa5e);border-color:#e3b878;color:#1b1611;font-weight:600}
+.btn.gold:hover{background:linear-gradient(180deg,#f2cfa0,#e3b477);color:#1b1611}
+.btn.sm{height:28px;padding:0 10px;font-size:12px}
+.hero-act{position:relative;display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}
+/* section */
+section{padding:44px 0 6px}
+.sec-hd{display:flex;align-items:flex-end;gap:14px;margin-bottom:20px}
+.sec-hd .n{font:10.5px/1 var(--mono);letter-spacing:.18em;color:var(--gold-dim)}
+.sec-hd h2{font-size:21px;margin:0;font-weight:600;letter-spacing:.01em}
+.sec-hd .s{margin-left:auto;color:var(--dim);font-size:12px}
+/* deliverable cards */
+.grid{display:grid;gap:14px}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.card{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line-2);border-radius:12px;padding:18px;position:relative;overflow:hidden}
+.card:hover{border-color:rgba(224,179,106,.26)}
+.card .t{font-size:14px;color:#e6dfd2;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.card .t .ico{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font:11px var(--serif);color:var(--gold);background:rgba(224,179,106,.1);border:1px solid var(--line)}
+.card p{margin:0;color:#9a9184;font-size:12.5px;line-height:1.8}
+.card .f{position:relative;margin-top:12px;padding-top:10px;border-top:1px dashed var(--line-3);display:flex;align-items:center;gap:8px;font:11px var(--mono);color:var(--dim)}
+.card .f a{font-family:var(--sans);font-size:12px}
+/* flow */
+.flow{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:6px}
+.step{position:relative;border:1px solid var(--line-2);border-radius:10px;padding:13px 12px;background:rgba(255,255,255,.016)}
+.step:hover{border-color:rgba(224,179,106,.3);background:rgba(224,179,106,.05)}
+.step .no{font:10px/1 var(--mono);color:var(--gold-dim);letter-spacing:.1em}
+.step .nm{font-size:13px;color:#e2dbcd;margin:7px 0 6px}
+.step .io{font-size:11px;color:#8b8377;line-height:1.65}
+.step .io b{color:#b8ae9f;font-weight:500}
+.step::after{content:"›";position:absolute;right:-9px;top:50%;transform:translateY(-50%);color:#3d3933;font-size:15px}
+.step:last-child::after{display:none}
+/* page map */
+.pmap{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.pitem{display:grid;grid-template-columns:44px 1fr auto;gap:13px;align-items:start;border:1px solid var(--line-2);border-radius:11px;padding:15px;background:rgba(255,255,255,.014)}
+.pitem:hover{border-color:rgba(224,179,106,.28);background:rgba(224,179,106,.04)}
+.pitem .k{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font:13px var(--serif);color:var(--gold);background:rgba(224,179,106,.09);border:1px solid var(--line)}
+.pitem .nm{font-size:13.5px;color:#e6dfd2;margin-bottom:4px}
+.pitem .nm span{font:10px var(--mono);color:var(--dim);margin-left:7px;letter-spacing:.08em}
+.pitem .d{font-size:12px;color:#948b7e;line-height:1.75}
+.pitem .go{font-size:12px;white-space:nowrap;align-self:center}
+/* diff table */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px;background:rgba(255,255,255,.012);border:1px solid var(--line-2);border-radius:11px;overflow:hidden}
+.tbl th{text-align:left;font-weight:500;color:#847c70;font-size:10.5px;letter-spacing:.1em;padding:10px 13px;border-bottom:1px solid var(--line-2);white-space:nowrap;background:rgba(255,255,255,.02)}
+.tbl td{padding:12px 13px;border-bottom:1px solid var(--line-3);color:#c0b7aa;vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:rgba(255,255,255,.015)}
+.tbl .k{color:#e0d8ca;font-weight:500}
+.tbl .old{color:#8b8377}
+.tbl .new{color:var(--gold-2)}
+.tbl .why{color:#948b7e;font-size:12px}
+code{font:11.5px var(--mono);background:rgba(224,179,106,.09);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--gold-2)}
+.note{border-left:2px solid var(--gold-dim);background:rgba(224,179,106,.045);border-radius:0 8px 8px 0;padding:12px 14px;color:#a9a093;font-size:12.5px;line-height:1.85}
+ul.list{margin:10px 0 0;padding-left:18px;color:#9a9184;font-size:12.5px;line-height:1.95}
+ul.list b{color:#cfc8bb;font-weight:500}
+ul.list code{font-size:11px}
+.ck{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+.ck div{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:#a9a093;border:1px solid var(--line-3);border-radius:9px;padding:10px 12px;background:rgba(255,255,255,.012)}
+.ck div b{color:var(--green);font-weight:500;flex:0 0 auto}
+footer{margin-top:54px;border-top:1px solid var(--line-3);padding:22px 0 46px;color:#635c53;font-size:12px;display:flex;flex-wrap:wrap;gap:12px}
+footer .r{margin-left:auto;font-family:var(--mono);font-size:11px}
+@media(max-width:1000px){.g4{grid-template-columns:1fr 1fr}.flow{grid-template-columns:repeat(4,1fr)}.step::after{display:none}.pmap,.g3,.g2,.ck{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="logo">HiB</div>
+  <div class="nm">短剧工作台<em>交付总览</em></div>
+  <nav>
+    <a class="on" href="index.html">总览</a>
+    <a href="prototype.html">可点击原型</a>
+    <a href="interaction.html">交互规格</a>
+    <a href="prd.html">PRD</a>
+  </nav>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="kick">HIBTV · SCRIPT TO EPISODE · V1 定稿</div>
+    <h1>把已经写好的剧本，<br><em>直接拍成一集短剧</em></h1>
+    <p class="lede">不改编、不重写。上传剧本与美术设定，hibtv 只做一件事：把已经定稿的字，拆成能开工的资产——大纲、角色卡、场景与道具、一集一页的节拍表、一段一页的镜头卡，最后按段拼成片。每一步都能改、能撤销、能只重跑那一小块。</p>
+    <div class="hero-meta">
+      <span class="chip gold">七步链路：导入 → 大纲 → 角色 · 美术 · 剧本 → 分镜 → 出视频</span>
+      <span class="chip">演示项目《上门龙婿》10 集 · 30 场 · 1,024 条台词</span>
+      <span class="chip">9:16 竖屏默认 · 可切 16:9</span>
+      <span class="chip green">纯静态 · file:// 直开 · 零外链</span>
+    </div>
+    <div class="hero-act">
+      <a class="btn gold" href="prototype.html">打开可点击原型 →</a>
+      <a class="btn" href="prototype.html#/outline/inner">直接看大纲</a>
+      <a class="btn" href="interaction.html">交互规格表</a>
+      <a class="btn" href="prd.html">PRD 主文</a>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<section>
+  <div class="sec-hd"><span class="n">01</span><h2>交付物</h2><span class="s">4 个文件，互相之间只靠链接相连</span></div>
+  <div class="grid g4">
+    <div class="card">
+      <div class="t"><span class="ico">览</span>index.html</div>
+      <p>就是这一页：一句主张 + 全流程图 + 7 页页面地图 + 相对截图的 3 处变更 + 素材替换位。</p>
+      <div class="f">当前页</div>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">原</span>prototype.html</div>
+      <p>单文件可点击原型：全部页面、状态、抽屉、撤销、版本、演示模式都在里面，不依赖任何外部资源。</p>
+      <div class="f">2,102 行 · 含演示模式 32 步<a href="prototype.html">打开 →</a></div>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">规</span>interaction.html</div>
+      <p>逐页交互规格：元素 / 触发 / 行为 / 状态 / 异常边界 / 文案，可直接拿去对照验收。</p>
+      <div class="f">覆盖 7 步 + 全局壳<a href="interaction.html">查看 →</a></div>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">案</span>prd.html</div>
+      <p>PRD 主文 12 章：定位、信息架构、七步流程、功能规格、数据模型、状态机、指标与未验证项。</p>
+      <div class="f">数字均标来源<a href="prd.html">阅读 →</a></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px">
+    打开方式：双击任意 <code>.html</code> 即可在浏览器里跑（<code>file://</code> 直开）。若想用本地服务：<code>cd hibtv &amp;&amp; python3 -m http.server 8777</code>，再访问 <code>http://localhost:8777/index.html</code>。原型内部所有跳转都是 <code>#/路由</code>，刷新不会丢页面。
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">02</span><h2>全流程：七步，每步都有输入物和产物</h2><span class="s">产品内不设流程条；这张图只在文档里说明输入与产物</span></div>
+  <div class="flow">
+    <a class="step" href="prototype.html#/home"><span class="no">STEP 1</span><div class="nm">导入项目</div><div class="io"><b>输入</b>剧本 + 美术设定<br><b>产物</b>分集 / 场次 / 资产条目</div></a>
+    <a class="step" href="prototype.html#/outline/inner"><span class="no">STEP 2</span><div class="nm">写大纲</div><div class="io"><b>输入</b>解析结果<br><b>产物</b>8 子页 + 对齐检查</div></a>
+    <a class="step" href="prototype.html#/cast"><span class="no">STEP 3</span><div class="nm">角色</div><div class="io"><b>输入</b>角色表<br><b>产物</b>卡 / 锚点 / 派生视图</div></a>
+    <a class="step" href="prototype.html#/art"><span class="no">STEP 4</span><div class="nm">美术</div><div class="io"><b>输入</b>场景 · 道具表<br><b>产物</b>多视角组图</div></a>
+    <a class="step" href="prototype.html#/script/1"><span class="no">STEP 5</span><div class="nm">剧本</div><div class="io"><b>输入</b>剧本原文<br><b>产物</b>一集一页节拍表</div></a>
+    <a class="step" href="prototype.html#/storyboard/1"><span class="no">STEP 6</span><div class="nm">分镜</div><div class="io"><b>输入</b>节拍 + 锚点<br><b>产物</b>段 / 镜 / 提示词</div></a>
+    <a class="step" href="prototype.html#/video/1"><span class="no">STEP 7</span><div class="nm">出视频</div><div class="io"><b>输入</b>每段选中版本<br><b>产物</b>整集成片 + 版本</div></a>
+  </div>
+  <ul class="list" style="margin-top:16px">
+    <li><b>单向依赖</b>：下游只读上游的已确认内容。改上游会标"过期 / 待确认"，但不会静默重跑下游。</li>
+    <li><b>颗粒度逐层收窄</b>：集 → 场 → 拍 → 段 → 镜。段 ≤ 13 秒、镜 2–5 秒是硬约束，改一个镜头长度，整段时间轴自动对齐。</li>
+    <li><b>不做的事</b>：不拆书、不砍支线、不重写台词、不替编剧决定停在哪。</li>
+    <li><b>流程条不进产品</b>：截图里底部那条“导入小说 → 写大纲 → 角色、美术、剧本 → 分镜 → 出视频”是视频导引，不是界面元素；原型已整条删除，页面导通过左侧 rail 与页面内的按钮完成。</li>
+  </ul>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">03</span><h2>页面地图</h2><span class="s">点任意一行直接进原型对应页</span></div>
+  <div class="pmap">
+    <a class="pitem" href="prototype.html#/home">
+      <span class="k">P0</span>
+      <span><span class="nm">首页<span>HOME</span></span><span class="d"><b>项目列表 + 新建项目入口</b>：一行一个项目（当前进度 / 资产数 / 最后编辑），下方一张“新建短剧项目”卡。第一版只有一种建项方式：<b>上传剧本 + 美术设定</b>；没有模板库、没有对话建项、没有从模板开始。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/outline/inner">
+      <span class="k">P1</span>
+      <span><span class="nm">项目初始化 + 大纲<span>OUTLINE</span></span><span class="d">双上传 → 已自动识别 → 三段解析进度 → 8 子页（内核 / 人物关系 / 角色表 / 场景表 / 道具表 / 分集 / 卡点 / <b>对齐检查</b>）。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/cast">
+      <span class="k">P2</span>
+      <span><span class="nm">角色<span>CAST</span></span><span class="d">空态 → 基于大纲生成 15 张角色卡；<b>双排</b>，每张卡<b>左正面全身大图 + 大头/侧面/背面三视图 + 右文字区</b>；鼠标移到图上浮现<b>四个图标</b>（重新生成 / 改图 / 上传 / 删除，照参考图的深色圆角方图标），hover 图标在<b>按钮上方</b>浮出说明小卡，卡底给音色参考；点图片按<b>四视图</b>看全图。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/art">
+      <span class="k">P3</span>
+      <span><span class="nm">美术设定<span>ART</span></span><span class="d">全部 / 场景 / 道具分类；<b>双排</b>卡：16:9 正面锚点 + 俯视/背面/左侧/右侧缩略，<b>鼠标移到图上浮现</b>与角色卡同一套四个图标（重新生成 / 改图 / 上传 / 删除），说明卡也同在按钮上方，点图片看全部视图。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/script/1">
+      <span class="k">P4</span>
+      <span><span class="nm">剧本<span>SCRIPT</span></span><span class="d">左列集列表（时长 / 场 / 拍 / 台词 / 偏差 / 钩子 / 断点）；右侧当集 20 拍节拍表，双击改台词与表演提示。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/storyboard/list">
+      <span class="k">P5</span>
+      <span><span class="nm">分镜<span>STORYBOARD</span></span><span class="d">总表（集 → 段 → 镜 / 总时长 / 均镜长）→ 本集 22 段段表（<b>每段 ≤ 13 秒</b> · 64 镜）→ <b>一段一页</b>：一镜一卡，<b>已加素材按缩略图 + 名称</b>自动挂上 + 右侧监看 + 重新生成 + 版本。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/video/1">
+      <span class="k">P6</span>
+      <span><span class="nm">出视频<span>VIDEO</span></span><span class="d">整集成片 + 段级时间轴 + 每段版本 + 重新合成 + 导出设置 + 各场站位重排。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+    <a class="pitem" href="prototype.html#/changes">
+      <span class="k">G</span>
+      <span><span class="nm">全局层<span>CHANGES · ASSETS · QUEUE</span></span><span class="d">顶部生成队列与资产库抽屉、左侧变更页（谁 · 何时 · 从什么改成什么 + 撤销）、项目设置、九宫格式演示模式。</span></span>
+      <span class="go">进入 →</span>
+    </a>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">04</span><h2>相对截图的 3 处设计变更</h2><span class="s">这 3 处是设计主张，其余按截图复刻</span></div>
+  <table class="tbl">
+    <thead><tr><th style="width:86px">#</th><th style="width:26%">截图里的做法</th><th style="width:30%">现在的做法</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="k">1</td>
+        <td class="old"><b>新建小说项目</b><br>单文件上传小说<br>改编幅度（忠实 / 抽桷）<br>必留角色与戏份</td>
+        <td class="new"><b>新建短剧项目</b><br><b>双上传：剧本（必填）+ 美术设定（必填）</b><br>删除改编幅度与必留角色<br>新增：项目名 / 题材 / 总集数 / 单集时长 / 画面比例（默认 9:16）/ 必须保留的名场面（可选）<br>模型固定：deepseek · Qwen-Image · Minimax-h3，只展示不可改<br>自动识别：集数 · 每集场次 · 台词条数 · 角色·场景·道具条目数 · 付费卡点</td>
+        <td class="why">剧本已经定稿，输入物本身就是两份生产资料。改编类字段没有语义，留着会让人误以为能改戏。美术设定是出图与出片的硬依赖，必须是必填项而不是附件。</td>
+      </tr>
+      <tr>
+        <td class="k">2</td>
+        <td class="old">大纲含「改编取舍」<br>保留 / 砍掉 / 合并 / 风险</td>
+        <td class="new"><b>去掉改编取舍</b>，改为 8 子页：内核 / 人物关系 / 角色表 / 场景表 / 道具表 / 分集 / 卡点 / <b>对齐检查（新增）</b><br>对齐检查 = 剧本里出现的人、场景、道具、特效，美术设定是否都有对应条目；缺项一键"补建到美术"</td>
+        <td class="why">不改编就没有取舍可写。真正会卡住下游的是"剧本写了、美术没给"的缺口——它今天要靠人眼看，做成一张覆盖率表后才能一键补齐，出图才不会在第 6 集停住。</td>
+      </tr>
+      <tr>
+        <td class="k">3</td>
+        <td class="old">下游 5 页（角色 / 美术 / 剧本 / 分镜 / 出视频）</td>
+        <td class="new"><b>全部保留并按截图复刻</b>：锚点派生与改图、场景道具多视角、一集一页节拍表、一段一页一镜一卡、整集成片与时间轴、右侧监看、重新生成、撤销与变更记录</td>
+        <td class="why">这 5 页是产品的实际工作区，改动只会带来学习成本。唯一补充的是把"过期 / 待确认 / 版本"这三件状态说清楚，避免下游静默用旧图。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sec-hd" style="margin-top:28px"><span class="n">04b</span><h2>按反馈修正的 4 处</h2><span class="s">截图里是“视频导引 / 旧版布局”，产品里按下面方式落地</span></div>
+  <table class="tbl">
+    <thead><tr><th style="width:86px">#</th><th style="width:26%">截图 / 旧实现</th><th style="width:32%">现在的做法</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="k">4</td>
+        <td class="old">底部贯穿七步的 banner<br>导入小说 → 写大纲 → 角色、美术、剧本 → 分镜 → 出视频</td>
+        <td class="new"><b>产品内整条删除</b>：它是视频里的导引字卡，不是界面元素。原型里 <code>STEPS</code> / <code>stepsHTML()</code> / 底部 <code>&lt;footer class="steps"&gt;</code> 已全部移除</td>
+        <td class="why">产品里常驻一条不能点的“流程”只会占地方、还会让人以为必须按顺序走。页面导改由左侧 rail 与页内动作按钮完成。</td>
+      </tr>
+      <tr>
+        <td class="k">5</td>
+        <td class="old">首页照搬宣传页：产品主张 + 大输入框 + 上传 + 从模板开始 + 最近项目</td>
+        <td class="new"><b>项目列表页</b>：一行一个项目（进度 / 资产数 / 最后编辑），一张新建卡；第一版只支持<b>上传剧本 + 美术设定</b>；模板库、对话建项、从小说改编均删除</td>
+        <td class="why">工作台首页只回答两件事：去哪个项目、怎么建一个新项目。把营销位置让给项目列表，日常用起来才快。</td>
+      </tr>
+      <tr>
+        <td class="k">6</td>
+        <td class="old">模型展示为 deepseek-v4-pro，旁边带「更改」；下游还混着 Wan / Seedance / H3</td>
+        <td class="new">统一为 <b>deepseek</b>（文本）· <b>Qwen-Image</b>（图片）· <b>Minimax-h3</b>（视频）；所有「更改」入口与下拉全部去掉，只保留只读 chip + “模型服务固定，不可更改”</td>
+        <td class="why">第一版不开放模型选择：用户选了也改不了出图质量，反而多一层错预期。固定模型能把“出图不稳定”归因到提示词与参考图。</td>
+      </tr>
+      <tr>
+        <td class="k">7</td>
+        <td class="old">角色 / 场景卡只有“改图 / 放大”，没有上传、删除，也没有大图四视图</td>
+        <td class="new">角色、场景、道具三类卡统一为：<b>左锚点大图 + 右多视图竖列 + 提示词与图上四个图标</b>（重新生成 / 改图 / 上传 / 删除，另加常驻的提示词修改链接）；点图片弹<b>四视图（场景道具为全部视图）</b></td>
+        <td class="why">卡上直接给齐“改字、重出、上传真图、删掉”四条路，才不用为了换一张图去别的页。大图四视图是为了同时看住脸与侧面、背面是否走形。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="sec-hd" style="margin-top:28px"><span class="n">04c</span><h2>交付前定稿的 3 处</h2><span class="s">跟着原型一起收口的细节</span></div>
+  <table class="tbl">
+    <thead><tr><th style="width:86px">#</th><th style="width:24%">上一版</th><th style="width:34%">定稿做法</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="k">8</td>
+        <td class="old">按钮说明用伪元素画在图片框内，被 <code>overflow:hidden</code> 裁掉</td>
+        <td class="new">改为真实 <code>&lt;span class="tip"&gt;</code> 放到图片框外，浮在<b>按钮上方</b>；四张卡右边缘对齐按钮组，宽 170px 不越出卡片；命中区用 <code>.ic::after</code> 外扩到 32×30 盖住 5px 间隙，并去掉锚点上的原生 <code>title</code></td>
+        <td class="why">“字出不来”与“触发慢”是同一个坑的两半：一个是被裁，一个是要精确对准 26px 小方块、还要等 1s 系统灰提示</td>
+      </tr>
+      <tr>
+        <td class="k">9</td>
+        <td class="old">镜卡里已加的引用素材是一排文字 chip</td>
+        <td class="new">改为<b>小缩略图 34×34 + 左上角标 + 图下一行素材名</b>（过长省略），末位虚线「＋ 加素材」；右栏同步「类型 / 名称 / 角标 / 缩略图 / 备注框」</td>
+        <td class="why">发片前要能一眼确认“发给模型的是哪张图”，文字 chip 看不到画面，也分不清同一场景的不同视角</td>
+      </tr>
+      <tr>
+        <td class="k">10</td>
+        <td class="old">段长按 15s 算：22 段合计 321.9s（5:22），还标了 26 镜超范围</td>
+        <td class="new">统一按视频模型单次上限<b>段 ≤ 13 秒</b>重算：22 段 / 64 镜 / <b>276.0s = 4:36</b>，均镜长 4.3s，超段 0，成片 150.6 MB</td>
+        <td class="why">段长是模型能力边界，不是排版偏好；先定上限再排镜，才不会到出片阶段才被打回重分</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">05</span><h2>素材替换位</h2><span class="s">改图不改代码</span></div>
+  <div class="grid g2">
+    <div class="card">
+      <div class="t"><span class="ico">路</span>图片路径约定</div>
+      <p>所有图片位都有固定路径，文件不存在时自动降级为同风格占位卡（暗金渐变 + 名称 + 视角标签）：</p>
+      <ul class="list">
+        <li>角色锚点 <code>assets/cast/&lt;ID&gt;-front.jpg</code>，派生 <code>-big</code> / <code>-side</code> / <code>-back</code></li>
+        <li>场景 <code>assets/scene/&lt;S01…&gt;-front.jpg</code>，派生 <code>-top</code> / <code>-back</code> / <code>-left</code> / <code>-right</code></li>
+        <li>道具 <code>assets/prop/&lt;P01…&gt;-front.jpg</code></li>
+        <li>成片与分镜图 <code>assets/frame/E01-master.jpg</code>、<code>E01-07-1.jpg</code>、<code>E01-07-video.jpg</code></li>
+      </ul>
+      <p style="margin-top:8px">不想放文件也行：角色 / 场景 / 道具卡上都有「上传」，选的图会直接顶掉该条目的正面锚点（只存在当前页面内存里，刷新即还原）。</p>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">开</span>怎么开启真图</div>
+      <p>默认不发图片请求（这样占位图缺失时控制台是干净的）。两种开启方式，二选一：</p>
+      <ul class="list">
+        <li>地址加参数：<code>prototype.html?assets=1</code></li>
+        <li>在本目录建 <code>assets/manifest.json</code>（内容可为 <code>{}</code>），用 http(s) 打开时原型探测到即自动挂图</li>
+      </ul>
+      <p style="margin-top:8px">注：<code>file://</code> 下浏览器禁止探测本地文件，请用 <code>?assets=1</code> 方式（或起一个本地静态服务）。http(s) 下若没建 manifest，控制台会有一条 <code>assets/manifest.json</code> 的 404，属预期探测。</p>
+      <p style="margin-top:8px">建议尺寸：竖屏 720×1280（或 1080×1920），横屏 1280×720。图片只是<b>占位与对齐用</b>，真实生成走模型，不在此列。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">06</span><h2>自检结论</h2><span class="s">对照验收口径逐条跑过</span></div>
+  <div class="ck">
+    <div><b>✓</b><span>七步主链路每步 ≥ 3 个可点交互，且都有反馈（toast / 进度 / 版本 / 撤销）</span></div>
+    <div><b>✓</b><span>13 条路由（home / outline 8 子页 / cast / art / script×10 / storyboard 3 层 / video / overview / changes / assets / settings）全部可渲染，无 JS 异常</span></div>
+    <div><b>✓</b><span>空态 / 生成中 / 完成三态齐备：角色空态 → 生成角色卡 → 出图 → 待确认</span></div>
+    <div><b>✓</b><span>9:16 ↔ 16:9 往返切换不破版：无横向滚动、卡片与右侧面板不重叠</span></div>
+    <div><b>✓</b><span><code>file://</code> 直开可用，无外部请求（图片默认走占位层）</span></div>
+    <div><b>✓</b><span>三处变更可被一眼指出：双上传、无改编幅度、大纲无改编取舍且新增对齐检查</span></div>
+    <div><b>✓</b><span>产品内无底部流程条；首页是项目列表 + 新建入口，只有“剧本 + 美术设定”一条建项路径，找不到模板入口</span></div>
+    <div><b>✓</b><span>模型全局统一为 deepseek / Qwen-Image / Minimax-h3，页面上没有任何「更改」或模型下拉</span></div>
+    <div><b>✓</b><span>角色 / 场景 / 道具卡：鼠标移到图上浮现<b>四个图标</b>（重新生成 / 改图 / 上传 / 删除），hover 图标后<b>按钮上方</b>浮出说明卡（金色动作名 + 一句话），提示词另有常驻「修改」链接；点图片看四视图</span></div>
+    <div><b>✓</b><span>撤销闭环：双击改单元格 → toast「已改 1 处 · 撤销」→ 撤销后原值回写</span></div>
+    <div><b>✓</b><span>版本闭环：段重跑 → v2 出现 → 可回切 v1；整集重新合成 → v3</span></div>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>未实测项</b>（本原型刻意不做）：真实模型出图与出片的质量与时延、并发排队与计费、多人协作冲突合并、真实剧本解析器的语义准确率、跨集台词一致性与音色对齐。这些在 <a href="prd.html">PRD</a> 第 12 章列为待验证。
+  </div>
+</section>
+
+<section>
+  <div class="sec-hd"><span class="n">07</span><h2>假设与不做</h2></div>
+  <div class="grid g3">
+    <div class="card">
+      <div class="t"><span class="ico">假</span>演示数据</div>
+      <p>沿用截图项目骨架并整体换语义：项目《上门龙婿》10 集 × 2–5 分钟，15 角色 / 8 场景 / 4 道具 / 5 处卡点，第 1 集 22 段 64 镜 4:36。所有数字均为演示样本，页面上标注来源。</p>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">不</span>不做后端</div>
+      <p>不接真实模型、不生成真实视频，所有"生成"是前端定时器模拟；不做登录、团队协作、计费。生成队列 / 资产库 / 设置是可打开但内容收敛的抽屉页。</p>
+    </div>
+    <div class="card">
+      <div class="t"><span class="ico">占</span>占位图策略</div>
+      <p>不做 AI 生成的示意图，只留标准尺寸与替换路径；占位按类型（人 / 场景 / 道具 / 视频帧）给不同轮廓，便于在视觉上区分资产种类。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>hibtv · 短剧工作台 · 产品设计与可点击原型 · V1 定稿</span>
+  <span>·</span>
+  <span>4 个文件 · 纯静态 · 零外链</span>
+  <span class="r">index.html</span>
+</footer>
+
+</div>
+</body>
+</html>

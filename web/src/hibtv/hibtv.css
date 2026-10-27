@@ -1,0 +1,424 @@
+/* HiBTV 暗金工作台设计系统 —— 由 hibtv/prototype.html 的样式整体移植，
+   作用域收敛到 .hibtv-root（去掉 body/html 全局规则），类名保持 1:1。 */
+.hibtv-root{--bg:#0a0908;--bg-2:#0e0d0b;--panel:#131110;--panel-2:#191614;--panel-3:#211d19;
+  --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.04);
+  --gold:#e0b36a;--gold-2:#f3d7a8;--gold-dim:rgba(224,179,106,.45);
+  --text:#e9e3d7;--muted:#948b7e;--dim:#635c53;
+  --red:#cf6a5f;--green:#7cae8b;--blue:#7d9ab5;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --sans:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --serif:"Songti SC","Noto Serif SC","STSong",serif;}
+.hibtv-root *{box-sizing:border-box}
+.hibtv-root{height:100%}
+.hibtv-root{margin:0;background:var(--bg);color:var(--text);font:13px/1.62 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+.hibtv-root a{color:var(--gold);text-decoration:none}
+.hibtv-root img{display:block}
+.hibtv-root ::-webkit-scrollbar{width:8px;height:8px}
+.hibtv-root ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:8px}
+.hibtv-root ::-webkit-scrollbar-track{background:transparent}
+.hibtv-root .app{display:flex;height:100vh;overflow:hidden}
+.hibtv-root .rail{width:58px;flex:0 0 58px;background:#080706;border-right:1px solid var(--line-3);display:flex;flex-direction:column;align-items:center;padding:8px 0 10px;gap:4px}
+.hibtv-root .logo{width:38px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--mono);letter-spacing:.02em;color:var(--gold-2);background:linear-gradient(160deg,rgba(224,179,106,.16),rgba(224,179,106,.02));border:1px solid var(--line);margin-bottom:8px}
+.hibtv-root .rail-list{display:flex;flex-direction:column;gap:2px;align-items:center;width:100%}
+.hibtv-root .rail-item{width:46px;height:46px;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#8b8378;font-size:10px;cursor:pointer;border:1px solid transparent;background:none;font-family:var(--sans)}
+.hibtv-root .rail-item svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.4}
+.hibtv-root .rail-item:hover{color:#d8d1c4;background:rgba(255,255,255,.03)}
+.hibtv-root .rail-item.on{color:var(--gold);background:rgba(224,179,106,.1);border-color:var(--line)}
+.hibtv-root .rail-item.on svg{stroke:var(--gold)}
+.hibtv-root .rail-sep{width:24px;height:1px;background:var(--line-2);margin:8px 0}
+.hibtv-root .rail-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:2px;width:100%}
+.hibtv-root .col{flex:1;display:flex;flex-direction:column;min-width:0}
+.hibtv-root .topbar{height:46px;flex:0 0 46px;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--line-3);background:linear-gradient(180deg,#0b0a09,#090807)}
+.hibtv-root .crumb{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.hibtv-root .crumb b{color:var(--text);font-weight:500}
+.hibtv-root .crumb .sep{color:#3d3933}
+.hibtv-root .crumb .prj{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.hibtv-root .crumb .prj:hover{color:var(--gold)}
+.hibtv-root .top-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.hibtv-root .tbtn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--line-2);background:rgba(255,255,255,.02);color:#cfc8bb;font:12px var(--sans);cursor:pointer}
+.hibtv-root .tbtn:hover{border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .tbtn .ico{font-size:12px;opacity:.8}
+.hibtv-root .tbtn .q{min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--gold);color:#161310;font:600 10px/16px var(--mono);text-align:center}
+.hibtv-root .stage{flex:1;display:flex;min-height:0}
+.hibtv-root .stage.no-side .side{display:none}
+.hibtv-root .stage.no-panel .panel{display:none}
+.hibtv-root .side{width:236px;flex:0 0 236px;border-right:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:14px 10px 20px}
+.hibtv-root .side-head{font-size:10.5px;letter-spacing:.16em;color:#6d665c;text-transform:uppercase;padding:0 8px 10px}
+.hibtv-root .subnav{display:flex;flex-direction:column;gap:1px;margin-bottom:14px}
+.hibtv-root .nav-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;color:#a89f92;font-size:12.5px;cursor:pointer;border:1px solid transparent}
+.hibtv-root .nav-item:hover{background:rgba(255,255,255,.03);color:#ddd5c7}
+.hibtv-root .nav-item.on{background:rgba(224,179,106,.1);border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .nav-item .n{margin-left:auto;font:10.5px var(--mono);color:#6d665c}
+.hibtv-root .nav-item.on .n{color:var(--gold)}
+.hibtv-root .ep-list{display:flex;flex-direction:column;gap:5px}
+.hibtv-root .ep-item{padding:7px 9px;border-radius:7px;border:1px solid transparent;cursor:pointer;background:rgba(255,255,255,.014)}
+.hibtv-root .ep-item:hover{background:rgba(255,255,255,.035)}
+.hibtv-root .ep-item.on{background:rgba(224,179,106,.08);border-color:var(--line)}
+.hibtv-root .ep-item .r1{display:flex;align-items:baseline;gap:6px}
+.hibtv-root .ep-item .no{font-size:12px;color:#d9d1c3}
+.hibtv-root .ep-item .t{margin-left:auto;font:10px var(--mono);color:#7d766b}
+.hibtv-root .ep-item .r2{font-size:11px;color:#6d665c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.hibtv-root .ep-item .r2 em{color:var(--gold-dim);font-style:normal}
+.hibtv-root .mini-row{display:flex;align-items:center;gap:6px;padding:4px 9px;color:#8e867a;font-size:11.5px;cursor:pointer;border-radius:5px;font-family:var(--mono)}
+.hibtv-root .mini-row:hover{background:rgba(255,255,255,.03);color:#cfc8bb}
+.hibtv-root .mini-row.on{color:var(--gold)}
+.hibtv-root .mini-row .ok{color:var(--green);font-size:9px}
+.hibtv-root .main{flex:1;overflow:auto;padding:18px 26px 32px;min-width:0}
+.hibtv-root .panel{width:326px;flex:0 0 326px;border-left:1px solid var(--line-3);background:var(--bg-2);overflow:auto;padding:16px 14px 30px}
+.hibtv-root .eyebrow{font:10.5px/1 var(--mono);letter-spacing:.16em;color:#6d665c;text-transform:uppercase;margin-bottom:10px}
+.hibtv-root .eyebrow em{color:var(--gold-dim);font-style:normal}
+.hibtv-root .h1{font-size:25px;line-height:1.25;font-weight:700;letter-spacing:.01em;margin:0 0 6px}
+.hibtv-root .lede{color:#a49b8e;font-size:12.5px;max-width:900px;margin:0}
+.hibtv-root .lede em{color:var(--gold-2);font-style:normal}
+.hibtv-root .h2{font-size:14px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.hibtv-root .h2::before{content:"";width:2px;height:13px;background:var(--gold);border-radius:2px}
+.hibtv-root .sec{margin-top:26px}
+.hibtv-root .mono{font-family:var(--mono)}
+.hibtv-root .mut{color:var(--muted)}
+.hibtv-root .dim{color:var(--dim)}
+.hibtv-root .small{font-size:11.5px}
+.hibtv-root .tiny{font-size:10.5px}
+.hibtv-root hr.rule{border:none;border-top:1px solid var(--line-3);margin:16px 0}
+.hibtv-root .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:31px;padding:0 13px;border-radius:7px;border:1px solid var(--line-2);background:rgba(255,255,255,.025);color:#d3cbbe;font:12.5px var(--sans);cursor:pointer;white-space:nowrap}
+.hibtv-root .btn:hover{border-color:var(--line);color:var(--gold-2);background:rgba(224,179,106,.07)}
+.hibtv-root .btn.gold{background:linear-gradient(180deg,#eac389,#dcaa5e);border-color:#e3b878;color:#1b1611;font-weight:600}
+.hibtv-root .btn.gold:hover{background:linear-gradient(180deg,#f2cfa0,#e3b477);color:#1b1611}
+.hibtv-root .btn.ghost{background:transparent}
+.hibtv-root .btn.sm{height:26px;padding:0 9px;font-size:11.5px;border-radius:6px}
+.hibtv-root .btn.xs{height:22px;padding:0 7px;font-size:10.5px;border-radius:5px}
+.hibtv-root .btn[disabled], .hibtv-root .btn.dis{opacity:.4;pointer-events:none}
+.hibtv-root .btn.on{border-color:var(--gold-dim);color:var(--gold-2);background:rgba(224,179,106,.12)}
+.hibtv-root .btn .dots{letter-spacing:.12em;font-size:10px;opacity:.55}
+.hibtv-root .chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:5px;background:rgba(255,255,255,.035);border:1px solid var(--line-2);color:#b5ac9f;font-size:11px;white-space:nowrap}
+.hibtv-root .chip.gold{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .chip.red{background:rgba(207,106,95,.12);border-color:rgba(207,106,95,.3);color:#e09a92}
+.hibtv-root .chip.green{background:rgba(124,174,139,.1);border-color:rgba(124,174,139,.28);color:#9fc9ac}
+.hibtv-root .chip.ghost{background:transparent}
+.hibtv-root .chip.i{cursor:pointer}
+.hibtv-root .chip.i:hover{border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .kbd{font:10.5px var(--mono);padding:1px 5px;border-radius:4px;border:1px solid var(--line-2);color:#8f877b;background:rgba(255,255,255,.03)}
+.hibtv-root .dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block}
+.hibtv-root .dot.gray{background:#5a544b}
+.hibtv-root .dot.red{background:var(--red)}
+.hibtv-root .dot.gold{background:var(--gold)}
+.hibtv-root .field{margin-bottom:13px}
+.hibtv-root .label{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#a89f92;margin-bottom:6px}
+.hibtv-root .label .auto{font-size:10px;color:var(--gold-dim)}
+.hibtv-root .input, .hibtv-root .select, .hibtv-root .textarea{width:100%;background:#0d0c0a;border:1px solid var(--line-2);border-radius:7px;color:var(--text);font:12.5px var(--sans);padding:8px 10px;outline:none}
+.hibtv-root .input:focus, .hibtv-root .select:focus, .hibtv-root .textarea:focus{border-color:var(--gold-dim);box-shadow:0 0 0 3px rgba(224,179,106,.07)}
+.hibtv-root .textarea{resize:vertical;min-height:62px;line-height:1.7}
+.hibtv-root .select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#7d766b 50%),linear-gradient(135deg,#7d766b 50%,transparent 50%);background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.hibtv-root .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.hibtv-root .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.hibtv-root .inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hibtv-root .switch{display:inline-flex;align-items:center;gap:7px;cursor:pointer;color:#a89f92;font-size:11.5px}
+.hibtv-root .switch input{display:none}
+.hibtv-root .switch .track{width:26px;height:15px;border-radius:8px;background:#2a2621;border:1px solid var(--line-2);position:relative;transition:.15s}
+.hibtv-root .switch .track::after{content:"";position:absolute;top:1.5px;left:1.5px;width:10px;height:10px;border-radius:50%;background:#7d766b;transition:.15s}
+.hibtv-root .switch input:checked + .track{background:rgba(224,179,106,.3);border-color:var(--gold-dim)}
+.hibtv-root .switch input:checked + .track::after{left:13px;background:var(--gold)}
+.hibtv-root .upbox{border:1px dashed rgba(224,179,106,.28);border-radius:9px;background:rgba(224,179,106,.025);padding:16px;text-align:center;cursor:pointer}
+.hibtv-root .upbox:hover{background:rgba(224,179,106,.06);border-color:var(--gold-dim)}
+.hibtv-root .upbox .t{font-size:12.5px;color:#cec6b8}
+.hibtv-root .upbox .s{font-size:10.5px;color:#7d766b;margin-top:4px}
+.hibtv-root .upbox.filled{text-align:left;background:#100e0c}
+.hibtv-root .upbox.filled .fn{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--gold-2)}
+.hibtv-root .upbox.filled .st{font:10.5px/1.7 var(--mono);color:#8b8377;margin-top:4px}
+.hibtv-root .upbox .chg{font-size:10.5px;color:#7d766b;margin-top:6px}
+.hibtv-root .plate{position:relative;overflow:hidden;border-radius:8px;border:1px solid var(--line-2);background:#100e0c;display:flex;align-items:center;justify-content:center;isolation:isolate}
+.hibtv-root .plate img{position:relative;z-index:2;width:100%;height:100%;object-fit:cover}
+.hibtv-root .plate .ph{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  background:
+   radial-gradient(120% 80% at 50% 0%,rgba(224,179,106,.11),transparent 62%),
+   repeating-linear-gradient(0deg,rgba(255,255,255,.028) 0 1px,transparent 1px 26px),
+   repeating-linear-gradient(90deg,rgba(255,255,255,.028) 0 1px,transparent 1px 26px),
+   linear-gradient(165deg,#241f19,#15120f 58%,#0e0d0b)}
+.hibtv-root .plate .ph b{font-weight:500;font-size:10.5px;letter-spacing:.1em;color:#a79d8d;text-align:center;padding:0 8px}
+.hibtv-root .plate .ph i{font-style:normal;font:9.5px var(--mono);letter-spacing:.12em;color:#6f675c}
+.hibtv-root .plate .ph::before{content:"";width:34px;height:34px;border-radius:50%;border:1px solid rgba(224,179,106,.22);box-shadow:inset 0 0 18px rgba(224,179,106,.1);margin-bottom:2px}
+.hibtv-root .plate.k-scene .ph::before{width:44px;height:26px;border-radius:3px;transform:perspective(40px) rotateX(24deg)}
+.hibtv-root .plate.k-prop .ph::before{width:36px;height:24px;border-radius:4px}
+.hibtv-root .plate.k-frame .ph::before{width:24px;height:24px;border-radius:50%;border-color:rgba(224,179,106,.4)}
+.hibtv-root .plate.k-frame .ph::after{content:"";position:absolute;width:0;height:0;border-left:7px solid rgba(224,179,106,.55);border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;margin-left:3px}
+.hibtv-root .plate .badge{position:absolute;z-index:3;left:7px;top:7px}
+.hibtv-root .plate .corner{position:absolute;z-index:3;right:6px;bottom:6px}
+.hibtv-root .plate .tools{position:absolute;z-index:4;left:0;right:0;top:0;display:flex;gap:5px;padding:6px;background:linear-gradient(180deg,rgba(0,0,0,.72),transparent);opacity:0;transition:.15s}
+.hibtv-root .plate:hover .tools{opacity:1}
+.hibtv-root .plate .stale{position:absolute;z-index:3;inset:0;background:repeating-linear-gradient(45deg,rgba(207,106,95,.1) 0 6px,transparent 6px 12px);border:1px solid rgba(207,106,95,.35);border-radius:8px}
+.hibtv-root .vthumb{position:relative;aspect-ratio:3/4;border-radius:5px;overflow:hidden;border:1px solid var(--line-3);cursor:pointer}
+.hibtv-root .vthumb:hover{border-color:var(--gold-dim)}
+.hibtv-root .vthumb .lab{position:absolute;z-index:3;left:0;right:0;bottom:0;text-align:center;font-size:9px;color:#cfc6b7;background:linear-gradient(0deg,rgba(0,0,0,.78),transparent);padding:6px 2px 3px}
+.hibtv-root .vthumb .exp{position:absolute;z-index:4;top:2px;right:2px;width:12px;height:12px;border-radius:3px;background:rgba(0,0,0,.6);color:var(--gold);font-size:8px;line-height:12px;text-align:center}
+.hibtv-root .vthumb .stale{position:absolute;z-index:3;inset:0;background:repeating-linear-gradient(45deg,rgba(207,106,95,.14) 0 6px,transparent 6px 12px);border:1px solid rgba(207,106,95,.42)}
+.hibtv-root .plate .badge.chip{height:17px;font-size:9.5px;pointer-events:none}
+.hibtv-root .card{background:var(--panel);border:1px solid var(--line-2);border-radius:10px}
+.hibtv-root .card-hd{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line-3)}
+.hibtv-root .card-hd .t{font-size:12.5px;color:#d5cdbf}
+.hibtv-root .card-bd{padding:14px}
+.hibtv-root .tbl{width:100%;border-collapse:collapse;font-size:12px}
+.hibtv-root .tbl th{text-align:left;font-weight:500;color:#847c70;font-size:10.5px;letter-spacing:.1em;padding:8px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.hibtv-root .tbl td{padding:11px 10px;border-bottom:1px solid var(--line-3);color:#c6beb1;vertical-align:top}
+.hibtv-root .tbl tr:hover td{background:rgba(255,255,255,.016)}
+.hibtv-root .tbl tr.sel td{background:rgba(224,179,106,.06)}
+.hibtv-root .tbl .id{font:11px var(--mono);color:var(--gold-dim)}
+.hibtv-root .tbl .nm{color:#e6dfd2}
+.hibtv-root .tbl .edit{outline:none}
+.hibtv-root .tbl .edit:focus{background:#0d0c0a;box-shadow:0 0 0 1px var(--gold-dim) inset;border-radius:4px}
+.hibtv-root .empty{border:1px dashed var(--line-2);border-radius:12px;padding:34px 22px;text-align:center;background:radial-gradient(120% 90% at 50% -10%,rgba(224,179,106,.06),transparent 60%)}
+.hibtv-root .empty .glyph{width:42px;height:42px;border-radius:11px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:var(--gold);font:14px var(--serif);margin:0 auto 12px;background:rgba(224,179,106,.07)}
+.hibtv-root .empty .t{font-size:14.5px;color:#ddd5c7;margin-bottom:6px}
+.hibtv-root .empty .s{font-size:12px;color:#8f877b;max-width:520px;margin:0 auto 14px}
+.hibtv-root .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--line-2);border-radius:9px;background:rgba(255,255,255,.016);margin:12px 0}
+.hibtv-root .toolbar .sp{margin-left:auto}
+.hibtv-root .toolbar .lab{font-size:10.5px;color:#7d766b;letter-spacing:.06em}
+.hibtv-root .seg{display:inline-flex;padding:2px;border-radius:7px;background:rgba(255,255,255,.03);border:1px solid var(--line-2)}
+.hibtv-root .seg .s{padding:4px 10px;border-radius:5px;font-size:11.5px;color:#9a9184;cursor:pointer}
+.hibtv-root .seg .s.on{background:rgba(224,179,106,.16);color:var(--gold-2)}
+.hibtv-root .tabs{display:flex;align-items:center;gap:7px;margin:12px 0}
+.hibtv-root .tab{height:28px;padding:0 11px;border-radius:6px;border:1px solid var(--line-2);color:#9a9184;font-size:12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:none}
+.hibtv-root .tab.on{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .tab .n{font:10px var(--mono);opacity:.75}
+.hibtv-root .prog{height:4px;border-radius:3px;background:rgba(255,255,255,.07);overflow:hidden}
+.hibtv-root .prog > i{display:block;height:100%;background:linear-gradient(90deg,#c99b55,#f3d7a8);border-radius:3px;transition:width .3s}
+.hibtv-root .stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:8px;margin-top:10px}
+.hibtv-root .stage-item{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--line-2);border-radius:7px;font-size:11.5px;color:#a89f92;background:rgba(255,255,255,.015)}
+.hibtv-root .stage-item.on{border-color:var(--line);color:var(--gold-2);background:rgba(224,179,106,.07)}
+.hibtv-root .stage-item .n{margin-left:auto;font:10.5px var(--mono);color:#7d766b}
+.hibtv-root .genbar{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:linear-gradient(90deg,rgba(224,179,106,.08),rgba(224,179,106,.02))}
+.hibtv-root .genbar .t{font-size:12px;color:var(--gold-2)}
+.hibtv-root .genbar .m{font:10.5px var(--mono);color:#8f877b}
+.hibtv-root .cast-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.hibtv-root .cast-card{display:grid;grid-template-columns:196px 50px minmax(0,1fr);gap:10px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
+.hibtv-root .cast-card:hover{border-color:rgba(224,179,106,.22)}
+.hibtv-root .cast-media{display:contents}
+.hibtv-root .cast-anchor{position:relative;min-width:0}
+.hibtv-root .cast-anchor .plate{aspect-ratio:3/4.55;cursor:zoom-in}
+.hibtv-root .media-acts{position:absolute;z-index:6;left:0;right:0;top:8px;display:flex;gap:5px;padding:0 15% 0 8px;justify-content:flex-end;opacity:0;transition:opacity .09s linear}
+.hibtv-root .cast-anchor:hover .media-acts, .hibtv-root .cast-anchor:focus-within .media-acts, .hibtv-root .art-anchor:hover .media-acts, .hibtv-root .art-anchor:focus-within .media-acts{opacity:1}
+.hibtv-root .media-acts .ic{position:relative;overflow:visible;width:26px;height:26px;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid transparent;border-radius:8px;background:rgba(26,23,20,.92);color:#c9c3b9;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.45)}
+.hibtv-root .media-acts .ic svg{width:14px;height:14px;display:block}
+.hibtv-root .media-acts .ic::after{content:"";position:absolute;left:-4px;right:-4px;top:-3px;bottom:-3px;border-radius:9px}
+.hibtv-root .media-acts .ic:hover{border-color:rgba(224,179,106,.85);color:var(--gold-2)}
+.hibtv-root .media-acts .ic.del:hover{border-color:rgba(207,106,95,.7);color:#f0b3aa}
+.hibtv-root .media-acts .tip{position:absolute;z-index:9;bottom:calc(100% + 7px);right:0;right:calc(-31px * (4 - var(--k,1)));width:170px;padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:rgba(14,12,10,.97);box-shadow:0 8px 20px rgba(0,0,0,.62);color:#b0a798;font-size:10px;line-height:1.6;letter-spacing:.01em;text-align:left;opacity:0;transform:translateY(3px);pointer-events:none;transition:opacity .05s linear,transform .05s linear}
+.hibtv-root .media-acts .tip b{color:var(--gold-2);font-weight:600}
+.hibtv-root .media-acts .ic:hover .tip, .hibtv-root .media-acts .ic:focus-visible .tip{opacity:1;transform:translateY(0)}
+.hibtv-root .cast-viewcol{display:flex;flex-direction:column;gap:5px;min-width:0}
+.hibtv-root .cast-viewcol .vthumb{flex:1 1 0;min-height:0;aspect-ratio:auto}
+.hibtv-root .cast-viewcol .vthumb .lab{font-size:8px;padding:4px 1px 2px}
+.hibtv-root .cast-body{min-width:0;display:flex;flex-direction:column;gap:4px}
+.hibtv-root .cast-name{display:flex;align-items:center;gap:7px;font-size:14.5px;color:#eee7da;font-weight:600;min-width:0}
+.hibtv-root .cast-name .tag{flex:0 0 auto;font-size:10px;font-weight:400;color:var(--gold);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+.hibtv-root .cast-alias{font-size:10.5px;font-weight:400;color:#8b8377;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.hibtv-root .cast-name .pin{margin-left:auto;flex:0 0 auto;color:#6f675c;font-size:12px;cursor:pointer}
+.hibtv-root .cast-name .pin:hover{color:var(--gold)}
+.hibtv-root .cast-desc{font-size:11.5px;color:#b3aa9c;line-height:1.65;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hibtv-root .promptbox{font-size:11px;color:#948b7e;line-height:1.75;max-height:118px;overflow:hidden;position:relative}
+.hibtv-root .promptbox::after{content:"";position:absolute;left:0;right:0;bottom:0;height:24px;background:linear-gradient(0deg,var(--panel),transparent)}
+.hibtv-root .cast-voice{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:8px;border-top:1px dashed var(--line-3);font-size:10.5px;color:#a39a8c}
+.hibtv-root .cast-voice .up{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.hibtv-root .cast-voice .up:hover{color:var(--gold)}
+.hibtv-root .cast-voice .ref{margin-left:auto;color:#7d766b}
+.hibtv-root .voice-row{display:flex}
+.hibtv-root .voice{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:5px;border:1px solid var(--line-2);font-size:10.5px;color:#a39a8c;background:rgba(255,255,255,.02);cursor:pointer}
+.hibtv-root .voice:hover{border-color:var(--gold-dim);color:var(--gold-2)}
+.hibtv-root .cast-foot{display:flex;align-items:center;gap:8px;padding-top:2px;font-size:10px;color:#7d766b;cursor:pointer}
+.hibtv-root .cast-foot:hover{color:var(--gold-dim)}
+.hibtv-root .quad{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hibtv-root .quad .q{position:relative}
+.hibtv-root .quad .plate{aspect-ratio:3/4.2}
+.hibtv-root .quad.land .plate{aspect-ratio:16/9}
+.hibtv-root .quad .q.wide{grid-column:1 / -1}
+.hibtv-root .quad .q{cursor:default}
+.hibtv-root .vthumb img{position:absolute;z-index:2;inset:0;width:100%;height:100%;object-fit:cover}
+.hibtv-root .quad .tag{position:absolute;left:0;right:0;bottom:0;z-index:4;text-align:center;font-size:10px;color:#cfc6b7;background:linear-gradient(0deg,rgba(0,0,0,.8),transparent);padding:8px 2px 4px}
+.hibtv-root .quad .q.main .plate{box-shadow:0 0 0 1px var(--gold-dim)}
+.hibtv-root .quad .q.main .tag{color:var(--gold-2)}
+.hibtv-root .hookgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.hibtv-root .hook{border:1px solid var(--line-2);border-radius:8px;padding:11px 13px;background:rgba(255,255,255,.016)}
+.hibtv-root .hook .k{font-size:10px;letter-spacing:.14em;color:var(--gold-dim);margin-bottom:5px}
+.hibtv-root .hook .v{font-size:12px;color:#c8c0b3;line-height:1.7}
+.hibtv-root .beats{border:1px solid var(--line-2);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
+.hibtv-root .beat{display:grid;grid-template-columns:38px 96px 1fr 250px 56px;gap:10px;align-items:start;padding:9px 12px;border-bottom:1px solid var(--line-3);font-size:12px}
+.hibtv-root .beat:hover{background:rgba(255,255,255,.018)}
+.hibtv-root .beat .n{font:10.5px var(--mono);color:#6d665c;padding-top:2px}
+.hibtv-root .beat .who{color:var(--gold-2);font-size:11.5px}
+.hibtv-root .beat .who.act{color:#8f9fb0}
+.hibtv-root .beat .line{color:#d6cec0;line-height:1.7;outline:none}
+.hibtv-root .beat .line:focus{background:#0d0c0a;box-shadow:0 0 0 1px var(--gold-dim) inset;border-radius:4px;padding:0 3px}
+.hibtv-root .beat .note{color:#837b6f;font-size:11px;line-height:1.7}
+.hibtv-root .beat .sec{font:10.5px var(--mono);color:#7d766b;text-align:right}
+.hibtv-root .beat-hd{display:grid;grid-template-columns:38px 96px 1fr 250px 56px;gap:10px;padding:7px 12px;background:rgba(255,255,255,.022);font-size:10px;letter-spacing:.1em;color:#7d766b;border-bottom:1px solid var(--line-2)}
+.hibtv-root .epbar{display:flex;align-items:center;gap:8px;margin:10px 0}
+.hibtv-root .segrow{display:grid;grid-template-columns:82px 1fr 30px 58px 44px 60px 92px 1fr 74px;gap:9px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line-3);font-size:11.5px;color:#c0b8ab}
+.hibtv-root .segrow:hover{background:rgba(255,255,255,.018);cursor:pointer}
+.hibtv-root .segrow.on{background:rgba(224,179,106,.07)}
+.hibtv-root .segrow .sid{font:11px var(--mono);color:var(--gold-2)}
+.hibtv-root .segrow .clip{color:#6d665c;font:10.5px var(--mono)}
+.hibtv-root .segrow .note{color:#8b8377;font-size:10.5px;line-height:1.6;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.hibtv-root .shotcard{border:1px solid var(--line-2);border-radius:9px;background:var(--panel);margin-bottom:11px}
+.hibtv-root .shot-hd{display:flex;align-items:center;gap:9px;padding:8px 11px;border-bottom:1px solid var(--line-3);flex-wrap:wrap}
+.hibtv-root .shot-hd .si{width:19px;height:19px;border-radius:4px;background:rgba(224,179,106,.16);color:var(--gold);font:10px/19px var(--mono);text-align:center}
+.hibtv-root .shot-hd .rng{font:10.5px var(--mono);color:#8f877b}
+.hibtv-root .shot-body{display:grid;grid-template-columns:190px 1fr;gap:12px;padding:11px}
+.hibtv-root .shot-body .plate{aspect-ratio:16/10}
+.hibtv-root .shottext{font-size:11.5px;color:#b9b0a2;line-height:1.75}
+.hibtv-root .shottext .k{color:var(--gold-dim);font-size:10.5px;letter-spacing:.08em;margin-right:4px}
+.hibtv-root .refline{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.hibtv-root .refchip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 7px;border-radius:5px;background:rgba(255,255,255,.03);border:1px solid var(--line-2);font-size:10.5px;color:#a89f92}
+.hibtv-root .refchip .x{color:#6d665c;cursor:pointer}
+.hibtv-root .refchip .x:hover{color:var(--red)}
+.hibtv-root .refrail{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.hibtv-root .refitem{width:36px;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+.hibtv-root .refthumb{position:relative;width:34px;height:34px;border-radius:6px;border:1px solid var(--line-2);background:#100e0c;overflow:hidden}
+.hibtv-root .refthumb img{display:block;position:relative;z-index:2;width:100%;height:100%;object-fit:cover;border-radius:6px}
+.hibtv-root .refthumb .ph, .hibtv-root .vthumb .ph{position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;font-size:10px;color:#7d766b;background:linear-gradient(150deg,#191614,#0d0c0a)}
+.hibtv-root .refthumb .num, .hibtv-root .vthumb .num{position:absolute;z-index:4;left:2px;top:2px;min-width:14px;height:14px;padding:0 3px;border-radius:99px;background:rgba(10,9,8,.9);color:#ded7ca;font:8.5px/14px var(--mono);text-align:center}
+.hibtv-root .refthumb .rm{position:absolute;z-index:5;right:2px;top:2px;width:14px;height:14px;border-radius:99px;background:rgba(10,9,8,.9);color:#cfc7b9;font-size:8.5px;line-height:14px;text-align:center;opacity:0;transition:.12s}
+.hibtv-root .refitem:hover .refthumb{border-color:rgba(224,179,106,.55)}
+.hibtv-root .refitem:hover .rm{opacity:1}
+.hibtv-root .refthumb .rm:hover{background:rgba(207,106,95,.9);color:#fff}
+.hibtv-root .refname{max-width:36px;font-size:9px;line-height:1.35;color:#8f877b;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hibtv-root .refitem.add .refthumb{border-style:dashed;background:transparent;display:flex;align-items:center;justify-content:center;color:#8f877b;font-size:16px}
+.hibtv-root .refitem.add:hover .refthumb{border-color:rgba(224,179,106,.5);color:var(--gold)}
+.hibtv-root .vthumb.add{border-style:dashed;display:flex;align-items:center;justify-content:center;color:#8f877b;font-size:14px;padding-bottom:0}
+.hibtv-root .vthumb.add:hover{color:var(--gold);border-color:var(--gold-dim)}
+.hibtv-root .views{display:grid;gap:6px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.hibtv-root .refasset{border:1px solid var(--line-2);border-radius:8px;padding:8px;margin-bottom:8px;background:rgba(255,255,255,.014)}
+.hibtv-root .refasset-hd{display:flex;align-items:center;gap:6px;margin-bottom:7px}
+.hibtv-root .refasset-hd .k{font-size:10px;color:#8f877b}
+.hibtv-root .refasset-hd .h{font-size:11px;color:var(--gold-2)}
+.hibtv-root .refasset-hd .nm{margin-left:auto;font-size:10px;color:#7d766b;cursor:pointer;padding:0 2px}
+.hibtv-root .refasset-hd .nm:hover{color:var(--red)}
+.hibtv-root .refnote{margin-top:7px;padding:5px 8px;border:1px solid var(--line-3);border-radius:6px;color:#6f675c;font-size:10px;background:rgba(0,0,0,.22)}
+.hibtv-root .monitor{aspect-ratio:9/16;max-height:330px;width:100%;border-radius:9px;margin-bottom:8px}
+.hibtv-root .monitor.land{aspect-ratio:16/9;max-height:none}
+.hibtv-root .playbar{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line-2);border-radius:7px;background:#0d0c0a;margin-top:6px}
+.hibtv-root .playbar .p{width:18px;height:18px;border-radius:50%;border:1px solid var(--gold-dim);color:var(--gold);font-size:8px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.hibtv-root .playbar .time{font:10px var(--mono);color:#8f877b}
+.hibtv-root .playbar .bar{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.1);position:relative}
+.hibtv-root .playbar .bar > i{position:absolute;left:0;top:0;bottom:0;background:var(--gold);border-radius:2px}
+.hibtv-root .panel-sec{border-bottom:1px solid var(--line-3);padding:0 0 12px;margin-bottom:12px}
+.hibtv-root .panel-sec:last-child{border:none}
+.hibtv-root .panel-title{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#cfc6b7;margin-bottom:8px}
+.hibtv-root .panel-title .r{margin-left:auto;font:10px var(--mono);color:#7d766b}
+.hibtv-root .timeline{display:flex;gap:3px;margin-top:8px}
+.hibtv-root .timeline .tl{flex:1;height:26px;border-radius:4px;background:rgba(255,255,255,.05);border:1px solid transparent;display:flex;align-items:center;justify-content:center;font:9.5px var(--mono);color:#8f877b;cursor:pointer}
+.hibtv-root .timeline .tl:hover{border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .timeline .tl.on{background:rgba(224,179,106,.16);border-color:var(--line);color:var(--gold-2)}
+.hibtv-root .layer{position:fixed;inset:0;z-index:60;display:none}
+.hibtv-root .layer.open{display:block}
+.hibtv-root .scrim{position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(2px)}
+.hibtv-root .modal{position:relative;margin:5vh auto 0;width:min(760px,92vw);max-height:88vh;overflow:auto;background:linear-gradient(180deg,#151210,#100e0c);border:1px solid var(--line);border-radius:12px;box-shadow:0 30px 90px rgba(0,0,0,.7)}
+.hibtv-root .modal-hd{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 0}
+.hibtv-root .modal-hd .x{margin-left:auto;color:#7d766b;cursor:pointer;font-size:16px;line-height:1}
+.hibtv-root .modal-hd .x:hover{color:var(--text)}
+.hibtv-root .modal-hd .eyebrow{margin-bottom:6px}
+.hibtv-root .modal-bd{padding:16px 20px}
+.hibtv-root .modal-ft{display:flex;align-items:center;gap:9px;padding:12px 20px;border-top:1px solid var(--line-3);background:rgba(0,0,0,.2);position:sticky;bottom:0}
+.hibtv-root .modal-ft .sp{margin-left:auto}
+.hibtv-root .drawer{position:absolute;top:0;right:0;bottom:0;width:430px;background:linear-gradient(180deg,#151210,#0f0d0b);border-left:1px solid var(--line);display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.6)}
+.hibtv-root .drawer-hd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line-3)}
+.hibtv-root .drawer-hd .t{font-size:13px;color:var(--text)}
+.hibtv-root .drawer-hd .x{margin-left:auto;color:#7d766b;cursor:pointer}
+.hibtv-root .drawer-bd{flex:1;overflow:auto;padding:14px 16px}
+.hibtv-root .drawer-ft{padding:12px 16px;border-top:1px solid var(--line-3);display:flex;gap:8px}
+.hibtv-root .toasts{position:fixed;left:74px;bottom:24px;z-index:80;display:flex;flex-direction:column;gap:8px}
+.hibtv-root .toast{display:flex;align-items:center;gap:10px;padding:9px 13px;border-radius:8px;background:#1b1815;border:1px solid var(--line);color:#d8d0c2;font-size:12px;box-shadow:0 12px 30px rgba(0,0,0,.5);animation:tin .18s ease-out}
+@keyframes tin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.hibtv-root .toast .act{color:var(--gold);cursor:pointer;font-size:11.5px}
+.hibtv-root .toast .act:hover{color:var(--gold-2)}
+.hibtv-root .captionbar{flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:11px 22px;border-top:1px solid var(--line);background:linear-gradient(90deg,rgba(224,179,106,.07),rgba(0,0,0,.2))}
+.hibtv-root .captionbar .cb-t{font-size:14.5px;color:#f0e8da}
+.hibtv-root .captionbar .cb-s{font-size:11.5px;color:#948b7e;margin-top:1px}
+.hibtv-root .captionbar .cb-i{margin-left:auto;font:10.5px var(--mono);color:#7d766b;display:flex;align-items:center;gap:8px}
+.hibtv-root .captionbar .nav{display:inline-flex;gap:5px}
+.hibtv-root .home{flex:1;overflow:auto;padding:0}
+.hibtv-root .pagewrap{padding:28px 30px 70px;max-width:1160px;margin:0 auto}
+.hibtv-root .plist{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.hibtv-root .prow{display:grid;grid-template-columns:44px 1fr 168px 118px 84px;gap:14px;align-items:center;padding:12px 14px;border:1px solid var(--line-2);border-radius:9px;background:rgba(255,255,255,.014);cursor:pointer}
+.hibtv-root .prow:hover{border-color:rgba(224,179,106,.28);background:rgba(224,179,106,.05)}
+.hibtv-root .prow .th{width:38px;height:38px;border-radius:8px;background:rgba(224,179,106,.12);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:11px var(--serif);color:var(--gold)}
+.hibtv-root .prow .nm{font-size:13.5px;color:#e6dfd2}
+.hibtv-root .prow .meta{font-size:10.5px;color:#7d766b;margin-top:3px}
+.hibtv-root .prow .stage{font-size:11.5px;color:#a89f92}
+.hibtv-root .prow .num{font:11px var(--mono);color:#948b7e}
+.hibtv-root .prow .go{font-size:11.5px;color:var(--gold-dim);text-align:right}
+.hibtv-root .pnew{display:flex;align-items:center;gap:12px;padding:16px 14px;border:1px dashed var(--line);border-radius:9px;background:rgba(224,179,106,.03);cursor:pointer}
+.hibtv-root .pnew:hover{background:rgba(224,179,106,.07);border-color:var(--gold-dim)}
+.hibtv-root .pnew .th{width:38px;height:38px;border-radius:8px;border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;color:var(--gold);font-size:15px}
+.hibtv-root .pnew .nm{font-size:13.5px;color:#e6dfd2}
+.hibtv-root .pnew .meta{font-size:10.5px;color:#7d766b;margin-top:3px}
+.hibtv-root .pnew .go{margin-left:auto;font-size:11.5px;color:var(--gold-dim)}
+.hibtv-root .recent{max-width:800px;margin:26px auto 46px;padding:0 2px}
+.hibtv-root .recent .t{font-size:10.5px;letter-spacing:.16em;color:#6d665c;margin-bottom:8px}
+.hibtv-root .pitem{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:8px;border:1px solid var(--line-3);background:rgba(255,255,255,.012);cursor:pointer}
+.hibtv-root .pitem:hover{border-color:var(--line-2);background:rgba(255,255,255,.03)}
+.hibtv-root .pitem .th{width:26px;height:26px;border-radius:6px;background:rgba(224,179,106,.12);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:10px var(--mono);color:var(--gold)}
+.hibtv-root .pitem .nm{font-size:12.5px;color:#ddd5c8}
+.hibtv-root .pitem .meta{font-size:10.5px;color:#6d665c}
+.hibtv-root .pitem .r{margin-left:auto;font-size:10.5px;color:#6d665c}
+.hibtv-root .art-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.hibtv-root .art-card{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
+.hibtv-root .art-card:hover{border-color:rgba(224,179,106,.22)}
+.hibtv-root .art-anchor{position:relative;min-width:0}
+.hibtv-root .art-anchor .plate{aspect-ratio:16/9;cursor:zoom-in}
+.hibtv-root .art-thumbs{display:grid;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
+.hibtv-root .art-thumbs .vthumb{aspect-ratio:16/9}
+.hibtv-root .art-thumbs .vthumb .lab{font-size:8px;padding:3px 1px 2px}
+.hibtv-root .art-body{min-width:0;display:flex;flex-direction:column;gap:4px}
+.hibtv-root .art-body .mid{flex:0 0 auto;font:10.5px var(--mono);color:var(--gold-dim)}
+.hibtv-root .art-body .promptbox{max-height:58px}
+.hibtv-root .art-foot{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding-top:7px;border-top:1px dashed var(--line-3);font-size:10px;color:#7d766b}
+.hibtv-root .art-foot .link{margin-left:auto}
+@media(max-width:1240px){
+  .hibtv-root .cast-grid, .hibtv-root .art-grid{grid-template-columns:1fr}
+}
+.hibtv-root .split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.hibtv-root .split3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.hibtv-root .stat{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line-3);border-radius:8px;background:rgba(255,255,255,.014)}
+.hibtv-root .stat .k{font-size:10px;letter-spacing:.1em;color:#7d766b}
+.hibtv-root .stat .v{font:16px var(--mono);color:var(--gold-2)}
+.hibtv-root .stat .v small{font-size:10px;color:#8f877b;font-family:var(--sans)}
+.hibtv-root .cover{aspect-ratio:16/9;width:100%}
+.hibtv-root .cover.vert{aspect-ratio:9/16;max-height:340px;width:auto;margin:0 auto}
+.hibtv-root .note{font-size:11px;color:#8b8377;line-height:1.7}
+.hibtv-root .quote{border-left:2px solid var(--gold-dim);padding:2px 0 2px 11px;color:#cfc6b8;font-size:12.5px;line-height:1.8}
+.hibtv-root .pill-row{display:flex;gap:6px;flex-wrap:wrap}
+.hibtv-root .diff{color:var(--red)}
+.hibtv-root .same{color:var(--green)}
+.hibtv-root .link{color:var(--gold-dim);cursor:pointer}
+.hibtv-root .link:hover{color:var(--gold-2)}
+.hibtv-root .tagline{font:10px var(--mono);letter-spacing:.1em;color:#6d665c}
+@media (max-width:1500px){
+  .hibtv-root .panel{width:300px;flex-basis:300px}
+  .hibtv-root .beat{grid-template-columns:34px 84px 1fr 190px 50px}
+  .hibtv-root .beat-hd{grid-template-columns:34px 84px 1fr 190px 50px}
+}
+
+/* ---------- 真实应用补充（原型没有的容器 / 滚动约束） ---------- */
+.hibtv-root{position:fixed;inset:0;z-index:0;overflow:hidden;height:100%}
+.hibtv-root .app{height:100%}
+.hibtv-root .plate img{position:absolute;inset:0}
+.hibtv-root .thumb-video{width:100%;height:100%;object-fit:cover;position:relative;z-index:2}
+.hibtv-root .mini-play{position:absolute;z-index:5;inset:0;display:flex;align-items:center;justify-content:center;color:var(--gold);font-size:18px;background:rgba(0,0,0,.18)}
+.hibtv-root .spin{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(224,179,106,.3);border-top-color:var(--gold);animation:hspin .8s linear infinite}
+@keyframes hspin{to{transform:rotate(360deg)}}
+.hibtv-root .danger{color:var(--red)}
+.hibtv-root .warn{color:#d9a441}
+.hibtv-root .grow{flex:1;min-width:0}
+.hibtv-root .nowrap{white-space:nowrap}
+.hibtv-root a.link{cursor:pointer}
+.hibtv-root .cell-edit{outline:none;cursor:text;border-radius:4px}
+.hibtv-root .cell-edit:focus{background:#0d0c0a;box-shadow:0 0 0 1px var(--gold-dim) inset;padding:0 3px}
+.hibtv-root .layer .modal{position:relative}
+.hibtv-root .filebox input[type=file]{display:none}
+.hibtv-root .banner{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:rgba(224,179,106,.05);font-size:11.5px;color:#c8c0b3;margin:10px 0}
+.hibtv-root .banner.red{border-color:rgba(207,106,95,.35);background:rgba(207,106,95,.07);color:#e0a49c}
+.hibtv-root .kv{display:grid;grid-template-columns:120px 1fr;gap:8px 12px;font-size:12px;color:#c6beb1}
+.hibtv-root .kv .k{color:#7d766b;font-size:11px;letter-spacing:.06em}
+.hibtv-root .prow.cur{border-color:rgba(224,179,106,.4);background:rgba(224,179,106,.07)}
+.hibtv-root .gates{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.hibtv-root .gates .g{display:flex;gap:7px;font-size:11px;color:#b3aa9c;line-height:1.6}
+.hibtv-root .gates .g b{font-weight:500;color:var(--gold-dim);flex:0 0 auto}
+.hibtv-root .empty .acts{display:flex;gap:8px;justify-content:center}

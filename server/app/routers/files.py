@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..auth import decode_token
 from ..config import OUTPUT_DIR
 from ..database import get_db
-from ..models import Task, Upload, User
+from ..models import HibtvProject, Task, Upload, User
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -83,6 +83,42 @@ def download_upload(
         ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
     }.get(suffix, "application/octet-stream")
     return FileResponse(path, media_type=media_type)
+
+
+@router.get("/hibtv/{project_id}/{rel:path}")
+def download_hibtv_file(
+    project_id: int,
+    rel: str,
+    token: Optional[str] = Query(default=None),
+    download: int = Query(default=0),
+    db: Session = Depends(get_db),
+):
+    """短剧工作台的文件（角色/场景/道具图、段成片、整集成片）。
+
+    鉴权同其他文件路由（<img>/<video> 携带 ?token=），并校验项目归属。
+    """
+    from ..services.hibtv_jobs import abs_path  # 延迟导入，避免启动期循环依赖
+
+    user = _user_from_query_token(token, db)
+    project = db.get(HibtvProject, project_id)
+    if project is None or (project.user_id != user.id and user.role != "admin"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "文件不存在")
+    try:
+        path = abs_path(project_id, rel)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "非法文件路径") from exc
+    if not path.exists() or path.is_dir():
+        raise HTTPException(status.HTTP_410_GONE, "文件已失效")
+    media_type = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+    }.get(path.suffix.lower(), "application/octet-stream")
+    if download:
+        return FileResponse(path, media_type=media_type, filename=path.name)
+    return FileResponse(path, media_type=media_type)
+
 
 @router.get("/adimage/{task_id}")
 def download_advideo_image(

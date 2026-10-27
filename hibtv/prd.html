@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>hibtv · PRD 主文</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{
+  --bg:#0a0908;--panel:#131110;--panel-2:#191614;
+  --line:rgba(224,179,106,.16);--line-2:rgba(255,255,255,.075);--line-3:rgba(255,255,255,.045);
+  --gold:#e0b36a;--gold-2:#f3d7a8;--gold-dim:rgba(224,179,106,.45);
+  --text:#e9e3d7;--muted:#948b7e;--dim:#635c53;--red:#cf6a5f;--green:#7cae8b;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  --sans:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --serif:"Songti SC","Noto Serif SC","STSong",serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.8 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--gold);text-decoration:none}a:hover{color:var(--gold-2)}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+.topbar{position:sticky;top:0;z-index:20;height:52px;display:flex;align-items:center;gap:14px;padding:0 28px;background:rgba(10,9,8,.94);border-bottom:1px solid var(--line-3);backdrop-filter:blur(8px)}
+.logo{width:40px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--mono);letter-spacing:.02em;color:var(--gold-2);background:linear-gradient(160deg,rgba(224,179,106,.16),rgba(224,179,106,.02));border:1px solid var(--line)}
+.topbar .nm{font-size:13px;color:#d9d1c3}.topbar .nm em{font-style:normal;color:var(--dim);margin-left:8px;font-size:12px}
+.topbar nav{margin-left:auto;display:flex;gap:6px}
+.topbar nav a{height:30px;display:inline-flex;align-items:center;padding:0 11px;border-radius:7px;border:1px solid var(--line-2);color:#cfc8bb;font-size:12px}
+.topbar nav a:hover{border-color:var(--line);color:var(--gold-2);background:rgba(224,179,106,.06)}
+.topbar nav a.on{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+header.page{padding:46px 0 22px;border-bottom:1px solid var(--line-3)}
+.kick{font:10.5px/1 var(--mono);letter-spacing:.22em;color:var(--gold-dim);margin-bottom:14px}
+h1{font-size:34px;line-height:1.26;margin:0 0 14px;font-weight:700;letter-spacing:.01em}
+h1 em{font-style:normal;color:var(--gold-2)}
+.lede{max-width:880px;color:#a9a093;font-size:13.5px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.chip{display:inline-flex;align-items:center;height:23px;padding:0 8px;border-radius:5px;background:rgba(255,255,255,.035);border:1px solid var(--line-2);color:#b5ac9f;font-size:11px;white-space:nowrap}
+.chip.gold{background:rgba(224,179,106,.13);border-color:var(--line);color:var(--gold-2)}
+.chip.red{background:rgba(207,106,95,.12);border-color:rgba(207,106,95,.3);color:#e09a92}
+.chip.green{background:rgba(124,174,139,.1);border-color:rgba(124,174,139,.28);color:#9fc9ac}
+/* layout: 目录 + 正文 */
+.doc{display:grid;grid-template-columns:198px 1fr;gap:34px;align-items:start}
+.toc{position:sticky;top:72px;padding:18px 0 30px;font-size:12.5px}
+.toc .t{font:10px/1 var(--mono);letter-spacing:.18em;color:var(--dim);margin-bottom:10px}
+.toc a{display:block;padding:5px 0 5px 10px;border-left:1px solid var(--line-3);color:#8f877b}
+.toc a:hover{color:var(--gold-2);border-left-color:var(--gold-dim)}
+.toc a b{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-right:7px;font-weight:400}
+main{padding:30px 0 60px;min-width:0}
+section{padding:8px 0 30px;border-bottom:1px solid var(--line-3);scroll-margin-top:70px}
+section:last-child{border-bottom:none}
+.sec-hd{display:flex;align-items:baseline;gap:12px;margin:18px 0 12px}
+.sec-hd .n{font:10.5px/1 var(--mono);letter-spacing:.18em;color:var(--gold-dim)}
+.sec-hd h2{font-size:20px;margin:0;font-weight:600;letter-spacing:.01em}
+.sec-hd .s{margin-left:auto;color:var(--dim);font-size:11.5px;white-space:nowrap}
+h3{font-size:14.5px;margin:22px 0 8px;color:#e4dccf;font-weight:600}
+h3 .tag{font:10px var(--mono);color:var(--dim);margin-left:8px;letter-spacing:.08em}
+p{margin:0 0 10px;color:#a9a093}
+p b,li b{color:#d7cfc1;font-weight:500}
+ul,ol{margin:8px 0 12px;padding-left:20px;color:#a0968a}
+li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:12.5px;background:rgba(255,255,255,.012);border:1px solid var(--line-2);border-radius:10px;overflow:hidden;margin:10px 0 14px}
+th{text-align:left;font-weight:500;color:#847c70;font-size:10.5px;letter-spacing:.08em;padding:9px 12px;border-bottom:1px solid var(--line-2);background:rgba(255,255,255,.022);white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--line-3);color:#bdb4a7;vertical-align:top;line-height:1.7}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(255,255,255,.016)}
+td.k{color:#e2dbcd;width:22%;font-weight:500}
+td.k .sub{display:block;font:10.5px var(--mono);color:var(--dim);font-weight:400;margin-top:2px}
+code{font:11.5px var(--mono);background:rgba(224,179,106,.09);border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--gold-2)}
+pre{margin:10px 0 14px;padding:14px 16px;border:1px solid var(--line-2);border-radius:10px;background:rgba(255,255,255,.02);overflow-x:auto;font:11.5px/1.7 var(--mono);color:#b9b0a3}
+pre b{color:var(--gold-2);font-weight:400}
+.note{border-left:2px solid var(--gold-dim);background:rgba(224,179,106,.045);border-radius:0 8px 8px 0;padding:11px 14px;color:#a9a093;font-size:12.5px;line-height:1.85;margin:12px 0}
+.note b{color:var(--gold-2);font-weight:500}
+.warn{border-left:2px solid rgba(207,106,95,.6);background:rgba(207,106,95,.055);border-radius:0 8px 8px 0;padding:11px 14px;color:#bda9a5;font-size:12.5px;line-height:1.85;margin:12px 0}
+.warn b{color:#e09a92;font-weight:500}
+.src{font:10px var(--mono);letter-spacing:.06em;padding:1px 5px;border-radius:4px;white-space:nowrap;vertical-align:1px}
+.src.d{background:rgba(124,174,139,.12);border:1px solid rgba(124,174,139,.3);color:#9fc9ac}
+.src.a{background:rgba(224,179,106,.12);border:1px solid var(--line);color:var(--gold-2)}
+.src.u{background:rgba(207,106,95,.12);border:1px solid rgba(207,106,95,.3);color:#e09a92}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+.box{border:1px solid var(--line-2);border-radius:10px;padding:14px 16px;background:rgba(255,255,255,.014)}
+.box .t{font-size:13px;color:#e4dccf;margin-bottom:6px}
+.box p{margin:0;font-size:12.5px;color:#9a9184;line-height:1.8}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 6px}
+.flow .st{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:7px;border:1px solid var(--line-2);background:rgba(255,255,255,.02);font-size:12px;color:#cfc8bb}
+.flow .st b{font:10px var(--mono);color:var(--gold-dim);font-weight:400}
+.flow .ar{color:#3d3933;font-size:13px}
+.kv{display:grid;grid-template-columns:104px 1fr;gap:6px 14px;font-size:12.5px;margin:8px 0 12px}
+.kv .k{color:var(--dim);font-family:var(--mono);font-size:11px;padding-top:2px}
+.kv .v{color:#b3aa9d}
+footer{margin-top:10px;border-top:1px solid var(--line-3);padding:20px 0 56px;color:#635c53;font-size:12px;display:flex;flex-wrap:wrap;gap:12px}
+footer .r{margin-left:auto;font-family:var(--mono);font-size:11px}
+@media(max-width:980px){.doc{grid-template-columns:1fr}.toc{position:static;display:flex;flex-wrap:wrap;gap:6px;padding:14px 0}.toc .t{display:none}.toc a{border:1px solid var(--line-2);border-radius:6px;padding:4px 9px}.grid2{grid-template-columns:1fr}td.k{width:auto}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="logo">HiB</div>
+  <div class="nm">短剧工作台<em>PRD 主文</em></div>
+  <nav>
+    <a href="index.html">总览</a>
+    <a href="prototype.html">可点击原型</a>
+    <a href="interaction.html">交互规格</a>
+    <a class="on" href="prd.html">PRD</a>
+  </nav>
+</header>
+
+<header class="page">
+  <div class="wrap">
+    <div class="kick">PRODUCT REQUIREMENTS · V1 定稿 · 与原型同版本</div>
+    <h1>hibtv：把定稿的剧本，<em>拆成能开工的资产</em></h1>
+    <p class="lede">hibtv 是一条从「已经写完的剧本」到「一集成片」的生产线。它不做小说改编、不重写台词、不替编剧做取舍；它只把文字里的信息解析成结构化资产（大纲 / 角色 / 场景 / 道具 / 节拍 / 镜头 / 参考素材），每一步都可编辑、可撤销、可只重跑出错的那一小块，最后按段拼成片。</p>
+    <div class="meta">
+      <span class="chip gold">七步：导入 → 大纲 → 角色 · 美术 · 剧本 → 分镜 → 出视频</span>
+      <span class="chip">演示项目《上门龙婿》10 集 · 30 场 · 1,024 条台词</span>
+      <span class="chip green">数字来源已逐条标注</span>
+      <span class="chip red">未验证项显式标「未实测」</span>
+    </div>
+    <div class="meta" style="margin-top:10px">
+      <span class="src d">演示数据</span><span style="color:#8b8377;font-size:11.5px">原型里跑的样本值</span>
+      <span class="src a">设计假设</span><span style="color:#8b8377;font-size:11.5px">未取真实数据、按经验定的目标值</span>
+      <span class="src u">未实测</span><span style="color:#8b8377;font-size:11.5px">没有真实模型 / 用户验证，不能当结论</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<div class="doc">
+
+  <aside class="toc">
+    <div class="t">CONTENTS</div>
+    <a href="#c1"><b>01</b>背景与目标</a>
+    <a href="#c2"><b>02</b>用户与场景</a>
+    <a href="#c3"><b>03</b>定位与边界</a>
+    <a href="#c4"><b>04</b>信息架构</a>
+    <a href="#c5"><b>05</b>七步主链路</a>
+    <a href="#c6"><b>06</b>功能规格 P0–P7</a>
+    <a href="#c7"><b>07</b>数据模型</a>
+    <a href="#c8"><b>08</b>状态机与队列</a>
+    <a href="#c9"><b>09</b>编辑 · 撤销 · 过期</a>
+    <a href="#c10"><b>10</b>视觉与文案</a>
+    <a href="#c11"><b>11</b>相对截图的变更（3 + 4）</a>
+    <a href="#c12"><b>12</b>指标 · 风险 · 路线</a>
+  </aside>
+
+  <main>
+
+  <!-- ============ 01 ============ -->
+  <section id="c1">
+    <div class="sec-hd"><span class="n">01</span><h2>背景与目标</h2><span class="s">为什么不做「小说改编」</span></div>
+
+    <h3>现状问题</h3>
+    <p>短剧团队真正的瓶颈不在「写」，而在「拆」：一个已经定稿的剧本，要拆成分集钩子、角色与场景清单、服装与道具、每集 20 拍左右的节拍、22 段左右的镜头、每一镜的参考图和视频提示词。这些工作现在散在文档、表格、群聊和出图工具里，改一句台词要人工回溯五六处，谁改的、改到哪一步、下游哪张图过期了，全靠记忆。</p>
+    <ul>
+      <li><b>一致性靠人盯</b>：同一角色在 15 张图里长得不一样，因为没有一个「锚点图」被当成唯一真相。</li>
+      <li><b>返工成本高</b>：改一个角色的服装描述，理论上要重出 4 张锚点 + 3 张派生 + 引用到他的每一镜参考图；实际做法往往是「先这样吧」。</li>
+      <li><b>进度不可见</b>：10 集里哪几集有分镜、哪几段有片、哪一版是当前版，需要问人。</li>
+      <li><b>工具链割裂</b>：剧本在飞书、参考图在网盘、提示词在另一个表格，谁都不敢删任何一份。</li>
+    </ul>
+
+    <h3>产品目标</h3>
+    <table>
+      <thead><tr><th>目标</th><th>做法</th><th>可验证的结果</th></tr></thead>
+      <tbody>
+        <tr><td class="k">把剧本变成结构化资产</td><td>双上传（剧本 + 美术设定）→ 自动识别集 / 场 / 台词 / 角色 / 场景 / 道具条目 → 落到 8 张表</td><td>上传后 1 屏内能看到「10 集 · 30 场 · 1,024 条台词 · 15 角色 / 8 场景 / 4 道具」 <span class="src d">演示数据</span></td></tr>
+        <tr><td class="k">一致性有唯一真相</td><td>每个角色一张「正面全身锚点」，其余视图都是它的派生；改锚点即标记派生过期</td><td>15 人 × 4 张 = 60 张图，全部挂在锚点下 <span class="src a">设计假设</span></td></tr>
+        <tr><td class="k">改动可追溯、可撤销</td><td>任何字段改动写入变更日志（谁 / 何时 / 改了什么），支持单条撤销</td><td>双击改一格 → 左下 toast 带「撤销」</td></tr>
+        <tr><td class="k">只重跑坏掉的那一块</td><td>段级重写、单图重出、单段重出片、整集重合成</td><td>「按要求重写本段」只改本段镜头提示词</td></tr>
+        <tr><td class="k">进度一眼可见</td><td>项目列表页的状态行 + 概览页状态表 + 生成队列抽屉</td><td>不靠底部流程条：进程写在项目行与概览页里</td></tr>
+      </tbody>
+    </table>
+
+    <h3>非目标</h3>
+    <ul>
+      <li>不做小说改编、不做剧本创作、不做 AI 续写台词——输入必须是已经定稿的剧本。</li>
+      <li>不在本版本做团队协作、评论、审批流、计费。</li>
+      <li>不替用户决定「删哪场、加哪场」；「必须保留的名场面」只做保护，不做取舍。</li>
+    </ul>
+
+    <div class="note">
+      <b>一句话判断标准</b>：任何一屏上，用户都应该能回答「现在这版是哪一版、它上游是什么、改了会影响谁」。
+    </div>
+  </section>
+
+  <!-- ============ 02 ============ -->
+  <section id="c2">
+    <div class="sec-hd"><span class="n">02</span><h2>用户与场景</h2><span class="s">三个角色，一条产线</span></div>
+    <table>
+      <thead><tr><th>角色</th><th>他关心什么</th><th>主要落在哪几屏</th><th>典型动作</th></tr></thead>
+      <tbody>
+        <tr><td class="k">制片 / 项目负责人<span class="sub">primary</span></td><td>10 集什么时候能全出片；哪几集卡住了</td><td>首页、概览、出视频、生成队列</td><td>看状态表、点「补齐本集视频」、催某一集</td></tr>
+        <tr><td class="k">编导 / 剧本统筹<span class="sub">primary</span></td><td>节拍对不对、钩子够不够、台词别被改</td><td>大纲、剧本、分镜总表</td><td>双击改一拍的表演提示、调段长、看偏差 %</td></tr>
+        <tr><td class="k">美术 / 出图执行<span class="sub">secondary</span></td><td>这一批图能不能一次过；改一张别带崩一片</td><td>角色、美术、出图设置、资产库</td><td>出全部锚点图、单图改图、接受新锚点</td></tr>
+      </tbody>
+    </table>
+
+    <h3>三个入口场景</h3>
+    <div class="grid2">
+      <div class="box"><div class="t">A. 新项目冷启动</div><p>剧本和美术设定都已定稿，从零开始。<br>路径：新建短剧项目 → 双上传 → 解析 → 大纲 → 角色 → 美术 → 剧本 → 分镜 → 出视频。</p></div>
+      <div class="box"><div class="t">B. 半途接手</div><p>项目已跑到第 3 集，接手的人要判断「哪些可信」。<br>路径：概览 → 变更页看最近改动 → 大纲「对齐检查」补缺项 → 分镜总表看断点。</p></div>
+      <div class="box"><div class="t">C. 局部返工</div><p>第 1 集第 7 段的表演不对，其余都过。<br>路径：分镜 → 一段一页 → 按要求重写本段 → 重新生成视频 → 版本 2 → 整集重合成。</p></div>
+      <div class="box"><div class="t">D. 一致性修复</div><p>角色 C01 的服装描述写错了，已经出了 4 张图。<br>路径：角色 → 改图（一句话要求）→ 锚点变「待确认」、3 张派生打过期 → 接受 v2。</p></div>
+    </div>
+
+    <h3>关键约束</h3>
+    <ul>
+      <li><b>桌面宽 ≥ 1280</b>：四区布局（rail 58 + 侧栏 236 + 主区 + 右面板 326）在这个宽度下才成立；窄屏只保证不破版，不做移动端重排。</li>
+      <li><b>一屏一决策</b>：任何页面不出现两个同等重要的主按钮；主按钮永远在右上或段内右下。</li>
+      <li><b>不静默重跑</b>：上游改动只标记下游过期，绝不自动重跑（省钱、也避免"我还没看完就被覆盖"）。</li>
+    </ul>
+  </section>
+
+  <!-- ============ 03 ============ -->
+  <section id="c3">
+    <div class="sec-hd"><span class="n">03</span><h2>产品定位与边界</h2><span class="s">做什么 / 不做什么</span></div>
+
+    <h3>定位</h3>
+    <p><b>hibtv = 短剧的资产层 + 生产编排层。</b>它不生产创意，它把创意变成可排期、可分配、可返工的资产；它也不替模型出图，它负责「什么时候、用哪张参考图、发给哪个模型、出几版、哪版算数」。</p>
+
+    <div class="flow">
+      <span class="st"><b>输入</b>剧本 + 美术设定</span><span class="ar">›</span>
+      <span class="st"><b>资产</b>大纲 / 角色 / 场景 / 道具</span><span class="ar">›</span>
+      <span class="st"><b>编排</b>节拍 / 段 / 镜</span><span class="ar">›</span>
+      <span class="st"><b>产出</b>段片 → 集成片</span>
+    </div>
+
+    <h3>边界表</h3>
+    <table>
+      <thead><tr><th>能力</th><th>V1 之内</th><th>V1 之外</th></tr></thead>
+      <tbody>
+        <tr><td class="k">输入</td><td>上传剧本（.md/.txt/.docx）+ 美术设定；自动识别集 / 场 / 台词 / 条目</td><td>小说原文、分镜脚本、PDF 扫描件</td></tr>
+        <tr><td class="k">大纲</td><td>内核 / 人物关系 / 角色表 / 场景表 / 道具表 / 分集 / 卡点 / 对齐检查</td><td>改编取舍、剧情改写建议、平台的「爽点打分」</td></tr>
+        <tr><td class="k">角色 · 美术</td><td>锚点 + 派生多视角、提示词、音色、朝代总设定、改图与版本</td><td>3D 模型、绑定、口型驱动</td></tr>
+        <tr><td class="k">剧本</td><td>一集一页节拍表、每拍秒数、站位、表演提示、钩子与断点</td><td>剧本编辑器（不提供创作态编辑，只做就地微调）</td></tr>
+        <tr><td class="k">分镜</td><td>总表 / 本集段表 / 一段一页一镜一卡、视频提示词、引用素材、监看</td><td>手绘分镜板、动态分镜预览（animatic）</td></tr>
+        <tr><td class="k">出视频</td><td>段级成片、整集拼装、段级时间轴、版本切换</td><td>剪辑器、调色、字幕烧录、音乐版权库</td></tr>
+        <tr><td class="k">协作</td><td>变更日志（单人视角）</td><td>多人实时、评论、审批、角色权限</td></tr>
+        <tr><td class="k">商业化</td><td>—</td><td>计费、额度、套餐</td></tr>
+      </tbody>
+    </table>
+
+    <div class="warn">
+      <b>明确不做的三件事</b>：① 不需要用户写提示词——提示词由资产与镜卡自动拼装，用户只写「一句话要求」；② 不允许「跳过一致性」——每张图必须挂锚点或明确标「独立参考」；③ 不覆盖历史——任何重出都是新增版本，旧版永远可切回。
+    </div>
+  </section>
+
+  <!-- ============ 04 ============ -->
+  <section id="c4">
+    <div class="sec-hd"><span class="n">04</span><h2>信息架构</h2><span class="s">四区骨架（底部无流程条）</span></div>
+
+    <h3>全局骨架</h3>
+<pre>┌───────────────────────────────────────────────────────────────┐
+│ topbar 46  ⌂ 工作台 › <b>上门龙婿</b> ⌄ › 分镜    9:16|16:9  资产库  队列 2  演示 │
+├──────┬──────────────┬─────────────────────────────┬───────────┤
+│ rail │ side 236     │ main                        │ panel 326 │
+│ 58   │ 子页 + 列表  │ 主工作区（表格 / 卡 / 镜卡）│ 监看 / 素材│
+│      │              │                             │ / 设置     │
+└──────┴──────────────┴─────────────────────────────┴───────────┘</pre>
+    <p class="kv"><span class="k">rail 58</span><span class="v">首页 / 剧本 / 角色 / 美术 / 分镜 / 概览 / 大纲 / 变更 / 素材库 / 设置 + 底部 下载 / 设置 / 用户中心</span></p>
+    <p class="kv"><span class="k">side 236</span><span class="v">当前页子页（大纲 8 项、角色筛选、美术分类、集列表、段列表）</span></p>
+    <p class="kv"><span class="k">panel 326</span><span class="v">监看（视频预览 + 重新生成）、引用素材、出图设置；无内容时整列收起</span></p>
+    <p class="kv"><span class="k">无 steps</span><span class="v">截图底部的七步 banner（导入小说 → … → 出视频）是视频导引，不是界面元素；产品内一律不出现，导航只靠 rail + 页内链接</span></p>
+
+    <h3>13 条路由（大纲 8 子页 / 剧本 10 集 / 分镜 3 层）</h3>
+    <table>
+      <thead><tr><th>路由</th><th>页面</th><th>专属交互</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><code>#/home</code></td><td>首页（项目列表）</td><td>项目行跳转、＋新建短剧项目（只支持剧本 + 美术设定）</td></tr>
+        <tr><td class="k"><code>#/outline/&lt;tab&gt;</code></td><td>大纲 8 子页</td><td>就地编辑、重新生成、对齐检查一键补</td></tr>
+        <tr><td class="k"><code>#/cast</code></td><td>角色</td><td>生成全部、出全部锚点图、提示词修改 / 重新生成 / 修改 / 上传 / 删除、四视图大图</td></tr>
+        <tr><td class="k"><code>#/art</code></td><td>美术</td><td>全部 / 场景 / 道具筛选、多视角、与角色同构的 hover 四个图标、说明卡与大图</td></tr>
+        <tr><td class="k"><code>#/script/&lt;ep&gt;</code></td><td>剧本一集一页</td><td>切集、节拍就地改、朗读、跳分镜</td></tr>
+        <tr><td class="k"><code>#/storyboard/list</code></td><td>分镜总表</td><td>模式 / 段长选择、生成本集</td></tr>
+        <tr><td class="k"><code>#/storyboard/&lt;ep&gt;</code></td><td>本集段表</td><td>段行展开、整集成片、时间轴</td></tr>
+        <tr><td class="k"><code>#/storyboard/&lt;ep&gt;/&lt;seg&gt;</code></td><td>一段一页</td><td>镜卡、重写本段、监看出片、版本</td></tr>
+        <tr><td class="k"><code>#/video/&lt;ep&gt;</code></td><td>出视频</td><td>补齐本集、逐段进度、重新合成</td></tr>
+        <tr><td class="k"><code>#/overview</code></td><td>项目概览</td><td>七步状态表、统计卡</td></tr>
+        <tr><td class="k"><code>#/changes</code></td><td>变更</td><td>谁 / 何时 / 改了什么、单条撤销</td></tr>
+        <tr><td class="k"><code>#/assets</code></td><td>素材库</td><td>角色 / 场景 / 道具缩略、路径约定</td></tr>
+        <tr><td class="k"><code>#/settings</code></td><td>设置</td><td>画幅、朝代、命名规则；模型只读展示（无下拉、无「更改」）</td></tr>
+      </tbody>
+    </table>
+
+    <h3>导航原则</h3>
+    <ul>
+      <li><b>三种进入方式并行</b>：rail（按模块）、页内链接（看大纲 / 看分镜 / 看素材）、项目列表——不强迫走线性流程；<b>没有</b>底部流程条。</li>
+      <li><b>切页不丢状态</b>：路由换视图，数据在内存里；切页回来仍是你离开时的那一集那一段。</li>
+      <li><b>面包屑只到二级</b>：三段以内（工作台 › 项目 › 页），再深的信息交给页面标题。</li>
+    </ul>
+  </section>
+
+  <!-- ============ 05 ============ -->
+  <section id="c5">
+    <div class="sec-hd"><span class="n">05</span><h2>七步主链路</h2><span class="s">每步的输入 / 动作 / 产物 / 出口条件</span></div>
+    <table>
+      <thead><tr><th>步</th><th>输入</th><th>用户做什么</th><th>产物</th><th>出口条件</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">1 导入项目<span class="sub">P0 + P1</span></td>
+          <td>剧本（必填）<br>美术设定（必填）</td>
+          <td>新建短剧项目 → 拖两个文件 → 核对自动识别的规模 → 定总集数 / 单集时长 / 画幅 / 必须保留的名场面</td>
+          <td>项目壳 + 解析进度（剧本 → 美术设定 → 大纲骨架）</td>
+          <td>三段进度都 1/1，自动进大纲</td>
+        </tr>
+        <tr>
+          <td class="k">2 写大纲<span class="sub">P2</span></td>
+          <td>剧本 + 美术设定的解析结果</td>
+          <td>校对 8 张表：内核一句话、人物关系、角色表、场景表、道具表、分集（钩子/断点/爽点）、卡点、对齐检查</td>
+          <td>可被下游引用的结构化大纲</td>
+          <td>对齐检查无红项（或用户确认忽略）</td>
+        </tr>
+        <tr>
+          <td class="k">3 角色<span class="sub">P3</span></td>
+          <td>角色表 15 行</td>
+          <td>基于大纲生成全部 → 校对提示词与音色 → 出全部锚点图 → 不满意就改图</td>
+          <td>15 张正面全身锚点 + 45 张派生（大头 / 侧面 / 背面）</td>
+          <td>锚点都「已出图」且无「待确认」</td>
+        </tr>
+        <tr>
+          <td class="k">4 美术<span class="sub">P4</span></td>
+          <td>场景表 8 行 + 道具表 4 行 + 朝代设定</td>
+          <td>出场景正面锚点与 4 个视角、道具组图；统一朝代约束</td>
+          <td>8 × 5 + 4 × 5 = 60 张美术图 <span class="src a">设计假设</span></td>
+          <td>场景 / 道具都有正面锚点</td>
+        </tr>
+        <tr>
+          <td class="k">5 剧本<span class="sub">P5</span></td>
+          <td>分集 + 台词</td>
+          <td>逐集校对节拍表：每拍的站位、动作、台词、表演提示、秒数；看钩子与断点</td>
+          <td>每集 16–20 拍的可执行节拍 <span class="src d">演示数据 · 第 1 集</span></td>
+          <td>本集秒数合计 ≈ 目标时长（偏差 ≤ 8%）<span class="src a">设计假设</span></td>
+        </tr>
+        <tr>
+          <td class="k">6 分镜<span class="sub">P6</span></td>
+          <td>节拍表 + 角色 / 场景 / 道具资产</td>
+          <td>选模型与段长 → 一键生成缺失分镜 → 段表 → 进一段一页改镜卡 / 重写本段</td>
+          <td>第 1 集 22 段 / 64 镜 / 4:36 <span class="src d">演示数据</span></td>
+          <td>无「超段提示」（单段 &gt; 段长上限）</td>
+        </tr>
+        <tr>
+          <td class="k">7 出视频<span class="sub">P7</span></td>
+          <td>镜卡 + 引用素材（场景 / 角色 / 道具 / 音色）</td>
+          <td>补齐本集视频 → 看段级进度 → 整集播放 → 不满意就重出某段或重合成</td>
+          <td>22 / 22 段有片，276.0s（4:36），v2 <span class="src d">演示数据</span></td>
+          <td>用户点导出</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>链路是「可跳」的，不是「必须」的</b>：任意一步都能从 rail / 项目概览 / 页内链接直接进，用来支持半途接手与局部返工；但每一步的入口会显式提示上游是否就绪（例如角色空态只会给「基于大纲生成全部」，不会让用户先点出图）。
+    </div>
+  </section>
+
+  <!-- ============ 06 ============ -->
+  <section id="c6">
+    <div class="sec-hd"><span class="n">06</span><h2>功能规格 P0–P7</h2><span class="s">逐页：能力 · 关键规则 · 验收点</span></div>
+
+    <h3>P0 首页 <span class="tag">#/home</span></h3>
+    <table>
+      <thead><tr><th>能力</th><th>规则</th><th>验收点</th></tr></thead>
+      <tbody>
+        <tr><td class="k">项目列表</td><td>一行一个项目：项目名 / 题材 / 集数 / 比例 / 跑到哪一步 / 资产数 / 最后编辑</td><td>点行直接进该项目概览；列表为空时只剩新建卡</td></tr>
+        <tr><td class="k">新建短剧项目</td><td>唯一主动作（页头按钮 + 列表末卡）；弹窗内双上传，两个都必填</td><td>只传一个时「初始化并创建大纲」置灰，并说明缺哪个</td></tr>
+        <tr><td class="k">唯一建项路径</td><td>只支持「上传剧本 + 美术设定」；<b>没有</b>模板库、对话建项、从小说改编</td><td>页面上找不到模板入口，也没有大输入框</td></tr>
+        <tr><td class="k">模型</td><td>固定 deepseek / Qwen-Image / Minimax-h3，只读展示</td><td>全页无「更改」按钮与模型下拉</td></tr>
+      </tbody>
+    </table>
+    <p><b>新建弹窗字段</b>（相对截图的核心变更）：项目名 / 题材 / 总集数 / 单集时长 / 画面比例（默认 9:16）/ 必须保留的名场面场次（可选）；模型只读展示（deepseek · Qwen-Image · Minimax-h3，不可改）；上传区两个：<code>剧本</code>、<code>美术设定</code>；<b>没有</b>「改编幅度（忠实 / 抽桷）」与「必留角色与戏份」。</p>
+
+    <h3>P1 项目初始化 <span class="tag">弹窗 → 进度 → 大纲</span></h3>
+    <ul>
+      <li><b>拖入即识别</b>：两个文件都上传后，上传区下方出现一行灰字规模摘要（10 集 · 30 场 · 1,024 条台词 · 15 角色 / 8 场景 / 4 道具 · 3 类特效 · 5 处付费卡点）；字段变为「已自动识别」，可手改。<span class="src d">演示数据</span></li>
+      <li><b>三段进度</b>：剧本解析 → 美术设定解析 → 大纲骨架；每段有独立状态（等待 / 进行 / 完成）与百分比，完成后打勾。</li>
+      <li><b>取消生成</b>：任何阶段都能取消；取消后直接以已有结果进入大纲（不空手而归）。</li>
+      <li><b>自动跳转</b>：三段全绿后 1.2s 自动进大纲内核页。</li>
+    </ul>
+    <div class="warn"><b>反例约束</b>：不允许在解析期间进入下游页面并显示空表——下游在解析完成前只给骨架占位，不给假数据。</div>
+
+    <h3>P2 大纲 <span class="tag">#/outline/&lt;tab&gt;</span></h3>
+    <table>
+      <thead><tr><th>子页</th><th>内容</th><th>专属交互</th></tr></thead>
+      <tbody>
+        <tr><td class="k">内核</td><td>一句话内核 / 卖点 / 受众 / 情绪曲线</td><td>整段就地编辑</td></tr>
+        <tr><td class="k">人物关系</td><td>10 组关系（谁对谁、关系名、张力）</td><td>点关系看两人卡</td></tr>
+        <tr><td class="k">角色表</td><td>15 行：层级 / 定位 / 弧光 / 来源</td><td>双击单元格改，改动入变更</td></tr>
+        <tr><td class="k">场景表</td><td>8 行：场景名 / 内外 / 时间 / 出现集</td><td>同上</td></tr>
+        <tr><td class="k">道具表</td><td>4 行：道具 / 归属 / 关键场</td><td>同上</td></tr>
+        <tr><td class="k">分集</td><td>10 行：钩子 / 断点 / 爽点 / 时长偏差 %</td><td>改钩子即入变更，可撤</td></tr>
+        <tr><td class="k">卡点</td><td>10 处付费卡点：位置 / 触发 / 悬念强度</td><td>改位置后提示「影响第 N 集收尾段」</td></tr>
+        <tr><td class="k">对齐检查<span class="tag">新增</span></td><td>核对剧本里出现的人 / 场景 / 道具 / 特效，美术设定是否都有对应条目</td><td>缺项一键去生成；覆盖率以百分比展示</td></tr>
+      </tbody>
+    </table>
+    <p><b>通用交互</b>：双击任意单元格 → 行内编辑 → <kbd>Enter</kbd> 保存 / <kbd>Esc</kbd> 取消 → 左下 toast「已改 1 处 · 撤销」；右上「重新生成」会先问「会覆盖手改的 N 处」，确认后走同一套进度。</p>
+
+    <h3>P3 角色 <span class="tag">#/cast</span></h3>
+    <table>
+      <thead><tr><th>能力</th><th>规则</th><th>验收点</th></tr></thead>
+      <tbody>
+        <tr><td class="k">空态</td><td>只给「基于大纲生成全部」；不提供逐人新建（避免 15 个人手工填）</td><td>点了之后出现 2 段进度，卡逐张出现</td></tr>
+        <tr><td class="k">角色卡</td><td><b>双排</b>（一屏两张，≤ 1240px 转单列）；单卡三列：左正面全身锚点（3:4.5）· 大头 / 侧面 / 背面三视图竖列 · 文字区（姓名 + 层级 + 别名 / 弧光 / 提示词 / 音色参考 / 详情）</td><td>15 张卡，每张 1 张锚点 + 3 张派生；三视图等高铺满不留白</td></tr>
+        <tr><td class="k">图上四个动作</td><td><b>默认隐藏</b>，鼠标移到锚点图上才浮现一排图标（照截图：深色圆角方 + 线性图标）：⟳ <b>重新生成</b> · ✎ <b>改图</b>（一句话抽屉）· ↑ <b>上传</b>（本地图替掉锚点）· 🗑 <b>删除</b>；<b>hover 到任一图标，按钮上方浮出一张说明小卡</b>（金色动作名 + 一句解释，如「改图：写一句修改要求，原图作参考，其余几张会标成过期」）；提示词另有常驻「修改」链接；点击图片本身看大图，不单独做放大按钮</td><td>不占卡面、不遮脸；卡底不放文字按钮；删除靠 toast 撤销；按钮 90ms 淡入、说明卡 50ms；命中区用 <code>.ic::after</code> 外扩到 32×30 并盖住 5px 间隙；锚点与按钮都不带原生 title（否则悬停约 1s 会弹系统灰提示盖住小卡）</td></tr>
+        <tr><td class="k">音色参考</td><td>卡底两行：上行「◍ 上传角色音频 … 音色参考」+ 下行「朗读 自动 · xx ⌄」；音色只影响朗读，不影响出图</td><td>音色库四选一（少年样辛 / 小忆默认音色 / 傲娇霸总 / 奶音俊少）</td></tr>
+        <tr><td class="k">大图预览</td><td>点锚点图 → <b>四视图</b> 2×2：正面全身 / 大头 / 侧面 / 背面，首张描金框标「锚点」</td><td>大图层只负责看，不提供编辑</td></tr>
+        <tr><td class="k">出全部锚点图</td><td>面板只读显示模型（固定 Qwen-Image）+ 画风 / 画幅 / 是否锚点出完先确认；确认后逐卡「出图中 n% → 已出图」</td><td>15 人 × 4 张 = 60 张，队列显示「约 18 分钟」<span class="src a">设计假设</span></td></tr>
+        <tr><td class="k">单图改图</td><td>抽屉：参考图 + 一句话要求 + 影响范围（会标成过期的张数）→ 出新版</td><td>锚点变「待确认」，3 张派生打过期斜纹，出现「接受 v2」</td></tr>
+        <tr><td class="k">版本</td><td>改图 / 重出都新增版本，可切回</td><td>文字区状态行显示 vN；重出期间显示「重出中」</td></tr>
+        <tr><td class="k">提示词</td><td>由「角色表 + 美术设定 + 朝代约束」拼装，可弹窗微调</td><td>保存后标「提示词已改 · 图未重出」，不自动重跑</td></tr>
+      </tbody>
+    </table>
+
+    <h3>P4 美术 <span class="tag">#/art</span></h3>
+    <ul>
+      <li><b>分类</b>：全部 / 场景 / 道具；场景与道具分开出图，因为道具常被跨场复用。</li>
+      <li><b>场景</b>：正面为锚点，派生俯视 / 背面 / 左侧 / 右侧（4 张）。</li>
+      <li><b>场景卡同角色卡</b>：双排；16:9 大图在上、四视图缩略在下、文字区收尾，<b>鼠标移到图上浮现</b>⟳ / ✎ / ↑ / 🗑四个图标（重新生成 / 改图 / 上传 / 删除），hover 图标同样在<b>按钮上方</b>出说明卡，点图片本身看全部视图。</li>
+      <li><b>道具</b>：组图 5 视角（正面 / 背面 / 左侧 / 右侧 / 俯视）——比场景多一张俯视，因为道具常被手持俯拍。</li>
+      <li><b>朝代设定</b>：一栏统一约束（如「民国·上海」），改动后全部美术图标过期，需重新出图。</li>
+      <li><b>过期与待确认</b>：与角色同规则；改图后旧锚点仍可看，但打「待确认」。</li>
+    </ul>
+
+    <h3>P5 剧本 <span class="tag">#/script/&lt;ep&gt;</span></h3>
+    <ul>
+      <li><b>左列集列表</b>：每集 4 个数字（时长 / 场 / 拍 / 台词）+ 偏差 % + 钩子 / 断点 / 爽点摘要，一眼看出哪集写超了。</li>
+      <li><b>右区当集</b>：钩子条 + 断点条 + 节拍表。节拍表列：秒数 / 站位 / 动作或台词 / 表演提示（「台词怎么说」）/ 引用。</li>
+      <li><b>就地改</b>：双击台词或表演提示可改；改动标「已改」，并提示会影响引用它的镜头。</li>
+      <li><b>朗读</b>：按拍朗读台词，用于对时长。</li>
+      <li><b>跳转</b>：「看大纲」回对应分集行，「看分镜」进本集段表。</li>
+      <li><b>第 2–10 集</b>：本版原型给摘要拍表（钩子 / 断点 / 爽点拆成 4–8 拍，秒数按集时长均分），完整台词只做第 1 集。<span class="src d">演示数据</span></li>
+    </ul>
+
+    <h3>P6 分镜 <span class="tag">#/storyboard/…</span></h3>
+    <table>
+      <thead><tr><th>层</th><th>内容</th><th>交互</th></tr></thead>
+      <tbody>
+        <tr><td class="k">总表<span class="sub">/list</span></td><td>10 集 × 段 数 / 镜数 / 总时长 / 均镜长 / 状态</td><td>模型固定（Minimax-h3，只读）+ 段长（13s）→「生成本集」；完成的行显示「已完成 22 段」</td></tr>
+        <tr><td class="k">本集段表<span class="sub">/&lt;ep&gt;</span></td><td>22 段：场次 / 镜数 / 时长 / 成片 / 版本；超段提示</td><td>行展开看镜；点行进一段一页；整集成片 + 段级时间轴可点定位</td></tr>
+        <tr><td class="k">一段一页<span class="sub">/&lt;ep&gt;/&lt;seg&gt;</span></td><td>段头（场次 / 段长 x.xs ≤ 13s / 镜数 / 「已重写」「已出 N 版」chip + 分镜说明）+ 镜卡：序号 + 起止秒 + 秒数 / 景别 / 运镜 / 方向 + 分镜图（可选）+ 视频提示词与表演提示 + 引用素材（<b>缩略图 + 角标 + 素材名</b>，末位虚线「＋ 加素材」）</td><td>「按要求重写本段」→ 输入一句话 → 只改本段镜头提示词并标「已重写」；右栏监看 + 重新生成视频 → 版本 chip</td></tr>
+      </tbody>
+    </table>
+    <p><b>段长规则</b>：单段 ≤ 13 秒（视频模型单次生成上限，档位 13 / 10 / 6s，默认 13s）；超出时行尾出现红色「超段 N s」并建议拆段；拆段不自动执行，需用户点。</p>
+    <p><b>一段一页另有两块固定上下文</b>：页头只读 chip 列出文本 / 出图 / 视频三个模型 + 画风 + 画幅；镜卡上方一张「开场 · 写锚点与朝向」卡，写本场固定布局与开场站位（如「厅心红木大圆桌 / 北壁寿字屏风 / 南侧双开门」+ 每人面朝方向），各镜复用，不让模型逐镜重猜空间关系。</p>
+
+    <h3>P7 出视频 <span class="tag">#/video/&lt;ep&gt;</span></h3>
+    <ul>
+      <li><b>统计头</b>：段 22 / 镜 64 / 成片 4:36（276.0s）。</li>
+      <li><b>整集成片</b>：9:16 或 16:9 成片框（跟随全局画幅）、播放条、版本 vN、体积 150.6 MB。<span class="src d">演示数据</span></li>
+      <li><b>按段看</b>：22 段全列（不只前 8 段），每段有场次 / 镜数 / 时长 / 成片 / 版本；点段进一段一页。</li>
+      <li><b>补齐本集视频</b>：逐段进度，缺哪段补哪段；已有片的段不重出。</li>
+      <li><b>重新合成</b>：版本 +1，旧版可切回；合成期间按钮变「合成中…」。</li>
+      <li><b>引用素材管理</b>：场景 / 角色 / 道具 / 音色四组，发出去之前在这里换；已加的素材一律以<b>小缩略图 + 左上角标 + 图下一行素材名</b>呈现，hover 出 ✕ 移除，面板侧同步「类型 + 名称 + 角标 + 备注」。</li>
+    </ul>
+  </section>
+
+  <!-- ============ 07 ============ -->
+  <section id="c7">
+    <div class="sec-hd"><span class="n">07</span><h2>数据模型</h2><span class="s">11 个实体，全部可由原型状态反推</span></div>
+
+<pre>Project ──1:N── Episode ──1:N── Beat
+   │                └──1:N── Segment ──1:N── Shot ──N:M── Asset
+   ├──1:N── Character ──1:N── View(锚点/派生)
+   ├──1:N── Scene ──1:N── View
+   ├──1:N── Prop  ──1:N── View
+   ├──1:N── Change        （字段级改动日志）
+   ├──1:N── Job           （生成队列项）
+   └──1:1── Video         （集成片 + 版本）</pre>
+
+    <table>
+      <thead><tr><th>实体</th><th>关键字段</th><th>约束</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Project</td><td>name / genre / eps / durPerEp / ratio / keepScenes[] / model</td><td>ratio ∈ {9:16, 16:9}，默认 9:16；keepScenes 只保护不合场，不新增</td></tr>
+        <tr><td class="k">Episode</td><td>no / title / dur / hook / breakPoint / payoff / deviation</td><td>dur 与节拍秒数合计的偏差 &gt; 8% 时标黄 <span class="src a">设计假设</span></td></tr>
+        <tr><td class="k">Beat</td><td>from / to / dur / block / action / line / look / refs[]</td><td>dur = to − from；同集内拍不重叠</td></tr>
+        <tr><td class="k">Character</td><td>id / name / tier / role / arc / prompt / voice / state / ver</td><td>state ∈ {empty, drawing, done, review}；ver 单调递增</td></tr>
+        <tr><td class="k">View</td><td>ownerId / kind(anchor|derived) / angle / stale / ver</td><td>每人/每场景/每道具恰有 1 张 anchor；derived.stale 由 anchor 变更触发</td></tr>
+        <tr><td class="k">Segment</td><td>id(E01-07) / ep / no / dur / beatFrom / beatTo / state / rewritten</td><td>dur ≤ 段长上限；id 唯一且可作路由</td></tr>
+        <tr><td class="k">Shot</td><td>n / dur / size / move / prompt / refs[]</td><td>prompt 必须可独立成句（不带上下文代词）</td></tr>
+        <tr><td class="k">Asset</td><td>type / refId / path / usedBy[]</td><td>path 统一 assets/&lt;type&gt;/&lt;id&gt;-&lt;view&gt;.jpg</td></tr>
+        <tr><td class="k">Change</td><td>at / who / what / from / to / undone</td><td>只追加不修改；撤销写 undone 并回写原值</td></tr>
+        <tr><td class="k">Job</td><td>name / state / cost / ep</td><td>state ∈ {queued, running, done}</td></tr>
+        <tr><td class="k">Video</td><td>ep / done / total / dur / bytes / ver / versions[]</td><td>每次重新合成 ver+1，versions 保留全量</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>为什么 View 要独立成实体</b>：因为「过期」是 View 的属性而不是图片文件的属性。同一张 anchor 图，在改了提示词之后仍然合法（它是历史版本），但它在当前项目里的「语义」已经变成「待确认」——这层状态必须存得住，否则无法回答「我现在能不能拿它去出片」。
+    </div>
+  </section>
+
+  <!-- ============ 08 ============ -->
+  <section id="c8">
+    <div class="sec-hd"><span class="n">08</span><h2>状态机与生成队列</h2><span class="s">五类对象，八条状态线</span></div>
+
+    <table>
+      <thead><tr><th>对象</th><th>状态</th><th>进入条件</th><th>可做动作</th><th>出口</th></tr></thead>
+      <tbody>
+        <tr><td class="k">大纲</td><td>parsing → done</td><td>创建项目 / 重新生成</td><td>取消生成、看进度</td><td>done（自动或取消后降级完成）</td></tr>
+        <tr><td class="k">角色集</td><td>empty → generating → done</td><td>点「基于大纲生成全部」</td><td>取消</td><td>done；生成完若曾点出图则自动续接</td></tr>
+        <tr><td class="k">单张图</td><td>drawing → done / review</td><td>出全部锚点图 / 改图</td><td>接受、重出、切版本</td><td>done</td></tr>
+        <tr><td class="k">派生视图</td><td>valid → stale</td><td>锚点改图 / 提示词改 / 朝代改</td><td>等新锚点后自动回 valid</td><td>valid</td></tr>
+        <tr><td class="k">分集分镜</td><td>none → running → done</td><td>总表点「生成本集」</td><td>等（不提供中断）</td><td>done</td></tr>
+        <tr><td class="k">段片</td><td>v1 → v2 → vN</td><td>重新生成视频</td><td>切任意版本</td><td>当前版 = 最新或用户选定</td></tr>
+        <tr><td class="k">集成片</td><td>v2 → v3 …</td><td>重新合成</td><td>导出、看旧版</td><td>最新版为当前</td></tr>
+        <tr><td class="k">演示模式</td><td>off ⇄ on(1…32)</td><td>顶部演示 / 底部文字 / <kbd>→</kbd></td><td>前进、后退、退出</td><td>off</td></tr>
+      </tbody>
+    </table>
+
+    <h3>生成队列规则</h3>
+    <ul>
+      <li><b>单一队列</b>：所有生成任务进同一个队列（出图、出分镜、出段片、合成），抽屉里只按到达顺序列，不做优先级抢占。</li>
+      <li><b>不阻塞 UI</b>：入队后用户可以继续改上游；改上游会让队列里的任务标「参数已过期，建议重排」。</li>
+      <li><b>耗时预估</b>：出图按张数、出片按秒数估；原型里的「约 18 分钟 / 约 12 分钟」是设计假设，不是实测。<span class="src a">设计假设</span></li>
+      <li><b>失败处理</b>：单张失败只标该张「重试」，不整批失败；整批失败保留已成功的那部分。</li>
+      <li><b>关闭页面</b>：真实产品里任务继续（服务端）；原型的定时器随页面结束，已在交互规格里注明。</li>
+    </ul>
+
+    <div class="warn">
+      <b>重要取舍</b>：本版本不做「上游改动自动触发下游重跑」。原因是短剧里一次改台词可能连带 8 张图、2 段片，自动重跑会烧掉额度并且覆盖用户还没看过的结果。改为「标过期 + 用户一键重跑」。
+    </div>
+  </section>
+
+  <!-- ============ 09 ============ -->
+  <section id="c9">
+    <div class="sec-hd"><span class="n">09</span><h2>编辑 · 撤销 · 过期传播</h2><span class="s">三条规则撑起「敢改」</span></div>
+
+    <h3>规则一：一切编辑走同一套入口</h3>
+    <ul>
+      <li>可编辑元素带 <code>data-edit="字段路径"</code>；双击进入 contenteditable。</li>
+      <li><kbd>Enter</kbd> 保存、<kbd>Esc</kbd> 取消、<kbd>Shift</kbd>+<kbd>Enter</kbd> 换行；失焦等同保存。</li>
+      <li>保存时写一条 Change（who=你 / at=现在 / what=表名 · 行标识 · 字段 / from / to），并弹 toast「已改 1 处 · 撤销」（7s 内有效）。</li>
+      <li>变更页可对任意一条点「撤销」：回写旧值 + 记录标 undone + 重渲染当前页。</li>
+    </ul>
+
+    <h3>规则二：撤销只回写，不连带回滚下游</h3>
+    <p>撤销一个字段不会自动把下游的图片 / 段片退回上一版，因为下游可能已经被用户手动重出过。撤销只做两件事：值回到旧值、把受影响的下游重新标记为「过期」。是否重跑仍由用户决定。</p>
+
+    <h3>规则三：过期传播按「引用关系」而不是「页面层级」</h3>
+    <table>
+      <thead><tr><th>上游改动</th><th>自动标过期的下游</th><th>不标过期的</th></tr></thead>
+      <tbody>
+        <tr><td class="k">角色提示词 / 锚点改图</td><td>该角色的 3 张派生图；引用该角色的镜卡参考图（标提示，不删）</td><td>已经出好的段片（只提示「参考已更新」，等用户重出）</td></tr>
+        <tr><td class="k">场景正面锚点改图</td><td>该场景的 4 张派生</td><td>其他场景</td></tr>
+        <tr><td class="k">朝代设定</td><td>全部美术图（场景 + 道具）</td><td>角色提示词（只标「建议同步」）</td></tr>
+        <tr><td class="k">节拍台词 / 表演提示</td><td>本段镜卡的视频提示词</td><td>角色资产</td></tr>
+        <tr><td class="k">段长上限</td><td>超长的段（标「超段 N s」）</td><td>已出片的段（保留但提示重排）</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>视觉语言只有两种</b>：<b>红色斜纹遮罩</b> = 已过期，不可用于下次生成；<b>红 / 金 chip「待确认」</b> = 已出新版但用户还没接受。其他状态一律用中性灰，避免"到处都是红"。
+    </div>
+  </section>
+
+  <!-- ============ 10 ============ -->
+  <section id="c10">
+    <div class="sec-hd"><span class="n">10</span><h2>视觉与文案规范</h2><span class="s">暗金 · 宋体标题 · 数字可核</span></div>
+
+    <h3>令牌</h3>
+<pre>--bg      #0a0908      --panel   #131110     --panel-2 #191614
+--gold    #e0b36a      --gold-2  #f3d7a8     --gold-dim rgba(224,179,106,.45)
+--text    #e9e3d7      --muted   #948b7e     --dim     #635c53
+--red     #cf6a5f      --green   #7cae8b
+字号  11 / 11.5 / 12 / 12.5 / 13 / 13.5 / 15 / 17 / 20 / 26
+字体  标题  Songti SC / Noto Serif SC       正文  PingFang SC
+数字  ui-monospace（所有时长、集数、百分比、版本号统一等宽）</pre>
+
+    <h3>用色规则</h3>
+    <ul>
+      <li><b>金色只给「当前」与「主按钮」</b>：当前步骤、当前子页、当前版本、页面唯一主 CTA。金色一屏不超过 3 处。</li>
+      <li><b>绿色只给「已完成」</b>：已完成 22 段、已解析、已出图。</li>
+      <li><b>红色只给两种状态</b>：过期、超段 / 缺项等需要人处理的问题。</li>
+      <li><b>其余一律灰阶</b>：不用蓝色链接色，链接用金色或下划线。</li>
+    </ul>
+
+    <h3>文案口径</h3>
+    <table>
+      <thead><tr><th>场景</th><th>这样写</th><th>不要这样写</th></tr></thead>
+      <tbody>
+        <tr><td class="k">生成中</td><td>出图中 7 / 15 · 约 18 分钟</td><td>正在处理，请稍候…</td></tr>
+        <tr><td class="k">完成</td><td>15 人 × 4 张 = 60 张锚点与派生图已出完</td><td>操作成功</td></tr>
+        <tr><td class="k">过期</td><td>锚点已更新，这 3 张是旧版</td><td>数据已失效</td></tr>
+        <tr><td class="k">危险操作</td><td>重新生成会覆盖手改的 3 处，继续？</td><td>确定要重新生成吗？</td></tr>
+        <tr><td class="k">空态</td><td>还没有角色卡。基于大纲 15 行角色一次生成 →</td><td>暂无数据</td></tr>
+        <tr><td class="k">撤销</td><td>已改 1 处 · 撤销</td><td>修改已保存</td></tr>
+      </tbody>
+    </table>
+
+    <h3>数字纪律</h3>
+    <ul>
+      <li>屏幕上出现的每个统计数，要么能追到演示数据，要么标注「设计假设」，否则视为缺陷。</li>
+      <li>时长统一 <code>m:ss</code>（4:36），需要精确时并列秒数（276.0s）；四舍五入向下取，避免 5:22 这种「多一秒」。</li>
+      <li>百分比保留整数（偏差 4%），金额/体积保留一位小数（150.6 MB）。</li>
+    </ul>
+  </section>
+
+  <!-- ============ 11 ============ -->
+  <section id="c11">
+    <div class="sec-hd"><span class="n">11</span><h2>相对截图的变更：3 处设计 + 4 处修正 + 3 处定稿</h2><span class="s">三张表就是本次改动的全部范围</span></div>
+
+    <table>
+      <thead><tr><th>位置</th><th>截图版</th><th>本次</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">第一步<span class="sub">新建项目</span></td>
+          <td class="old">新建<b>小说</b>项目；单上传；字段含「改编幅度（忠实 / 抽桷）」「必留角色与戏份」</td>
+          <td class="new">新建<b>短剧</b>项目；<b>双上传</b>（剧本必填 + 美术设定必填）；字段改为 项目名 / 题材 / 总集数 / 单集时长 / 画面比例 / 必须保留的名场面；模型只读展示（deepseek · Qwen-Image · Minimax-h3）</td>
+          <td class="why">用户手上已经是定稿剧本，不存在「改编」这一步；「改编幅度」这个旋钮一放上去，整个产品的心智就变成了「AI 改小说」。美术设定是角色一致性的唯一来源，必须和剧本一起上传。</td>
+        </tr>
+        <tr>
+          <td class="k">第二步<span class="sub">大纲</span></td>
+          <td class="old">内核 / <b>改编取舍</b> / 角色表 / 场景表 / 爽点表 / 分集</td>
+          <td class="new">内核 / <b>人物关系</b> / 角色表 / 场景表 / <b>道具表</b> / 分集 / <b>卡点</b> / <b>对齐检查</b></td>
+          <td class="why">「改编取舍」在没有改编时没有意义，删掉；换成三张执行必需的表（道具、卡点）和一张质检表（对齐检查）。对齐检查是新增产品点：核对剧本里出现的人、场景、道具、特效，美术设定是否都有对应条目，缺项一键去生成——这一步不做，后面出图必然缺素材。</td>
+        </tr>
+        <tr>
+          <td class="k">下游 5 页</td>
+          <td class="old">角色、美术、剧本、分镜、出视频</td>
+          <td class="new"><b>全部保留</b>，按截图复刻：锚点派生与改图、多视角、一集一页节拍表、一段一页一镜一卡、整集成片与时间轴、右栏监看、重新生成、撤销与变更记录</td>
+          <td class="why">这三页是产品真正的价值区，改动会破坏已经验证过的信息密度。只在三态（出图中 / 待确认 / 已过期）与版本切换上补明确表达。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>按反馈修正的 4 处 <span class="tag">第二轮</span></h3>
+    <table>
+      <thead><tr><th>#</th><th>截图 / 旧实现</th><th>本次</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td class="k">4</td><td class="old">底部贯穿七步的 banner（导入小说 → 写大纲 → 角色、美术、剧本 → 分镜 → 出视频）</td><td class="new"><b>产品内整条删除</b>：它是视频里的导引字卡，不是界面元素。导航靠 rail + 页内链接 + 项目列表</td><td class="why">常驻的假流程条占空间、还会让人以为必须按顺序走；进度写在项目行与概览页里更有用</td></tr>
+        <tr><td class="k">5</td><td class="old">首页照搬宣传页（主张 + 大输入框 + 模板 + 最近项目）</td><td class="new"><b>项目列表 + 新建项目卡</b>；第一版只支持剧本 + 美术设定；模板 / 对话建项 / 小说改编三个入口删除</td><td class="why">工作台首页只回答两个问题：去哪个项目、怎么建新项目</td></tr>
+        <tr><td class="k">6</td><td class="old">deepseek-v4-pro + 「更改」；下游混用 Wan / Seedance / H3</td><td class="new">统一 <b>deepseek · Qwen-Image · Minimax-h3</b>；去掉全部「更改」入口与下拉，只留只读 chip</td><td class="why">第一版不开放模型选择：用户选了也改不了出图质量，反而多一层错预期</td></tr>
+        <tr><td class="k">7</td><td class="old">角色 / 场景卡只有改图与放大</td><td class="new">双排卡：左锚点大图 + 右多视图 + <b>图上 hover 四个图标</b>（重新生成 / 改图 / 上传 / 删除）+ 点图片看多视图</td><td class="why">换图不必跳页；大图一次看住脸与侧背是否走形</td></tr>
+      </tbody>
+    </table>
+    
+    <h3>交付前定稿的 3 处 <span class="tag">第三轮</span></h3>
+    <table>
+      <thead><tr><th>#</th><th>上一版实现</th><th>本次</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td class="k">8</td><td class="old">按钮说明用 <code>::after{content:attr(data-tip)}</code> 画在图片框内，被 <code>overflow:hidden</code> 裁掉，且贴在按钮下方</td><td class="new">改成真实 <code>&lt;span class="tip"&gt;</code>，并把按钮组移到图片框外、浮在<b>按钮上方</b>（<code>bottom:calc(100% + 7px)</code>）；四张卡右边缘对齐按钮组，宽 170px 保证不越出卡片</td><td class="why">伪元素无法浮出父容器；说明卡必须跟着图标走而不是跟着图片走，否则要么被裁、要么遮脸</td></tr>
+        <tr><td class="k">9</td><td class="old">镜卡里已挂的引用素材是一排文字 chip（<code>场景 萧家别墅·宴会厅 #1</code>）</td><td class="new">改为<b>小缩略图 34×34 + 左上角标 + 图下一行素材名</b>（过长省略），末位虚线「＋ 加素材」；右栏同步「类型 / 名称 / 角标 / 缩略图 / 备注框」</td><td class="why">出片前要一眼确认「发给模型的是哪张图」；文字 chip 只能看名字、看不到画面，也无法区分同一场景的多个视角</td></tr>
+        <tr><td class="k">10</td><td class="old">段长按 15 秒算，第 1 集 22 段合计 321.9s（5:22），并标出 26 镜超范围</td><td class="new">统一按视频模型单次上限<b>段 ≤ 13 秒</b>（档位 13 / 10 / 6s）重算全表：22 段 / 64 镜 / 276.0s = 4:36，均镜长 4.3s，超段 0，成片 150.6 MB</td><td class="why">段长是模型能力边界，不是排版偏好；先定上限再排镜，才不会到出片阶段才被打回重分</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>一句话说明这次改动的性质</b>：把产品从「小说改编成短剧」重新定位为「把剧本拆成可拍摄资产」，并把界面从宣传页收回到工作台。因此删掉两个改编旋钮（改编幅度、改编取舍）、删掉一条视频导引流程条与模板入口，补上两个执行必需的入口（美术设定上传、对齐检查）与资产卡上的四个图上动作（重新生成 / 改图 / 上传 / 删除）加一个常驻的提示词修改。
+    </div>
+  </section>
+
+  <!-- ============ 12 ============ -->
+  <section id="c12">
+    <div class="sec-hd"><span class="n">12</span><h2>指标 · 风险 · 未验证项 · 路线</h2><span class="s">哪些是假设，哪些还没测</span></div>
+
+    <h3>北极星与护栏</h3>
+    <table>
+      <thead><tr><th>类型</th><th>指标</th><th>口径</th><th>来源</th></tr></thead>
+      <tbody>
+        <tr><td class="k">北极星</td><td>单集「有片率」</td><td>已完成段片 / 总段数，按集统计</td><td><span class="src a">设计假设</span></td></tr>
+        <tr><td class="k">过程</td><td>首次到「大纲就绪」时长</td><td>从创建项目到三段进度全绿</td><td><span class="src u">未实测</span></td></tr>
+        <tr><td class="k">过程</td><td>单集返工次数</td><td>同一段被重出 / 重写的次数中位数</td><td><span class="src u">未实测</span></td></tr>
+        <tr><td class="k">质量</td><td>角色一致性抽检通过率</td><td>人工抽 30 镜，判断角色是否同一人</td><td><span class="src u">未实测</span></td></tr>
+        <tr><td class="k">护栏</td><td>过期资产被误用次数</td><td>用 stale 图发起生成的次数，目标 0</td><td><span class="src a">设计假设</span></td></tr>
+        <tr><td class="k">护栏</td><td>单集生成成本</td><td>一次成片消耗的模型调用折算</td><td><span class="src u">未实测</span></td></tr>
+      </tbody>
+    </table>
+
+    <h3>风险</h3>
+    <table>
+      <thead><tr><th>风险</th><th>影响</th><th>对策</th></tr></thead>
+      <tbody>
+        <tr><td class="k">解析准确率不够</td><td>集 / 场 / 台词切错，后面全歪</td><td>解析结果必须逐项可见可改；给「重新解析」但保留手改；对齐检查兜底缺项</td></tr>
+        <tr><td class="k">锚点仍不一致</td><td>同一角色多张脸，成片穿帮</td><td>锚点唯一 + 派生必须引用锚点；改图走版本而非覆盖</td></tr>
+        <tr><td class="k">状态过多导致看不懂</td><td>用户不知道能不能出片</td><td>只保留两种视觉语言（过期斜纹 / 待确认 chip）；每屏最多一个主 CTA</td></tr>
+        <tr><td class="k">成本失控</td><td>一次重跑烧掉整天额度</td><td>不自动重跑；重跑前显示影响面（几张图 / 几段片）</td></tr>
+        <tr><td class="k">信息密度过高</td><td>新用户第一屏就被劝退</td><td>首页只留一个主动作；空态必须给下一步动作；演示模式 32 步可当引导</td></tr>
+      </tbody>
+    </table>
+
+    <h3>未验证项（明确标「未实测」）</h3>
+    <ul>
+      <li>真实剧本的解析准确率（集 / 场 / 角色行 / 钩子标注的识别率）—— <span class="src u">未实测</span></li>
+      <li>15 人 × 4 张 = 60 张的排队 18 分钟是否接近真实耗时 —— <span class="src a">设计假设</span></li>
+      <li>一集 22 段 / 64 镜是否为行业合理密度（样本来自演示项目）—— <span class="src u">未实测</span></li>
+      <li>用户是否接受「不自动重跑」这一取舍 —— <span class="src u">未实测</span></li>
+      <li>9:16 与 16:9 双画幅是否都需要（是否只用 9:16）—— <span class="src u">未实测</span></li>
+      <li>右栏常驻监看是否挤压主区（1440 宽下已核对不破版，1280 下偏紧）—— 部分验证</li>
+      <li>hover 说明卡的触发手感：只用 <code>elementFromPoint</code> 在 1280 / 1440 宽做了命中区等价校验，未在真机触控板与高刷屏上实测 —— 部分验证</li>
+    </ul>
+
+    <h3>路线</h3>
+    <table>
+      <thead><tr><th>阶段</th><th>内容</th><th>前置</th></tr></thead>
+      <tbody>
+        <tr><td class="k">V1<span class="sub">本次</span></td><td>七步链路可点原型 + 交互规格 + PRD；前端定时模拟，不接模型</td><td>—</td></tr>
+        <tr><td class="k">V1.1</td><td>真实上传与解析；把解析结果映射到 8 张表；对齐检查接真数据</td><td>解析服务</td></tr>
+        <tr><td class="k">V1.2</td><td>接图像模型：锚点 / 派生 / 改图 + 队列与失败重试</td><td>出图服务、额度体系</td></tr>
+        <tr><td class="k">V1.3</td><td>接视频模型：段片生成、整集合成、版本管理</td><td>视频服务、存储</td></tr>
+        <tr><td class="k">V2</td><td>协作（评论、审批、角色权限）、导出与字幕、成本看板</td><td>V1.3 稳定</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <b>本 PRD 与原型的关系</b>：PRD 里的每条规则都能在 <a href="prototype.html">prototype.html</a> 里点到对应动作；逐元素的行为、状态、异常与文案在 <a href="interaction.html">interaction.html</a>。凡原型没做的（真实上传、真实模型、协作、计费、移动端），本文与交互规格都单列在「未实现 / 未实测」，不混在能力列表里。
+    </div>
+  </section>
+
+  <footer>
+    <span>hibtv · PRD 主文 · V1 定稿 · 与 prototype.html / interaction.html 同版本</span>
+    <span class="r">prd.html</span>
+  </footer>
+
+  </main>
+</div>
+</div>
+</body>
+</html>

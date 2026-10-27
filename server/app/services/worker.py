@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from ..config import OUTPUT_DIR, STAGING_DIR, settings
 from ..database import SessionLocal
-from ..models import Task, Upload, User
+from ..models import HibtvJob, Task, Upload, User
 from . import advconfirm, advenhance, advpostir, advprompt, cloud, comfyui, videollm
 from ..scenes import apply_scene
 from .billing import add_credits, compute_cost, compute_director_cost
@@ -90,6 +90,7 @@ def start_worker() -> None:
     _bg_tasks.append(loop.create_task(_loop_guard(_generate_loop, "生成")))
     _bg_tasks.append(loop.create_task(_loop_guard(_upscale_loop, "超分")))
     _bg_tasks.append(loop.create_task(_loop_guard(_advideo_image_loop, "广告图")))
+    _bg_tasks.append(loop.create_task(_loop_guard(_hibtv_jobs_loop, "短剧")))
     _bg_tasks.append(loop.create_task(_recover_orphans()))
     logger.info("调度器已启动 (mock=%s)", settings.mock_comfy)
 
@@ -1289,4 +1290,67 @@ async def _advideo_image_loop() -> None:
             raise
         except Exception:
             logger.exception("广告图领取循环异常")
+            await asyncio.sleep(3)
+
+
+# ---------------------------------------------------------------- ⑥ 短剧作业
+# LLM 类作业可并发（不占 GPU）；出图 / 拼接与 adimage 一样串行，避免节点排队打架。
+HIBTV_LLM_KINDS = ("outline", "cast", "art", "script", "storyboard")
+HIBTV_SERIAL_KINDS = ("images", "compose")
+HIBTV_LLM_CONCURRENCY = 2
+
+
+def _claim_hibtv_job() -> Optional[int]:
+    """领取一条短剧作业（带并发闸门，条件 UPDATE 防重复领取）。"""
+    with SessionLocal() as db:
+        running = db.query(HibtvJob).filter(HibtvJob.status == "running").all()
+        llm_running = len([j for j in running if j.kind in HIBTV_LLM_KINDS])
+        busy = {j.kind for j in running if j.kind in HIBTV_SERIAL_KINDS}
+        candidates = (db.query(HibtvJob).filter(HibtvJob.status == "queued")
+                      .order_by(HibtvJob.id).limit(30).all())
+        for job in candidates:
+            if job.kind in HIBTV_LLM_KINDS and llm_running >= HIBTV_LLM_CONCURRENCY:
+                continue
+            if job.kind in HIBTV_SERIAL_KINDS and job.kind in busy:
+                continue
+            claimed = db.execute(
+                update(HibtvJob)
+                .where(HibtvJob.id == job.id, HibtvJob.status == "queued")
+                .values(status="running", started_at=datetime.now(), progress=1)
+            ).rowcount
+            db.commit()
+            if claimed:
+                return job.id
+    return None
+
+
+async def _run_hibtv_job(job_id: int) -> None:
+    """执行一条短剧作业：异常已在 run_job 内部收敛为 failed + 退积分。"""
+    from . import hibtv_jobs
+
+    try:
+        await hibtv_jobs.run_job(job_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 —— 兜底，不让调度循环退出
+        logger.exception("短剧作业 #%s 执行异常", job_id)
+
+
+async def _hibtv_jobs_loop() -> None:
+    """短剧作业领取循环：LLM 并发 2、出图/拼接串行；未启用时空转。"""
+    while True:
+        try:
+            if not getattr(settings, "hibtv_enabled", False):
+                await asyncio.sleep(20)
+                continue
+            job_id = await asyncio.to_thread(_claim_hibtv_job)
+            if job_id is None:
+                await asyncio.sleep(3)
+                continue
+            asyncio.get_event_loop().create_task(_run_hibtv_job(job_id))
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("短剧作业领取循环异常")
             await asyncio.sleep(3)

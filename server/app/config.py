@@ -116,6 +116,30 @@ class Settings(BaseSettings):
     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
     comfyui_input_dir: str = "/data/ComfyUI/input"
 
+    # ---- 短剧工作台 HiBTV（/hibtv）：定稿剧本 + 美术设定 → 大纲/角色/美术/剧本/分镜/出片 ----
+    hibtv_enabled: bool = True
+    # 短剧产物根目录（留空 = <DATA_DIR>/hibtv）：剧本解析、文档 JSON、锚点图、段成片、整集成片
+    hibtv_dir: str = ""
+    # 文本 LLM：默认 deepseek（复用 deepseek_api_key / deepseek_api_base）
+    hibtv_llm_provider: str = "deepseek"
+    hibtv_llm_model: str = ""            # 留空 → deepseek_llm_model
+    hibtv_llm_temperature: float = 0.5
+    hibtv_llm_max_tokens: int = 8192
+    hibtv_llm_timeout: int = 300
+    # off = 不调 LLM，直接用剧本解析骨架产出文档（联调/无 key 环境）
+    hibtv_llm_mode: str = "on"
+    # 生图节点（留空 = advideo_image_worker）；出图间隔秒（留空 = advideo_image_gap_sec）
+    hibtv_image_worker: str = ""
+    hibtv_image_gap_sec: float = 5.0
+    hibtv_image_width: int = 1088          # 9:16 竖屏锚点图画布
+    hibtv_image_height: int = 1920
+    # 段视频单次上限秒数（H3 可用档位 5/8/10/15；默认 10）
+    hibtv_seg_max_seconds: int = 10
+    # 质量门：node 可执行文件（vendored skill 脚本零依赖，需 Node ≥18）
+    hibtv_node_bin: str = "node"
+    # 锚点图出完是否等待人工确认再出派生视图
+    hibtv_anchor_confirm: bool = True
+
     # ---- 云端实例（远程开机/关机）----
     # clouds/*.env 所在目录（一台实例一个文件）；留空 = <server>/clouds
     clouds_dir: str = ""
@@ -167,6 +191,30 @@ class Settings(BaseSettings):
         return bool(self.advideo_llm_api_key) and str(self.advideo_image_prompt_mode).lower() == "llm"
 
     @property
+    def hibtv_llm_provider_name(self) -> str:
+        """短剧文本 provider（默认 deepseek）。"""
+        return (str(self.hibtv_llm_provider or "deepseek").strip().lower() or "deepseek")
+
+    @property
+    def hibtv_llm_api_key(self) -> str:
+        return self.deepseek_api_key if self.hibtv_llm_provider_name == "deepseek" else self.qwen_api_key
+
+    @property
+    def hibtv_llm_api_base(self) -> str:
+        return self.deepseek_api_base if self.hibtv_llm_provider_name == "deepseek" else self.qwen_api_base
+
+    @property
+    def hibtv_llm_model_name(self) -> str:
+        if self.hibtv_llm_model:
+            return self.hibtv_llm_model
+        return self.deepseek_llm_model if self.hibtv_llm_provider_name == "deepseek" else self.qwen_llm_model
+
+    @property
+    def hibtv_llm_enabled(self) -> bool:
+        """短剧 LLM 是否可用：开关为 on 且当前 provider 配了 key。"""
+        return str(self.hibtv_llm_mode).lower() != "off" and bool(self.hibtv_llm_api_key)
+
+    @property
     def video_llm_enabled(self) -> bool:
         """视频 LLM 增强 agent 是否可用：当前 provider（默认 qwen3.8-flash）配了 API Key。
         与生图 agent 共用凭证；无 key 时 _run_enhance 自动回退 Content-IR。"""
@@ -199,6 +247,8 @@ STAGING_DIR = DATA_DIR / "staging"    # 768p 中间产物
 OUTPUT_DIR = DATA_DIR / "output"      # 最终成片
 ADVIDEO_DIR = DATA_DIR / "advideo"    # 广告片候选广告图
 WORKFLOW_DIR = Path(__file__).resolve().parent.parent / "workflows"
+# 短剧工作台产物（剧本解析 / 文档 JSON / 锚点图 / 段成片 / 整集成片）
+HIBTV_DIR = Path(settings.hibtv_dir).resolve() if settings.hibtv_dir else DATA_DIR / "hibtv"
 
-for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR):
+for _d in (DATA_DIR, UPLOAD_DIR, STAGING_DIR, OUTPUT_DIR, ADVIDEO_DIR, HIBTV_DIR):
     _d.mkdir(parents=True, exist_ok=True)
