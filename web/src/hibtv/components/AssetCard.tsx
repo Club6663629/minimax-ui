@@ -121,7 +121,7 @@ export function AssetCard({
   // 一张设定稿就是唯一产物；没有它时才回退到旧数据里的锚点图
   const sheetSrc = sheet.url || anchorMeta.url;
   const hasSheet = Boolean(sheet.url || sheet.path);
-  const gridLabel = asset.kind === "cast" ? "四视图" : asset.kind === "scene" ? "四宫格" : asset.kind === "prop" ? "三视图" : "多视图";
+  const gridLabel = asset.kind === "cast" ? "四视图" : asset.kind === "scene" ? "四宫格" : asset.kind === "prop" ? "四宫格" : "多视图";
   // 出图画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 官方 16:9 2K）
   const sheetSize = (asset.sheetSpec?.size || []).join("×");
   // 版式描述以后端格子表（从左到右/从上到下）为准，避免和 defs 陈列顺序不一致

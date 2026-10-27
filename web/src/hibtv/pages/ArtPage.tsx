@@ -71,7 +71,7 @@ export default function ArtPage() {
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
       <span className="chip">设定稿模型 {status?.image?.worker || "qwen21"}</span>
-      <span className="chip">格子 场景 2×2 · 道具 1×3</span>
+      <span className="chip">格子 场景 / 道具 均 2×2</span>
       <span className="chip">设定稿 16:9 · {sheetSize}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span

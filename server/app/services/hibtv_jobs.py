@@ -31,11 +31,11 @@ logger = logging.getLogger(__name__)
 
 # 每类资产的视图定义：[view, 中文名]，第 1 个是锚点
 # 版式对齐《角色/场景/道具 设定与多视图规范》（assetspec2trl）：
-# 角色 4 格（§3.2，3/4 侧替换 90° 正侧）；场景 2×2 四宫格（§4.3）；道具 1×3 三视角（§5.2）
+# 角色 4 格（§3.2，3/4 侧替换 90° 正侧）；场景 2×2 四宫格（§4.3）；道具 2×2 四宫格（§5.2 三视角 + 细节格）
 VIEW_DEFS: Dict[str, List[List[str]]] = {
     "cast": [["front", "正面全身"], ["big", "大头"], ["side", "3/4 侧面"], ["back", "背面"]],
     "scene": [["wide", "广角全景"], ["mid", "中景调度区"], ["close", "材质特写"], ["reverse", "反打机位"]],
-    "prop": [["front", "正面"], ["threeq", "3/4 侧面"], ["top", "俯视"]],
+    "prop": [["front", "正面"], ["threeq", "3/4 侧面"], ["top", "俯视"], ["detail", "细节特写"]],
 }
 
 # 视图约束按资产类型分开：同一个 `top` 对场景曾是「俯视全景」、对道具是「俯看这一件」，
@@ -76,6 +76,8 @@ VIEW_HINT: Dict[str, Dict[str, str]] = {
                   "立体结构，材质颜色与参考图一致；浅色无缝背景；不出现手、人物、文字水印",
         "top": "同一件道具的正上方俯看：单件完整居中，可看清顶面结构与按钮/开口位置，材质颜色与参考图一致；"
                "浅色无缝背景；不出现手、人物、文字水印",
+        "detail": "同一件道具的材质/工艺细节特写：镜头推近到徽记、刻字、划痕或按钮等重点细节，"
+                  "只拍局部不拍全貌；材质、颜色、磨损与参考图一致；不出现手、人物、文字水印",
     },
 }
 
@@ -129,11 +131,13 @@ SHEET_SPEC: Dict[str, Dict] = {
         "brief": "画面 2×2 等分成 4 个画格（每格恰为 16:9）：左上 广角全景 / 右上 中景调度区 / "
                  "左下 材质特写 / 右下 反打机位",
     },
-    # 道具用规范 §5.2 的 1×3 三视角：正面/3-4 侧/俯视。多一格就是多一份裁切与人工核对成本。
+    # 道具也用 2×2 四宫格（与场景同构）：实测出图模型对「reference sheet」有普遍铺 4+ 格的
+    # 惯性，1×3 只有 3 格低于惯性下沿，细节多的道具会被自作主张加到 5 格。凑够 4 格（三视角
+    # + 一格细节特写）后遵循度最高。每格恰好 1376×768（16:9）。
     "prop": {
-        "cells": [("front", 0.0, 0.0, 1 / 3, 1.0), ("threeq", 1 / 3, 0.0, 1 / 3, 1.0),
-                  ("top", 2 / 3, 0.0, 1 / 3, 1.0)],
-        "brief": "画面横向单行恰好 3 个等宽画格：正面视图 / 3/4 侧面视图 / 俯视视图",
+        "cells": [("front", 0.0, 0.0, 0.5, 0.5), ("threeq", 0.5, 0.0, 0.5, 0.5),
+                  ("top", 0.0, 0.5, 0.5, 0.5), ("detail", 0.5, 0.5, 0.5, 0.5)],
+        "brief": "画面 2×2 等分成 4 个画格（每格恰为 16:9）：左上 正面 / 右上 3/4 侧面 / 左下 俯视 / 右下 细节特写",
     },
 }
 # 无论视频横版还是竖版，设定稿统一 16:9（画格横向排列才能一遍读完）
@@ -172,18 +176,15 @@ SHEET_PROMPT: Dict[str, str] = {
         "空间完整入画；不出现人物、动物、文字招牌与现代物品。"
     ),
     "prop": (
-        "道具设定参考图（prop reference sheet / product turnaround）：横向 16:9、纯白无缝背景，"
-        "画面恰好分成 3 个等宽等高的画格，横向并排成单行（exactly three panels in one single row, "
-        "no second row），绝不出现第二排或更多画格；格与格之间不画任何颜色的分隔线、无边框、无间隙"
-        "（NO borders of any color, NO dividing lines, NO frames, panels seamlessly adjacent）、"
-        "不写任何文字，每格内只有一件道具："
-        "第 1 格 正面视图：正对镜头平视，完整外观与主要细节；第 2 格 3/4 侧面视图：镜头绕道具"
-        "旋转约 45°，展示厚度、圆角与立体感；第 3 格 俯视视图：从正上方俯看，展示顶面结构与"
-        "开口 / 按钮位置。"
-        "正交视角、三格同一焦距（orthographic, consistent focal length），三格是同一件道具、"
-        "同一状态、同一光源方向与色温：形制、比例、材质、纹理、颜色、磨损与刻字完全一致；"
-        "每格单件居中，占该格高度约 70%–80%，四周留 8% 安全边距不触边缘；柔和均匀棚拍光，"
-        "无高光热点、无投影（soft even light, no specular hotspot, no drop shadow）；"
+        "道具设定参考图（prop reference sheet）：横向 16:9、纯白无缝背景，画面 2×2 等分成 4 个画格"
+        "（2 行 2 列，每格恰为 16:9），格与格之间不画任何颜色的分隔线、无边框、无间隙"
+        "（NO borders of any color, NO dividing lines, NO frames, panels seamlessly adjacent），不写任何文字："
+        "左上格 正面视图：正对镜头平视，完整外观与主要细节；右上格 3/4 侧面视图：镜头绕道具"
+        "旋转约 45°，展示厚度、圆角与立体感；左下格 俯视视图：从正上方俯看，展示顶面结构与"
+        "开口 / 按钮位置；右下格 细节特写：镜头推近到徽记 / 刻字 / 磨损等重点细节的近景。"
+        "四格是同一件道具、同一状态、同一光源方向与色温（形制、比例、材质、纹理、颜色、磨损与刻字完全一致），"
+        "只有观察角度变化；每格只有一件道具、单件居中，占该格高度约 70%–80%，四周留 8% 安全边距不触边缘；"
+        "柔和均匀棚拍光，无高光热点、无投影（soft even light, no specular hotspot, no drop shadow）；"
         "不出现手、人物、场景、台面、包装盒与价签。"
     ),
 }
@@ -212,9 +213,8 @@ SHEET_NEGATIVE: Dict[str, str] = {
               "perspective distortion, wide angle distortion, fisheye, bokeh, depth of field, drop shadow"),
     "prop": ("hand, fingers, arm, person, holding by hand, text, caption, letters, price tag, label, "
              "logo, watermark, border line, dividing lines, panel borders, frames, "
-             "more than three panels, fewer than three panels, empty panel, missing panel, "
-             "two rows, second row, stacked rows, grid layout, multiple objects, "
-             "more than one object per panel, duplicate object, "
+             "more than four panels, fewer than four panels, empty panel, missing panel, "
+             "multiple objects, more than one object per panel, duplicate object, "
              "overlapping panels, subject touching panel edge, different object in each panel, "
              "different material, changed proportions, inconsistent lighting direction, "
              "perspective distortion, wide angle distortion, bokeh, "
