@@ -140,6 +140,16 @@ export interface SegmentVersion {
   failed?: boolean;
 }
 
+export interface SegmentRef {
+  n: number;                 // 「图 N」，与出片提示词的 Subject 编号同序
+  kind: string;
+  code: string;
+  name: string;
+  view: string;              // __sheet = 整张多视图设定稿
+  uploadId: number;
+  url: string;
+}
+
 export interface Segment {
   id: string;
   ep: number;
@@ -154,6 +164,7 @@ export interface Segment {
   cuts: Cut[];
   planSeconds: number;
   refs?: number[];
+  refPlan?: SegmentRef[];
 }
 
 export interface SegmentList {

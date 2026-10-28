@@ -647,7 +647,20 @@ def get_segment(project_id: int, seg_id: str,
 
 def _segment_detail(db: Session, project: HibtvProject, seg: HibtvSegment) -> Dict:
     payload = hibtv_jobs.segment_payload(project.id, seg)
-    payload["refs"] = hibtv_jobs.segment_ref_ids(db, project, seg)
+    plan = hibtv_jobs.segment_ref_plan(db, project, seg)
+    payload["refs"] = [ref["upload_id"] for ref in plan]
+    # 「图 N」与出片提示词里 subject_definitions 的编号同序，前端直接拿去渲染缩略图条：
+    # 镜头里看到的就是真正会挂给出片模型的那几张图。
+    payload["refPlan"] = [
+        {
+            "n": i,
+            "kind": ref["kind"], "code": ref["code"], "name": ref["name"],
+            "view": ref["view"], "uploadId": ref["upload_id"],
+            "url": (f"/files/hibtv/{project.id}/assets/{ref['kind']}/{ref['code']}/"
+                    + ("sheet.png" if ref["view"] == "__sheet" else f"{ref['view']}.png")),
+        }
+        for i, ref in enumerate(plan, start=1)
+    ]
     return payload
 
 
@@ -679,9 +692,11 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
     if user.credits < cost:
         raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED,
                             f"积分不足：本段 {seconds}s 需 {cost} 积分，请先充值")
-    ref_ids = hibtv_jobs.segment_ref_ids(db, project, seg)
-    # 参考图是设定稿时，必须明说「只当外观证据、不复刻分格版式」
-    prompt = hibtv_jobs.video_prompt(db, project, seg, prompt, ref_ids)
+    ref_plan = hibtv_jobs.segment_ref_plan(db, project, seg)
+    ref_ids = [ref["upload_id"] for ref in ref_plan]
+    # 参考图是设定稿时，首行的「关键帧对齐」必须改写成 Subject 定义，
+    # 否则 H3 会把设定稿当成第 k 镜的首帧，画面直接乱掉。
+    prompt = hibtv_jobs.video_prompt(prompt, ref_plan)
 
     task = Task(
         user_id=user.id,

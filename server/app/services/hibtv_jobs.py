@@ -1289,31 +1289,87 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
         db.commit()
 
 
-# 段级出片的参考图约定：挂上去的是设定稿（一张里并排 3~4 个视角），
-# 视频模型很容易把整张版式复刻成九宫格，或把一格当成一个人。
-# 不改镜头正文结构，只在尾部追加“怎么用参考图”。
+# 段参考图：整张多视图设定稿直接当 1 个参考（不拆单视图）。
+# 一张图里并排多个视角，模型能同时看到正/侧/背面，比单图锚点更全；
+# 只要提示词里说清楚「多视角只是同一对象的不同角度、不是画面内容」，就不会被复刻成拼贴。
+# 仅当该资产还没出 sheet 时，才退回单视图裁格。
+REF_VIEW_FALLBACK = {
+    "cast": ("front", "side", "big", "back"),
+    "scene": ("wide", "mid", "reverse", "close"),
+    "prop": ("front", "threeq", "detail", "top"),
+}
+REF_KIND_ZH = {"cast": "角色", "scene": "场景", "prop": "道具"}
+REF_VIEW_ZH = {
+    "front": "正面", "big": "面部特写", "side": "3/4 侧面", "back": "背面",
+    "wide": "广角全景", "mid": "中景", "close": "材质特写", "reverse": "反打机位",
+    "threeq": "3/4 侧面", "top": "俯视", "detail": "细节特写",
+}
+
 REF_GUARD = (
-    "参考图约定：随附图片是角色、场景、道具的设定图（同一张里并排多个视角），"
-    "只作为外观证据——照着确认脸、发型、体型、服装、配色、材质与空间结构；"
-    "不要假设固定的分格数量或顺序，不要复刻它的分格排版，不要把同一角色画成多个人，不要输出九宫格或拼贴；"
-    "景别、机位、构图与动作以上面的镜头描述为准。"
+    "外观一致性（最高优先级）：人物与场景一律以参考图为准——"
+    "同一角色在所有镜头里保持同一张脸与同一套服装，禁止换脸、换装、年龄漂移；"
+    "房间结构、家具陈设、主色调与光位不得自行改换；不出现设定图之外的新增主要人物；"
+    "景别、机位、构图与动作以镜头描述为准，不要复刻参考图的分格、多视图或九宫格排版；"
+    "画面里不得出现字幕、水印、片名或任何叠加文字。"
+)
+
+# 分镜文档首行是 skill 的关键帧对齐指令（图 k 钉在第 k 镜切点），但出片挂的是资产设定图，
+# 不是关键帧——原样送进 H3 会把设定稿当首帧，画面必然乱掉。生成时按实际挂图改写。
+_ALIGN_HEAD_RE = re.compile(
+    r"^\s*(?:参考图与目标视频的对齐|How the reference (?:pictures?|images?) align)[^\n]*\n?",
+    re.IGNORECASE,
 )
 
 
-def video_prompt(db: Session, project: HibtvProject, seg: HibtvSegment,
-                 prompt: str = "", ref_ids: Optional[List[int]] = None) -> str:
-    """出片提示词：挂了参考图就追加「只当外观证据、不复刻分格版式」。"""
+def ref_header(plan: List[dict]) -> str:
+    """参考图 → 官方 Ref2VA 的 <Subject N> 定义块（设定图只定义外观，不是关键帧）。"""
+    if not plan:
+        return ""
+    lines: List[str] = []
+    for i, ref in enumerate(plan, start=1):
+        kind = REF_KIND_ZH.get(ref.get("kind", ""), "参考")
+        name = ref.get("name") or ref.get("code") or ""
+        view = ref.get("view") or ""
+        if view == "__sheet":
+            src = f"图 {i}（多视角设定稿，同一对象的多个角度）"
+            role = f"{kind}「{name}」的外观与结构设定"
+        else:
+            src = f"图 {i}（{REF_VIEW_ZH.get(view, '设定图')}）"
+            role = f"{kind}「{name}」的外观设定"
+        lines.append(f"<Subject {i}>：{src}是{role}，只定义外观。")
+    return (
+        "subject_definitions（参考图只定义外观，不是任何一帧画面，不按秒对齐）：\n"
+        + "\n".join(lines)
+        + "\n上述 Subject 的脸型五官、发型发色、年龄感、体型、服装鞋帽、配饰、材质与配色"
+        "必须逐项沿用对应参考图；场景 Subject 的空间结构、陈设与光位同样沿用。\n"
+    )
+
+
+def video_prompt(prompt: str, plan: Optional[List[dict]] = None) -> str:
+    """出片提示词：关键帧对齐首行改写成设定图 Subject 定义 + 外观一致性约束。"""
     text = (prompt or "").strip()
-    if not text or REF_GUARD in text:
+    plan = plan or []
+    if not text or not plan:
         return text
-    ids = ref_ids if ref_ids is not None else segment_ref_ids(db, project, seg)
-    if not ids:
-        return text
-    return f"{text}\n{REF_GUARD}"
+    if "subject_definitions" not in text:
+        text = _ALIGN_HEAD_RE.sub("", text, count=1).lstrip()
+        text = f"{ref_header(plan)}\n{text}"
+    if REF_GUARD not in text:
+        text = f"{text}\n{REF_GUARD}"
+    return text
 
 
 def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[int]:
-    """段的参考图：场景锚点 + 出场角色锚点 + 道具锚点（≤ 9，各取第一个有图的视图）。"""
+    """段的参考图 id 列表（顺序即图 1、图 2 …）。"""
+    return [ref["upload_id"] for ref in segment_ref_plan(db, project, seg)]
+
+
+def segment_ref_plan(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[dict]:
+    """段的参考图清单：场景锚点 + 出场角色锚点 + 道具锚点（≤ 9）。
+
+    每个资产优先取单视图裁格；没有裁格才退回整张 sheet。返回项带上 kind/code/name/view，
+    供 `ref_header` 写进提示词，让模型知道「图 2 是谁、用哪一面的外观」。
+    """
     data = jloads(seg.data, {})
     outline_doc = get_doc(db, project.id, "outline")
     outline = jloads(outline_doc.data, {}) if outline_doc else {}
@@ -1337,9 +1393,10 @@ def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> Li
     for code in prop_codes[:3]:
         pairs.append(("prop", code))
 
-    ids: List[int] = []
+    plan: List[dict] = []
+    used: set = set()
     for kind, code in pairs:
-        if not code or len(ids) >= 9:
+        if not code or len(plan) >= 9:
             continue
         asset = (db.query(HibtvAsset)
                  .filter(HibtvAsset.project_id == project.id, HibtvAsset.kind == kind,
@@ -1348,15 +1405,20 @@ def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> Li
         if asset is None:
             continue
         views = jloads(asset.views, {})
-        # 多视图设定稿：整张当 1 个参考（含多个视角），不拆成多张占预算
-        sheet_uid = (views.get("__sheet") or {}).get("upload_id")
-        if sheet_uid and int(sheet_uid) not in ids:
-            ids.append(int(sheet_uid))
+        view, uid = "", 0
+        # 整张多视图设定稿优先（一张图同时含正/侧/背多个角度）；没有 sheet 才退回单视图
+        got = (views.get("__sheet") or {}).get("upload_id")
+        if got:
+            view, uid = "__sheet", int(got)
+        else:
+            for cand in REF_VIEW_FALLBACK.get(kind, ("front",)):
+                got = (views.get(cand) or {}).get("upload_id")
+                if got:
+                    view, uid = cand, int(got)
+                    break
+        if not uid or uid in used:
             continue
-        order = [v[0] for v in VIEW_DEFS.get(kind, [["front"]])]
-        for view in order:
-            uid = (views.get(view) or {}).get("upload_id")
-            if uid and int(uid) not in ids:
-                ids.append(int(uid))
-                break
-    return ids[:9]
+        used.add(uid)
+        plan.append({"kind": kind, "code": code, "name": asset.name or code,
+                     "view": view, "upload_id": uid})
+    return plan

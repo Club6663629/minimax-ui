@@ -1,7 +1,7 @@
 /** 分镜：总表 → 本集段表 → 一段一页（镜卡 + 右栏监看 / 版本 / 引用素材）。 */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { hibtvApi } from "../api";
+import { hibtvApi, mediaUrl } from "../api";
 import { Stage } from "../HibtvLayout";
 import {
   Empty,
@@ -16,7 +16,45 @@ import {
   fmtTime,
 } from "../components/ui";
 import { errText, useDoc, useHibtv, useJob, usePatch } from "../state";
-import type { OutlineData, RenderItem, Segment, SegmentList } from "../types";
+import type { OutlineData, RenderItem, Segment, SegmentList, SegmentRef } from "../types";
+
+const REF_KIND_ZH: Record<string, string> = { cast: "角色", scene: "场景", prop: "道具" };
+
+/** 参考图缩略图条：角标 = 出片提示词里的「图 N」，名字 = 资产名。 */
+function RefRail({ rows, add = false }: { rows: SegmentRef[]; add?: boolean }) {
+  if (!rows.length && !add) return null;
+  return (
+    <div className="refrail">
+      {rows.map((r) => {
+        const kind = REF_KIND_ZH[r.kind] || r.kind;
+        const view = r.view === "__sheet" ? "多视图设定稿" : r.view;
+        return (
+          <a
+            key={r.uploadId}
+            className="refitem"
+            href={mediaUrl(r.url)}
+            target="_blank"
+            rel="noreferrer"
+            title={`图 ${r.n} · ${kind} ${r.name} · ${view}`}
+          >
+            <span className="refthumb">
+              <span className="ph">{kind.slice(0, 1)}</span>
+              <span className="num">{r.n}</span>
+              <img src={mediaUrl(r.url)} alt={r.name} loading="lazy" />
+            </span>
+            <span className="refname">{r.name}</span>
+          </a>
+        );
+      })}
+      {add && (
+        <Link className="refitem add" to="/hibtv/art" title="去美术设定换掉参考图">
+          <span className="refthumb">＋</span>
+          <span className="refname">换图</span>
+        </Link>
+      )}
+    </div>
+  );
+}
 
 /** 多集段表：只对存在的集发起请求。 */
 function useSegmentMap(eps: number[]) {
@@ -774,19 +812,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         <div className="tiny dim" style={{ marginBottom: 8 }}>
           出片时按「场景锚点 + 出场角色锚点 + 道具锚点」自动挂参考图（最多 9 张）；换图后要重跑这一段。
         </div>
-        <div className="inline" style={{ flexWrap: "wrap", gap: 5 }}>
-          {(seg.cuts?.[0]?.characters || []).map((c) => (
-            <span className="chip" key={c}>
-              角色 {c}
-            </span>
-          ))}
-          {(seg.cuts?.[0]?.props || []).map((p) => (
-            <span className="chip" key={p}>
-              道具 {p}
-            </span>
-          ))}
-        </div>
-        <div className="refnote">已挂上传图 {(seg.refs || []).length} 张</div>
+        <RefRail rows={seg.refPlan || []} add />
+        <div className="refnote">已挂上传图 {(seg.refs || []).length} 张，编号与提示词里的「图 N」一致</div>
       </div>
 
       <div className="panel-sec">
@@ -872,6 +899,11 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           {cuts.map((cut, i) => {
             const from = starts[i] ?? 0;
             const to = Math.round((from + Number(cut.seconds || 0)) * 10) / 10;
+            // 这一镜真正会挂的参考图：场景恒定 + 本镜出场角色 / 道具
+            const codes = new Set([...(cut.characters || []), ...(cut.props || [])]);
+            const shotRefs = (seg.refPlan || []).filter(
+              (r) => r.kind === "scene" || codes.has(r.code),
+            );
             return (
               <div className="shotcard" key={i}>
                 <div className="shot-hd">
@@ -901,18 +933,22 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                 <div className="shot-body">
                   <div>
                     <Plate kind="frame" label={`镜 ${i + 1} · 分镜图`} view="可选" ratio="16 / 10" />
-                    <div className="inline" style={{ marginTop: 6, flexWrap: "wrap", gap: 4 }}>
-                      {(cut.characters || []).map((c) => (
-                        <span className="chip tiny" key={c}>
-                          {c}
-                        </span>
-                      ))}
-                      {(cut.props || []).map((p) => (
-                        <span className="chip tiny" key={p}>
-                          {p}
-                        </span>
-                      ))}
-                    </div>
+                    {shotRefs.length ? (
+                      <RefRail rows={shotRefs} />
+                    ) : (
+                      <div className="inline" style={{ marginTop: 6, flexWrap: "wrap", gap: 4 }}>
+                        {(cut.characters || []).map((c) => (
+                          <span className="chip tiny" key={c}>
+                            {c}
+                          </span>
+                        ))}
+                        {(cut.props || []).map((p) => (
+                          <span className="chip tiny" key={p}>
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="shottext">
                     <div>
