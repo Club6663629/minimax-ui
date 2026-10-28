@@ -69,7 +69,7 @@ from ..services.billing import add_credits, compute_ad_image_cost, compute_cost
 router = APIRouter(prefix="/api/hibtv", tags=["hibtv"])
 
 DOC_KINDS = hibtv_jobs.DOC_KINDS          # outline/cast/art/staging/script/storyboard
-EP_KINDS = hibtv_jobs.EP_KINDS            # script/storyboard（按集）
+EP_KINDS = hibtv_jobs.EP_KINDS            # script/staging/storyboard（按集）
 TEXT_EXTS = {".md", ".markdown", ".txt"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 MAX_TEXT_BYTES = 8 * 1024 * 1024

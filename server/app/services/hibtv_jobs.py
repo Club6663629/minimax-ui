@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 TEXT_KINDS = ("outline", "cast", "art", "refs", "script", "staging", "storyboard")
 # 全集级文档（ep 恒为 0）与按集文档
 DOC_KINDS = ("outline", "cast", "art", "staging", "script", "storyboard")
-EP_KINDS = ("script", "storyboard")
+EP_KINDS = ("script", "staging", "storyboard")
 
 
 # ------------------------------------------------------------------ 路径与 JSON
