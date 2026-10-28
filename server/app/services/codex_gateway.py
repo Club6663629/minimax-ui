@@ -13,7 +13,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import httpx
@@ -191,6 +191,27 @@ async def healthz() -> Dict:
     return data if isinstance(data, dict) else {"raw": data}
 
 
+def _norm_job(data: Any) -> Dict:
+    """网关回包归一：v1 的作业 id 字段叫 `job_id`，别处文档又叫 `id`，两边都认。
+
+    调用方只读 `row["id"]` / `row["job_id"]`（两个键都会被填上），
+    状态别名 `state` 也归一到 `status`，避免每处调用都写一遍兼容。
+    """
+    if not isinstance(data, dict):
+        return {}
+    row = dict(data)
+    inner = row.get("job")
+    if isinstance(inner, dict):
+        row = {**inner, **row}
+    jid = str(row.get("job_id") or row.get("id") or "")
+    if jid:
+        row["job_id"] = jid
+        row["id"] = jid
+    if not row.get("status") and row.get("state"):
+        row["status"] = row["state"]
+    return row
+
+
 async def health() -> Dict:
     resp = await _request("GET", "/v1/health")
     try:
@@ -240,16 +261,22 @@ async def submit(
                                or getattr(settings, "codex_gw_silence_timeout", 600)),
     }
     resp = await _request("POST", "/v1/jobs", json_body=body)
-    data = resp.json() if resp.content else {}
-    if not isinstance(data, dict) or not data.get("id"):
+    try:
+        data = resp.json() if resp.content else {}
+    except ValueError:
+        data = {"raw": (resp.text or "")[:2000]}
+    row = _norm_job(data)
+    if not row.get("id"):
         raise CodexError("网关未返回 job id", status=resp.status_code, payload={"raw": data})
-    return data
+    return row
 
 
 async def job(job_id: str) -> Dict:
     resp = await _request("GET", f"/v1/jobs/{quote(str(job_id), safe='')}")
-    data = resp.json()
-    return data if isinstance(data, dict) else {}
+    try:
+        return _norm_job(resp.json())
+    except ValueError:
+        return {}
 
 
 async def jobs(limit: int = 50, status: str = "") -> List[Dict]:
@@ -263,7 +290,7 @@ async def jobs(limit: int = 50, status: str = "") -> List[Dict]:
         rows = data.get("jobs") or data.get("items") or []
     else:
         rows = data
-    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    return [_norm_job(r) for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
 
 async def cancel(job_id: str) -> Dict:
@@ -303,6 +330,8 @@ async def download_all(job_id: str, dest_dir: Path, *,
     dest_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Dict] = []
     for row in rows or []:
+        if isinstance(row, str):                      # 只回路径时也当一条产物
+            row = {"path": row}
         rel = str(row.get("path") or "").lstrip("/")
         if not rel:
             abs_path = str(row.get("abs") or "")
