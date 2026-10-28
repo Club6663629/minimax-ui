@@ -9,6 +9,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -20,6 +22,15 @@ from . import codex_gateway as gw
 from . import hibtv_stages
 
 logger = logging.getLogger(__name__)
+
+GW_MATERIALS_HOST = Path(os.environ.get(
+    "HIBTV_GW_MATERIALS_HOST",
+    "/root/sai-v2/dw-engine/tenants/xiaojun/data/workspace/hibtv-materials",
+))
+GW_MATERIALS_MOUNT = Path(os.environ.get(
+    "HIBTV_GW_MATERIALS_MOUNT",
+    "/data/workspace/hibtv-materials",
+))
 
 # 平台 job kind → 网关 stage
 STAGES = gw.STAGES
@@ -60,6 +71,24 @@ def source_path(project_id: int) -> Path:
     return project_dir(project_id) / "source.txt"
 
 
+def gateway_source_path(project_id: int) -> Path:
+    """给 codex 的正文路径（网关容器内可见）。"""
+    return GW_MATERIALS_MOUNT / str(int(project_id)) / "source.txt"
+
+
+def _publish_source(project_id: int, local_path: Path) -> Path:
+    """把平台正文同步到网关素材目录；复制失败必须阻断任务。"""
+    target = GW_MATERIALS_HOST / str(int(project_id)) / "source.txt"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_path, target)
+    except OSError as exc:
+        raise RuntimeError(f"网关素材中转失败：{local_path} -> {target}：{exc}") from exc
+    if not target.is_file() or target.stat().st_size != local_path.stat().st_size:
+        raise RuntimeError(f"网关素材中转校验失败：{target}")
+    return target
+
+
 def job_dir(project_id: int, gateway_jid: str) -> Path:
     d = project_dir(project_id) / "codex" / (gateway_jid or "unknown")
     d.mkdir(parents=True, exist_ok=True)
@@ -69,6 +98,7 @@ def job_dir(project_id: int, gateway_jid: str) -> Path:
 def write_source(project_id: int, text: str) -> str:
     path = source_path(project_id)
     path.write_text(text or "", encoding="utf-8")
+    _publish_source(project_id, path)
     return str(path)
 
 
@@ -159,10 +189,21 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
     lines: List[str] = [head]
 
     if kind == "outline":
-        src = project.novel_path or (str(source_path(project.id))
-                                    if source_path(project.id).exists() else "")
-        if not src:
-            raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
+        local_source = source_path(project.id)
+        if not local_source.is_file():
+            # 兼容历史项目：旧数据可能只存了 project.novel_path，本地没有 source.txt。
+            legacy = str(project.novel_path or "").strip()
+            if legacy and Path(legacy).is_file():
+                try:
+                    local_source.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(legacy, local_source)
+                except OSError as exc:
+                    raise RuntimeError("历史小说正文复制失败，先补小说再跑大纲") from exc
+            else:
+                raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
+        # 重跑旧项目时也补建中转副本；历史数据不做批量迁移。
+        _publish_source(project.id, local_source)
+        src = str(gateway_source_path(project.id))
         lines.append(
             f"把这部小说改编成 {int(project.episodes or 1)} 集竖屏短剧大纲，"
             f"每集约 {minutes:g} 分钟，画面 {ratio}。")

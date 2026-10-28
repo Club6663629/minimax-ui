@@ -448,12 +448,14 @@ export interface RefLayerDoc {
   outfits?: Record<string, { top?: RefLayer; bottom?: RefLayer; details?: RefLayer }>;
 }
 
+export type ArtAnchor = string | { name?: string; desc?: string };
+
 export interface ArtScene {
   id: string;
   name: string;
   primary?: boolean;
   summary?: string;
-  anchors?: string[];
+  anchors?: ArtAnchor[];
   lighting?: string[];
   usage?: { episodes?: number[]; beats?: number[] };
   variantOf?: string;
@@ -464,6 +466,7 @@ export interface ArtScene {
 export interface ArtProp {
   id: string;
   name?: string;
+  anchors?: ArtAnchor[];
   scale?: string;
   states?: string[];
   relatedScenes?: string[];

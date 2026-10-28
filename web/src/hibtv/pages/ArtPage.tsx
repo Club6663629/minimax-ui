@@ -201,11 +201,19 @@ export default function ArtPage() {
             {anchors.map((row) => (
               <div key={row.id} style={{ padding: "3px 0" }}>
                 <span className="mono dim">{row.id}</span> {row.name}：
-                {row.anchors.map((a) => (
-                  <span key={a} className="chip ghost" style={{ marginLeft: 4 }}>
-                    {a}
-                  </span>
-                ))}
+                {row.anchors.map((anchor, i) =>
+                  typeof anchor === "string" ? (
+                    <span key={`${row.id}-${i}`} className="chip ghost" style={{ marginLeft: 4 }}>
+                      {anchor}
+                    </span>
+                  ) : (
+                    <div key={`${row.id}-${i}`} style={{ marginTop: 4, paddingLeft: 28 }}>
+                      {anchor.name ? <strong>{anchor.name}</strong> : null}
+                      {anchor.name && anchor.desc ? "：" : null}
+                      {anchor.desc || null}
+                    </div>
+                  ),
+                )}
               </div>
             ))}
             <div className="dim" style={{ marginTop: 6 }}>

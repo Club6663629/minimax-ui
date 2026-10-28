@@ -385,13 +385,18 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         h3 = (pmd.strip() or str(seg.get("h3Prompt") or "").strip())
         if not h3:
             raise StageError(f"{seg_id} 缺 h3Prompt / prompt.md（段出片没有入参）")
+        cast_doc = get_doc(db, project.id, "cast")
+        cast_rows = (jloads(cast_doc.data, {}).get("characters") or []) if cast_doc else []
+        line_speakers = _script_line_speakers(db, project, ep)
+        h3 = _bind_h3_prompt(h3, seg, cast_rows, line_speakers)
         secs = cut_seconds(seg)
         manifest_secs = float(item.get("seconds") or 0)
         if manifest_secs and abs(manifest_secs - secs) > SECONDS_TOLERANCE * max(1, len(cuts)):
             checked.append({"seg": seg_id, "note": f"manifest {manifest_secs}s ≠ Σ切 {secs}s"})
         oversize = max(secs, manifest_secs) > MAX_SEGMENT_SECONDS + 1e-6
         seg["h3Prompt"] = h3
-        seg["promptSource"] = "prompt.md" if pmd else "storyboard.h3Prompt"
+        seg["promptSource"] = (("prompt.md" if pmd else "storyboard.h3Prompt")
+                               + "+identity-binding")
         seg["promptSha8"] = sha8(h3)
         seg["frameCount"] = len(cuts)
         seg["pictureCount"] = len(pictures) or len(cuts)
@@ -415,6 +420,147 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         "meta": {"report": _report_rel(files, "storyboard"),
                  "manifest": bool(manifest)},
     }
+
+
+_H3_LOCK_MARK = "[[hibtv_identity_speaker_lock_v1]]"
+_DIALOGUE_RE = re.compile(r"<d>(.*?)</d>", re.IGNORECASE | re.DOTALL)
+_SPEAKER_RE = re.compile(r"\(S(\d+)\)", re.IGNORECASE)
+
+
+def _dialogue_key(text: str) -> str:
+    text = re.sub(r"<[^>]+>", "", text or "")
+    text = re.sub(r"^\s*\[[^\]]+\]", "", text)
+    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE).casefold()
+
+
+def _script_line_speakers(db: Session, project: HibtvProject, ep: int) -> Dict[str, str]:
+    """台词原文 → 角色 ID；用于给没有 (S#) 的 <d> 补回明确归属。"""
+    from .hibtv_jobs import get_doc, jloads
+
+    doc = get_doc(db, project.id, "script", ep)
+    row = episode_of(jloads(doc.data, {}).get("episodes") if doc else [], ep)
+    found: Dict[str, set] = {}
+    for scene in row.get("scenes") or []:
+        for beat in scene.get("flow") or []:
+            line = _dialogue_key(str(beat.get("line") or ""))
+            speaker = str(beat.get("speaker") or "").strip()
+            if line and speaker:
+                found.setdefault(line, set()).add(speaker)
+    return {key: next(iter(codes)) for key, codes in found.items() if len(codes) == 1}
+
+
+def _bind_h3_prompt(h3: str, seg: Dict, cast_rows: List[Dict],
+                    line_speakers: Optional[Dict[str, str]] = None) -> str:
+    """把孤立 S# 展开为角色身份，并为每个 Shot 写入人数/口型/台词归属锁。"""
+    if not h3 or _H3_LOCK_MARK in h3:
+        return h3
+    cast = [row for row in (cast_rows or []) if str(row.get("id") or "").strip()]
+    code_to_speaker = {str(row["id"]): f"S{i + 1}" for i, row in enumerate(cast)}
+    by_code = {str(row["id"]): row for row in cast}
+    line_speakers = line_speakers or {}
+    cuts = seg.get("cuts") or []
+
+    legend = []
+    for row in cast:
+        code = str(row["id"])
+        persona = row.get("persona") or {}
+        legend.append(
+            f"{code_to_speaker[code]} = {code} {row.get('name') or code}"
+            f"（{persona.get('gender') or '性别见角色卡'}；"
+            f"{persona.get('identity') or '身份见角色卡'}；"
+            "位置按对应 Shot 的角色顺序确定）")
+
+    shot_locks: Dict[int, str] = {}
+    for match in re.finditer(r"(?m)^\[Shot\s+(\d+)\]", h3):
+        shot_no = int(match.group(1))
+        if shot_no > len(cuts):
+            raise StageError(f"{seg.get('id') or '分镜段'} Shot {shot_no} 没有对应 cut")
+        cut = cuts[shot_no - 1] or {}
+        chars = list(dict.fromkeys(
+            str(code) for code in (cut.get("characters") or []) if str(code)))
+        unknown = [code for code in chars if code not in by_code]
+        if unknown:
+            raise StageError(
+                f"{seg.get('id') or '分镜段'} Shot {shot_no} 引用未知角色 {unknown}")
+        try:
+            declared_max = int(cut.get("maxOnScreen") or 0)
+        except (TypeError, ValueError):
+            declared_max = 0
+        # 画面人数 = 去重具名角色数与导演声明上限取大者：具名角色必须全部出场；
+        # 正数 maxOnScreen 可能含未具名群演，需保留；负数按 0 处理避免非法人数。
+        max_on_screen = max(len(chars), max(0, declared_max))
+
+        next_shot = re.search(r"(?m)^\[Shot\s+\d+\]", h3[match.end():])
+        end = match.end() + next_shot.start() if next_shot else len(h3)
+        soundscape = re.search(r"(?m)^overall_soundscape:", h3[match.end():end])
+        if soundscape:
+            end = match.end() + soundscape.start()
+        body = h3[match.start():end]
+
+        speakers: List[str] = []
+        for dialogue in _DIALOGUE_RE.finditer(body):
+            code = line_speakers.get(_dialogue_key(dialogue.group(1)), "")
+            if not code:
+                prior = body[:dialogue.start()]
+                labels = _SPEAKER_RE.findall(prior)
+                if labels:
+                    label = f"S{labels[-1]}"
+                    code = next((cid for cid, sid in code_to_speaker.items()
+                                 if sid == label), "")
+            if not code and len(chars) == 1:
+                code = chars[0]
+            if not code:
+                raise StageError(
+                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 台词无法绑定角色："
+                    f"{dialogue.group(1)[:80]}")
+            if code not in chars:
+                raise StageError(
+                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 说话人 {code} "
+                    f"不在 cut.characters {chars} 中")
+            if code not in speakers:
+                speakers.append(code)
+
+        people = "、".join(
+            f"{code} {by_code[code].get('name') or code}（第 {i + 1} 位）"
+            for i, code in enumerate(chars)) or "无完整人物"
+        if speakers:
+            speaker_text = " and ".join(
+                f"{code_to_speaker[code]} ({code} {by_code[code].get('name') or code})"
+                for code in speakers)
+            speech = (f"Only {speaker_text} speaks; all other characters keep "
+                      "their mouths closed.")
+        else:
+            speech = "No character speaks; all characters keep their mouths closed."
+        shot_locks[shot_no] = (
+            f"Character/speaker lock: maxOnScreen={max_on_screen}; "
+            f"exactly {max_on_screen} different people in frame ({people}); "
+            "the same character must never appear twice; no clones, twins, duplicate "
+            f"faces, extra people, character sheet or multi-view grid. {speech}")
+
+    if not shot_locks:
+        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 没有 [Shot N] 结构")
+
+    def add_lock(match):
+        no = int(match.group(2))
+        body = match.group(0).rstrip()
+        return f"{body} {shot_locks[no]}\n"
+
+    bound = re.sub(
+        r"(?ms)^(\[Shot\s+(\d+)\].*?)(?=^\[Shot\s+\d+\]|\noverall_soundscape:|\Z)",
+        add_lock, h3)
+    block = "\n".join([
+        _H3_LOCK_MARK,
+        "Character and speaker binding (authoritative):",
+        *legend,
+        "Every S# is permanently bound to the listed character ID and name. "
+        "Never transfer a line to another character.",
+        "",
+        "",
+    ])
+    marker = "integrated_multimodal_description:"
+    if marker not in bound:
+        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 缺 {marker}")
+    return bound.replace(marker, block + marker, 1)
 
 
 def _load_manifest(files: Dict[str, Path]) -> Dict[str, Dict]:
@@ -442,7 +588,7 @@ def _load_prompts(files: Dict[str, Path]) -> Dict[str, str]:
     return out
 
 
-_PICTURE_RE = re.compile(r"^\s*Picture\s+(\d+)\b", re.IGNORECASE)
+_PICTURE_RE = re.compile(r"^\s*(?:[-*#>\u2022]+\s*)?Picture\s+(\d+)\b", re.IGNORECASE)
 
 
 def _count_pictures(prompt_md: str) -> int:
@@ -481,6 +627,7 @@ def sync_frames(db: Session, project: HibtvProject, ep: int,
                 "size": cut.get("size") or "",
                 "camera": cut.get("camera") or "",
                 "characters": cut.get("characters") or [],
+                "maxOnScreen": cut.get("maxOnScreen"),
                 "props": cut.get("props") or [],
                 "startsAt": (item.get("cutStarts") or [])[i - 1] if i - 1 < len(item.get("cutStarts") or []) else None,
                 "expected": pictures[i - 1] if i - 1 < len(pictures) else "",

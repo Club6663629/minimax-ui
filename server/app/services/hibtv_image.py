@@ -162,6 +162,19 @@ def pad_to_grid(path: Path, width: int, height: int) -> Path:
     return path
 
 
+def _merge_negative(base: str, extra: str, limit: int = 1600) -> str:
+    """合并公共/关键帧负向词，去重且不截掉后加入的同角色复制约束。"""
+    out: List[str] = []
+    seen = set()
+    for raw in (base or "").split(",") + (extra or "").split(","):
+        term = raw.strip()
+        key = term.casefold()
+        if term and key not in seen:
+            seen.add(key)
+            out.append(term)
+    return ", ".join(out)[:limit]
+
+
 def _inject(prompt: str, image_names: Sequence[str], *, width: int, height: int, seed: int,
             prefix: str, text_only: bool, negative: str = "",
             keep_adv_negative: bool = True) -> dict:
@@ -194,8 +207,8 @@ def _inject(prompt: str, image_names: Sequence[str], *, width: int, height: int,
     if negative.strip():
         base = str(wf[advimage.NODE_ENCODE]["inputs"].get("negative_prompt") or "")
         wf[advimage.NODE_ENCODE]["inputs"]["negative_prompt"] = (
-            f"{base}, {negative.strip()}"[:900]
-            if (keep_adv_negative and base) else negative.strip()[:900]
+            _merge_negative(base, negative) if (keep_adv_negative and base)
+            else negative.strip()[:1600]
         )
     # 关 PE：474.prompt 直接吃 484.on_false，也就是我们的提示词原文
     wf[advimage.NODE_SWITCH]["inputs"]["switch"] = False
