@@ -409,6 +409,8 @@
 .hibtv-root .spin{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.5px solid rgba(224,179,106,.3);border-top-color:var(--gold);animation:hspin .8s linear infinite}
 @keyframes hspin{to{transform:rotate(360deg)}}
 .hibtv-root .danger{color:var(--red)}
+/* 纯文本红：`.tiny red` 这类「为什么被禁用」的提示必须看得出是错，而不是正文色 */
+.hibtv-root .red{color:var(--red)}
 .hibtv-root .warn{color:#d9a441}
 .hibtv-root .grow{flex:1;min-width:0}
 .hibtv-root .nowrap{white-space:nowrap}
@@ -426,3 +428,12 @@
 .hibtv-root .gates .g{display:flex;gap:7px;font-size:11px;color:#b3aa9c;line-height:1.6}
 .hibtv-root .gates .g b{font-weight:500;color:var(--gold-dim);flex:0 0 auto}
 .hibtv-root .empty .acts{display:flex;gap:8px;justify-content:center}
+/* 窄屏（平板竖屏 / 分屏）：先收侧栏与右抽屉，再并排改单列，避免主列被压成一条竖排文字 */
+@media(max-width:1200px){
+  .hibtv-root .side{display:none}
+}
+@media(max-width:900px){
+  .hibtv-root .panel{display:none}
+  .hibtv-root .main{padding:14px 14px 26px}
+  .hibtv-root .split,.hibtv-root .split3,.hibtv-root .row2,.hibtv-root .row3,.hibtv-root .hookgrid{grid-template-columns:1fr}
+}

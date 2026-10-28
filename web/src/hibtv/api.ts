@@ -64,8 +64,9 @@ export const mediaUrl = fileUrl;
 export function maskHost(raw?: string): string {
   const value = (raw || "").trim();
   if (!value) return "";
+  // 回环 + 私网地址一律不上屏：内网拓扑不该出现在用户界面里
   return value.replace(
-    /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0)(:\d+)?/i,
+    /^https?:\/\/(127\.0\.0\.1|localhost|0\.0\.0\.0|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(:\d+)?/i,
     (_m, _host, port) => `内网节点${port || ""}`,
   );
 }

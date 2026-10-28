@@ -29,6 +29,15 @@ export default function ArtPage() {
   const scenes = useMemo(() => assets.filter((a) => a.kind === "scene"), [assets]);
   const props = useMemo(() => assets.filter((a) => a.kind === "prop"), [assets]);
   const shown = tab === "scene" ? scenes : tab === "prop" ? props : [...scenes, ...props];
+  // 一致性锚点：纯文本，供人核对与改图（不做自动校验）
+  // 必须放在 `if (!project)` 之前：首帧 project 还没到时早退，钩子数量会变 → React #310
+  const anchors = useMemo(
+    () =>
+      (art.scenes || [])
+        .filter((s) => (s.anchors || []).length)
+        .map((s) => ({ id: s.id, name: s.name, anchors: s.anchors || [] })),
+    [art.scenes],
+  );
 
   const drawAll = async () => {
     if (!project) return;
@@ -118,14 +127,6 @@ export default function ArtPage() {
   }
 
   const notReady = !assetsLoading && assets.length === 0 && !art.scenes?.length;
-  // 一致性锚点：纯文本，供人核对与改图（不做自动校验）
-  const anchors = useMemo(
-    () =>
-      (art.scenes || [])
-        .filter((s) => (s.anchors || []).length)
-        .map((s) => ({ id: s.id, name: s.name, anchors: s.anchors || [] })),
-    [art.scenes],
-  );
 
   return (
     <Stage>

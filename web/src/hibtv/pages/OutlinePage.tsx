@@ -221,6 +221,9 @@ export default function OutlinePage() {
   }
 
   if (!outline.episodes?.length) {
+    // 「对账」「产物」不依赖大纲正文：空态时也得跟着左侧 tab 走，
+    // 否则点「看缺口」落到 /outline/align 却被塞回「还没有大纲」。
+    const tabbed = tab === "align" || tab === "report";
     return (
       <Stage side={side}>
         {head}
@@ -230,24 +233,36 @@ export default function OutlinePage() {
           onCancel={job ? () => void hibtvApi.cancelRemoteJob(project.id, job.id) : undefined}
         />
         <GateList gates={gates} />
-        <Empty
-          glyph="纲"
-          title="还没有大纲"
-          sub={
-            job?.status === "failed"
-              ? `大纲生成失败：${job.error}${job.timeoutKind ? `（${job.timeoutKind}）` : ""}`
-              : "由 codex 跑 novel-outline：出集数/时长/比例、改编方案（保留·砍·合并·风险）、爽点表与分集梗概。"
-          }
-        >
-          <button className="btn gold" onClick={() => rerun()} disabled={!gate.ok} title={gate.why}>
-            生成大纲
-          </button>
-          {!gate.ok && (
-            <div className="tiny red" style={{ marginTop: 8 }}>
-              {gate.why}
+        {tabbed ? (
+          <>
+            <div className="note" style={{ marginBottom: 10 }}>
+              大纲还没有产物：下面的表只能列出「大纲要求 = 0」，跑完大纲后才看得出真的缺口。
             </div>
-          )}
-        </Empty>
+            {tab === "align" && <AlignTab outline={outline} />}
+            {tab === "report" && (
+              <ReportTab projectId={project.id} jobId={job?.id || 0} meta={doc?.meta} />
+            )}
+          </>
+        ) : (
+          <Empty
+            glyph="纲"
+            title="还没有大纲"
+            sub={
+              job?.status === "failed"
+                ? `大纲生成失败：${job.error}${job.timeoutKind ? `（${job.timeoutKind}）` : ""}`
+                : "由 codex 跑 novel-outline：出集数/时长/比例、改编方案（保留·砍·合并·风险）、爽点表与分集梗概。"
+            }
+          >
+            <button className="btn gold" onClick={() => rerun()} disabled={!gate.ok} title={gate.why}>
+              生成大纲
+            </button>
+            {!gate.ok && (
+              <div className="tiny red" style={{ marginTop: 8 }}>
+                {gate.why}
+              </div>
+            )}
+          </Empty>
+        )}
       </Stage>
     );
   }

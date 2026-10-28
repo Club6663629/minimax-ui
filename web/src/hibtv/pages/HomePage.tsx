@@ -66,6 +66,12 @@ export default function HibtvHomePage() {
   const bodyLen = draft.text.trim().length;
   const hasNovel = bodyLen > 0 || Boolean(draft.novel);
 
+  // 打开表单时按网关真实状态决定默认值：网关掉线还默认勾「立刻排大纲」= 默认点一个必然失败的动作
+  const openForm = () => {
+    setDraft({ ...EMPTY_DRAFT, autoOutline: gate.ok });
+    setOpen(true);
+  };
+
   const create = async () => {
     if (!hasNovel) {
       toast("请粘贴小说/梗概正文，或上传一个 .md / .txt 文件");
@@ -136,7 +142,7 @@ export default function HibtvHomePage() {
           right={
             <>
               <CodexLight />
-              <button className="btn gold" onClick={() => setOpen(true)}>
+              <button className="btn gold" onClick={() => openForm()}>
                 ＋ 新建短剧项目
               </button>
             </>
@@ -187,7 +193,7 @@ export default function HibtvHomePage() {
               </span>
             </div>
           ))}
-          <div className="pnew" onClick={() => setOpen(true)}>
+          <div className="pnew" onClick={() => openForm()}>
             <span className="th">＋</span>
             <span>
               <span className="nm">新建短剧项目</span>
@@ -206,7 +212,7 @@ export default function HibtvHomePage() {
               title="还没有短剧项目"
               sub="粘贴小说正文或上传 .md / .txt，填集数与单集秒数；大纲由 codex 的 novel-outline 产出，回来自动回填项目参数。"
             >
-              <button className="btn gold" onClick={() => setOpen(true)} disabled={!gate.ok} title={gate.why}>
+              <button className="btn gold" onClick={() => openForm()} disabled={!gate.ok} title={gate.why}>
                 输入小说开始
               </button>
               {!gate.ok && (

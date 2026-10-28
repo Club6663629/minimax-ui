@@ -315,14 +315,18 @@ export default function OverviewPage() {
         <div className="card">
           <div className="card-hd">
             <span className="t">缺口</span>
-            <span className={`chip ${gaps.length ? "red" : "green"}`}>{gaps.length} 项</span>
+            <span className={`chip ${!gate.ok ? "ghost" : gaps.length ? "red" : "green"}`}>
+              {!gate.ok ? "无法计算" : `${gaps.length} 项`}
+            </span>
             <span className="sp" />
             <span className="tiny dim">读的是网关产物的门结果</span>
           </div>
           <div className="card-bd small mut" style={{ lineHeight: 1.9 }}>
-            {gaps.length
-              ? gaps.slice(0, 4).map((g, i) => <div key={i}>· {g}</div>)
-              : "文档的门结果里没有失败项（或该阶段产物没有结构化门结果）。"}
+            {!gate.ok
+              ? `网关不可用，缺口无法计算：${gate.why}`
+              : gaps.length
+                ? gaps.slice(0, 4).map((g, i) => <div key={i}>· {g}</div>)
+                : "文档的门结果里没有失败项（或该阶段产物没有结构化门结果）。"}
           </div>
           <div style={{ padding: "0 14px 14px" }}>
             <button className="btn sm" onClick={() => navigate("/hibtv/outline/align")}>

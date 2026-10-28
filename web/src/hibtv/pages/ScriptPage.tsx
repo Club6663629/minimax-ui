@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { hibtvApi } from "../api";
 import { Stage } from "../HibtvLayout";
+import { CodexLight, useCodexGate } from "../components/CodexLight";
 import { Empty, GateChips, GateList, GenBar, InlineEdit, Loading, PageHead } from "../components/ui";
 import { useDoc, useHibtv, useJob, usePatch } from "../state";
 import type { OutlineData, ScriptEpisode } from "../types";
@@ -22,6 +23,7 @@ export default function ScriptPage() {
   const { data, doc, patch, loading } = usePatch("script", ep);
   const { data: outlineData } = useDoc("outline");
   const job = useJob("script", ep);
+  const gate = useCodexGate();
 
   const outline = (outlineData || {}) as OutlineData;
   const params = (data?.params || {}) as Params;
@@ -88,10 +90,19 @@ export default function ScriptPage() {
     </>
   );
 
+  const runScript = () => {
+    // 网关掉线时不允许假装入队：先在本地拦下，说清楚是网关而不是「先跑大纲」
+    if (!gate.ok) {
+      toast(gate.why);
+      return;
+    }
+    void runJob("script", ep);
+  };
+
   if (!project) {
     return (
       <Stage side={side}>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>
@@ -107,6 +118,7 @@ export default function ScriptPage() {
       lede="剧本是上游，不是产物：hibtv 不重写台词，只把每一拍拆成可拍的秒数，并把表演提示留给演员与镜头。"
       right={
         <>
+          <CodexLight />
           <GateChips gates={doc?.gates} />
           <button
             className="btn"
@@ -120,8 +132,8 @@ export default function ScriptPage() {
           <button className="btn" onClick={() => navigate(`/hibtv/storyboard/${ep}`)}>
             看分镜
           </button>
-          <button className="btn gold" onClick={() => void runJob("script", ep)}>
-            {episode ? "重新解析本集" : "生成本集剧本"}
+          <button className="btn gold" onClick={runScript} disabled={!gate.ok} title={gate.why}>
+            {episode ? "重新生成本集剧本" : "生成本集剧本"}
           </button>
         </>
       }
@@ -151,7 +163,7 @@ export default function ScriptPage() {
               : "从上传的剧本里解析这一集的场次与拍：台词逐字保留，动作节拍不写引号对白。"
           }
         >
-          <button className="btn gold" onClick={() => void runJob("script", ep)}>
+          <button className="btn gold" onClick={runScript} disabled={!gate.ok} title={gate.why}>
             生成第 {ep} 集剧本
           </button>
         </Empty>

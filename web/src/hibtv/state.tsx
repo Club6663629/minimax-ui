@@ -50,7 +50,7 @@ interface HibtvCtx {
   refreshProject: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshProjects: () => Promise<void>;
-  refreshCodex: () => Promise<void>;
+  refreshCodex: () => Promise<boolean>;
   bump: () => void;
   toast: (msg: string, action?: ToastAction) => void;
   layer: ReactNode | null;
@@ -130,12 +130,15 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
 
   const refreshCodex = useCallback(async () => {
     try {
-      setCodex(await hibtvApi.codexStatus());
+      const next = await hibtvApi.codexStatus();
+      setCodex(next);
       setCodexError("");
+      return true;
     } catch (err) {
       // 掉线时后端返 503，body 里是「为什么不可用」：红态要能说清楚
       setCodex(null);
       setCodexError(errText(err));
+      return false;
     }
   }, []);
 

@@ -28,6 +28,7 @@ export default function SettingsPage() {
     selectProject,
   } = useHibtv();
   const navigate = useNavigate();
+  const [checking, setChecking] = useState(false);
   const [form, setForm] = useState({
     name: "",
     genre: "",
@@ -303,8 +304,17 @@ export default function SettingsPage() {
                 {codex?.available ? "可用" : "不可达"}
               </span>
               <span style={{ marginLeft: "auto" }} />
-              <button className="btn xs" onClick={() => void refreshCodex()}>
-                重新自检
+              <button
+                className="btn xs"
+                disabled={checking}
+                onClick={async () => {
+                  setChecking(true);
+                  const ok = await refreshCodex();
+                  setChecking(false);
+                  toast(ok ? "网关可用" : "网关不可达：原因见下方红字");
+                }}
+              >
+                {checking ? "自检中…" : "重新自检"}
               </button>
             </div>
             <div className="card-bd">
