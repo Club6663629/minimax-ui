@@ -152,6 +152,11 @@ export default function SettingsPage() {
   const active = jobs.filter((j) => j.status === "queued" || j.status === "running");
   const stageStats = codex?.stats?.byStage || [];
   const health = codex?.healthz || {};
+  // healthz.codex 是对象（{ok, version}），别直接 String() 成 [object Object]
+  const codexVersion =
+    health.codex && typeof health.codex === "object"
+      ? String((health.codex as Record<string, unknown>).version || (health.codex as Record<string, unknown>).ok || "")
+      : String(health.codex || "");
 
   return (
     <Stage>
@@ -327,7 +332,7 @@ export default function SettingsPage() {
               {row("project_id 前缀", codex?.projectPrefix || `hibtv-${project.id}`, "网关侧产物根目录")}
               {row(
                 "codex 版本",
-                String(health.codex || "—"),
+                codexVersion || "—",
                 health.deepseek ? "deepseek present" : health.deepseek === false ? "deepseek 缺失" : "",
               )}
               {row(

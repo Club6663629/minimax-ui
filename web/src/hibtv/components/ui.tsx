@@ -271,12 +271,19 @@ export function PageHead({
   return (
     <>
       <div className="eyebrow">{eyebrow}</div>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-        <div>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 240 }}>
           <div className="h1">{title}</div>
           {lede ? <p className="lede">{lede}</p> : null}
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>{right}</div>
+        <div
+          style={{
+            marginLeft: "auto", display: "flex", gap: 8, rowGap: 8,
+            alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end",
+          }}
+        >
+          {right}
+        </div>
       </div>
     </>
   );
