@@ -111,14 +111,71 @@ def write_blank_png(path: Path, width: int = 512, height: int = 512) -> Path:
     return path
 
 
-def _inject(prompt: str, image_name: str, *, width: int, height: int, seed: int,
+def pad_to_grid(path: Path, width: int, height: int) -> Path:
+    """把出图结果落到目标网格上：**只补边 / 裁边，不缩放变形**。
+
+    关键帧必须正好是 768×1344（9:16）这类原生画布；模型偶尔会给别的尺寸，
+    这里用边缘像素复制补满四周（多出来的部分居中裁掉），主体比例不会被拉歪。
+    没装 Pillow 时原样返回（宁可尺寸差一点，也不静默变形）。
+    """
+    target = (max(8, int(width)), max(8, int(height)))
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover —— 线上 requirements 已装 Pillow
+        logger.warning("未安装 Pillow，关键帧不做网格对齐：%s", path)
+        return path
+    try:
+        with Image.open(path) as raw:
+            im = raw.convert("RGB")
+            if im.size == target:
+                return path
+            iw, ih = im.size
+            tw, th = target
+            # 比目标大：先居中裁到目标尺寸（不再缩放）
+            if iw > tw or ih > th:
+                box = ((iw - min(iw, tw)) // 2, (ih - min(ih, th)) // 2,
+                       (iw + min(iw, tw)) // 2, (ih + min(ih, th)) // 2)
+                im = im.crop(box)
+                iw, ih = im.size
+            if iw == tw and ih == th:
+                im.save(path, "PNG")
+                return path
+            # 四周用边缘像素向外复制补满（左/右条带横向拉伸 1px、上/下同理）
+            canvas = Image.new("RGB", target)
+            left = (tw - iw) // 2
+            top = (th - ih) // 2
+            canvas.paste(im, (left, top))
+            if left:
+                left_band = im.crop((0, 0, 1, ih)).resize((left, ih))
+                right_band = im.crop((iw - 1, 0, iw, ih)).resize((tw - iw - left, ih))
+                canvas.paste(left_band, (0, top))
+                canvas.paste(right_band, (left + iw, top))
+            if top:
+                top_band = canvas.crop((0, top, tw, top + 1)).resize((tw, top))
+                bottom_band = canvas.crop((0, top + ih - 1, tw, top + ih)).resize(
+                    (tw, th - ih - top))
+                canvas.paste(top_band, (0, 0))
+                canvas.paste(bottom_band, (0, top + ih))
+            canvas.save(path, "PNG")
+    except (OSError, ValueError) as exc:  # pragma: no cover
+        logger.warning("关键帧网格对齐失败（保留原图）：%s（%s）", path, exc)
+    return path
+
+
+def _inject(prompt: str, image_names: Sequence[str], *, width: int, height: int, seed: int,
             prefix: str, text_only: bool, negative: str = "",
             keep_adv_negative: bool = True) -> dict:
-    """装配一次出图：关掉 PE（484），提示词直写 474。"""
+    """装配一次出图：关掉 PE（484），提示词直写 474。
+
+    参考图可多张（关键帧要同时拿场景图 + 出场角色图）：第 1 张为主真源，
+    其余按 `images.image_N` 顺序挂上（`advimage.inject_image_job` 已支持）。
+    """
+    names = [n for n in (image_names or []) if n]
     wf = advimage.inject_image_job(
         advimage.load_template(),
         scenario=prompt,
-        product_name=image_name,
+        product_name=(names[0] if names else ""),
+        product_names=names or None,
         ref_name="",
         prefix=prefix,
         seed=seed,
@@ -156,15 +213,23 @@ async def generate_image(
     prompt: str,
     out_path: Path,
     ref_path: Optional[Path] = None,
+    ref_paths: Optional[Sequence[Path]] = None,
     width: Optional[int] = None,
     height: Optional[int] = None,
     negative: str = "",
     keep_adv_negative: bool = True,
+    grid: bool = False,
 ) -> Dict:
-    """出一张图并落到 out_path。返回 {path, degraded, seed}。"""
+    """出一张图并落到 out_path。返回 {path, degraded, seed}。
+
+    `ref_paths` 支持多张参考图（关键帧 = 场景图 + 出场角色图）；`grid=True` 时按
+    出图模型的网格补边（`pad_to_grid`），不做变形缩放。
+    """
     w, h = int(width or settings.hibtv_image_width), int(height or settings.hibtv_image_height)
+    refs = [Path(p) for p in (list(ref_paths) if ref_paths else ([ref_path] if ref_path else [])) if p]
+    refs = [p for p in refs if p.exists()]
     if settings.mock_comfy:
-        # Mock 模式：写一张占位图，让「锚点 → 派生 → 引用素材」整条链路可离线验证
+        # Mock 模式：写一张占位图，让「资产图 → 关键帧 → 引用素材」整条链路可离线验证
         out_path.parent.mkdir(parents=True, exist_ok=True)
         write_blank_png(out_path, w, h)
         return {"path": str(out_path), "degraded": False, "seed": 0, "mock": True}
@@ -172,30 +237,28 @@ async def generate_image(
         raise RuntimeError(
             "短剧出图未配置：HIBTV_IMAGE_WORKER / ADVIDEO_IMAGE_WORKER 为空或模板缺失"
         )
-    text_only = False if ref_path else await probe_text_only()
+    text_only = False if refs else await probe_text_only()
     client = comfyui.ComfyUIClient(worker_url())
     seed = random.randint(0, 2 ** 63 - 1)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     async with _lock():
-        # 参考图：改图 / 派生视图用真实图；纯文本路径不需要（退化时用白底图）
-        img_name = ""
-        if ref_path:
-            img_name = await client.upload_image(Path(ref_path))
-        elif not text_only:
+        names = [await client.upload_image(p) for p in refs]
+        if not names:
+            # 纯文本路径也要给节点一张图（模板 475 必填），随后按 text_only 清空图片槽
             blank = HIBTV_DIR / "_blank" / f"blank_{w}x{h}.png"
             if not blank.exists():
                 write_blank_png(blank, w, h)
-            img_name = await client.upload_image(blank)
+            names = [await client.upload_image(blank)]
 
-        wf = _inject(prompt, img_name or "", width=w, height=h, seed=seed,
-                     prefix=f"hibtv_{seed}", text_only=bool(text_only and not ref_path),
+        wf = _inject(prompt, names, width=w, height=h, seed=seed,
+                     prefix=f"hibtv_{seed}", text_only=bool(text_only and not refs),
                      negative=negative, keep_adv_negative=keep_adv_negative)
         try:
             prompt_id = await client.submit(advimage._prune(wf, advimage.NODE_SAVE))  # noqa: SLF001
             info = await client.wait_image_result(prompt_id)
         except comfyui.ComfyUIError as exc:
-            if not ref_path and text_only:
+            if not refs and text_only:
                 # 探测说可以纯文本、实际不行：立刻退化成本地白底参考图再试一次
                 logger.warning("短剧出图纯文本被节点拒绝，退化白底参考图重试：%s", exc)
                 global _PROBE
@@ -203,8 +266,8 @@ async def generate_image(
                 blank = HIBTV_DIR / "_blank" / f"blank_{w}x{h}.png"
                 if not blank.exists():
                     write_blank_png(blank, w, h)
-                img_name = await client.upload_image(blank)
-                wf = _inject(prompt, img_name, width=w, height=h, seed=seed,
+                names = [await client.upload_image(blank)]
+                wf = _inject(prompt, names, width=w, height=h, seed=seed,
                              prefix=f"hibtv_{seed}", text_only=False, negative=negative,
                              keep_adv_negative=keep_adv_negative)
                 prompt_id = await client.submit(advimage._prune(wf, advimage.NODE_SAVE))  # noqa: SLF001
@@ -216,10 +279,12 @@ async def generate_image(
         content = await client.fetch_file(info["filename"], info.get("subfolder", ""),
                                           info.get("type", "output"))
         out_path.write_bytes(content)
+        if grid:
+            pad_to_grid(out_path, w, h)
         gap = _gap_sec()
         if gap > 0:
             await asyncio.sleep(gap)
-    return {"path": str(out_path), "degraded": not text_only and not ref_path, "seed": seed}
+    return {"path": str(out_path), "degraded": not text_only and not refs, "seed": seed}
 
 
 async def generate_batch(jobs: Sequence[Dict]) -> List[Dict]:

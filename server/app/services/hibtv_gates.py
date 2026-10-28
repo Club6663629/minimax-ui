@@ -1,213 +1,181 @@
-"""短剧工作台：确定性质量门（调用 vendored skill 脚本）。
+"""短剧工作台：质量门**读产物**（不再跑脚本）。
 
-`shuohao-skills` 的每个 skill 都自带 validate/checkup 脚本（零依赖 Node ≥18）。
-本模块把生成的文档落成临时 JSON，调 `node novel-*.mjs validate ...`，
-把结果写回 `hibtv_docs.gates`：
-
-    {"status": "ok|fail|skipped", "problems": [...], "checked_at": "...", "runner": "node x.y.z"}
-
-node 缺失时**显式标记 skipped**（UI 明示「质量门未运行」），绝不静默通过。
+口径变了，别再退回去：
+- 门在网关侧由 skill 自己跑，平台**不再**调 `node *.mjs validate`，也不读 skill 规范；
+- 平台只读产物：优先 `.gates.jsonl`（逐次运行 + 逐条失败），退回 `*-report.html`
+  里的 `gatepill N/M` 徽标（展示层，脚本改版即失效 → 退化为 `skipped` 并明示）；
+- 用户就地改稿后门**没有复跑**，如实标 `stale`（「改动后门未复跑」），绝不伪装成通过。
 """
 import json
 import logging
-import shutil
-import subprocess
-import tempfile
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
-
-from ..config import settings
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-SKILL_ROOT = Path(__file__).resolve().parent / "skills" / "shuohao-skills" / "skills"
+STATUS_OK = "ok"
+STATUS_FAIL = "fail"
+STATUS_SKIPPED = "skipped"
+STATUS_STALE = "stale"
 
-# kind → (skill 目录, 脚本名)
-_SCRIPTS: Dict[str, tuple] = {
-    "outline": ("novel-outline", "novel-outline.mjs"),
-    "script": ("novel-script", "novel-script.mjs"),
-    "storyboard": ("novel-storyboard", "novel-storyboard.mjs"),
-}
-
-_TIMEOUT = 120
-
-
-def _node_bin() -> Optional[str]:
-    """找到可用的 node 可执行文件；找不到返回 None（门降级为 skipped）。"""
-    bin_name = (settings.hibtv_node_bin or "node").strip() or "node"
-    found = shutil.which(bin_name)
-    if found:
-        return found
-    # 常见 nvm / homebrew 兜底
-    for guess in ("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"):
-        if Path(guess).exists():
-            return guess
-    return None
+_GATEPILL_RE = re.compile(r"gatepill\s+(?P<cls>[\w-]+)\"[^>]*>(?P<text>[^<]*)", re.IGNORECASE)
+_RATIO_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
 
 
 def status() -> Dict:
-    node = _node_bin()
+    """链路状态：门已改成「读网关产物」，本机不再需要 node。"""
     return {
-        "available": bool(node),
-        "node": node or "",
-        "bin": settings.hibtv_node_bin,
-        "skills": sorted(_SCRIPTS),
+        "mode": "artifacts",
+        "available": True,
+        "node": "",
+        "skills": [],
+        "note": "质量门由网关 skill 产出（.gates.jsonl / report.html），本机不再执行门脚本",
     }
 
 
-def _dump(path: Path, data) -> None:
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+def from_artifacts(files: Dict[str, Path], doc_name: str = "", *,
+                   skipped: str = "") -> Dict:
+    """从一段 stage 的产物里取门结果。
 
-
-def run_gates(
-    kind: str,
-    data: Dict,
-    *,
-    outline: Optional[Dict] = None,
-    art: Optional[Dict] = None,
-    script: Optional[Dict] = None,
-) -> Dict:
-    """跑一个文档的确定性质量门。任何异常都收敛成 fail，不抛。
-
-    `problems` 只放**内容缺陷**（概览页按它统计缺口）；门没跑起来的原因
-    （缺 node / 缺脚本 / 缺前置文档）放 `notes`，否则“未运行”会被当成违规计入缺口。
+    - `.gates.jsonl` 优先：`{"kind":"run","gates":N,"failed":M}` + 逐条 `{"kind":"fail",...}`
+    - 否则找 `*report*.html` 的 `gatepill` 徽标（只能拿到 N/M，明细从 HTML 行里捞）
+    - 都没有 → `skipped` + note（明示「没有门结果」，不当作通过）
     """
-    entry = _SCRIPTS.get(kind)
-    if not entry:
-        return {"status": "skipped", "problems": [],
-                "notes": ["该文档类型没有确定性质量门"], "checked_at": _now()}
-    node = _node_bin()
-    if not node:
-        return {
-            "status": "skipped",
-            "problems": [],
-            "notes": [f"未找到 Node（HIBTV_NODE_BIN={settings.hibtv_node_bin}），质量门未运行"],
-            "checked_at": _now(),
-            "runner": "",
-        }
-    skill_dir, script_name = entry
-    script_path = SKILL_ROOT / skill_dir / "scripts" / script_name
-    if not script_path.exists():
-        return {"status": "skipped", "problems": [],
-                "notes": [f"质量门脚本缺失：{script_path}"], "checked_at": _now()}
-
-    with tempfile.TemporaryDirectory(prefix="hibtv_gate_") as tmp:
-        tmp_path = Path(tmp)
-        doc_path = tmp_path / f"{kind}.json"
-        _dump(doc_path, data)
-        cmd = [node, str(script_path), "validate", str(doc_path), "--no-log"]
-        if kind in ("script", "storyboard") and outline is not None:
-            _dump(tmp_path / "outline.json", outline)
-            cmd += ["--outline", str(tmp_path / "outline.json")]
-        if kind in ("script", "storyboard") and art is not None:
-            _dump(tmp_path / "art.json", art)
-            cmd += ["--art", str(tmp_path / "art.json")]
-        if kind == "storyboard":
-            if script is None:
-                return {"status": "skipped", "problems": [],
-                        "notes": ["分镜质量门需要先有本集剧本"], "checked_at": _now()}
-            _dump(tmp_path / "script.json", script)
-            cmd += ["--script", str(tmp_path / "script.json")]
-        try:
-            proc = subprocess.run(  # noqa: S603 —— 固定脚本路径 + 固定参数，无用户输入拼接
-                cmd, cwd=str(tmp_path), capture_output=True, text=True, timeout=_TIMEOUT,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("质量门执行失败（%s）：%s", kind, exc)
-            return {"status": "fail", "problems": [f"质量门执行失败：{exc}"], "checked_at": _now(),
-                    "runner": node}
-
-        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-        raw = _collect_problems(out)
-        problems = _relax(kind, data, raw)
-        ok = proc.returncode == 0 or (bool(raw) and not _blocking(problems))
-        notes: list = []
-        if not ok and not raw:
-            problems = [ln.strip() for ln in out.splitlines() if ln.strip()][:20]
-        elif ok and raw and not problems:
-            # 门本身适用不了（单集项目的「大爆点提前」）：说一句，但不计缺口
-            notes = ["单集项目：大爆点必然落在最后一集，「大爆点提前」门不适用，已跳过"]
-        return {
-            "status": "ok" if ok else "fail",
-            "problems": problems[:40],
-            "notes": notes,
-            "checked_at": _now(),
-            "runner": node,
-        }
+    gates_path = _find(files, suffix=".gates.jsonl")
+    if gates_path is not None:
+        parsed = _parse_jsonl(Path(files[gates_path]))
+        if parsed:
+            parsed["source"] = Path(gates_path).name
+            return parsed
+    report = _find(files, suffix=".html")
+    if report is not None:
+        parsed = _parse_report_html(Path(files[report]), doc_name)
+        if parsed:
+            parsed["source"] = Path(report).name
+            return parsed
+    return {
+        "status": STATUS_SKIPPED,
+        "passed": 0, "total": 0,
+        "problems": [], "notes": [skipped or "产物里没有门结果（.gates.jsonl / report.html 都没有）"],
+        "checked_at": _now(),
+    }
 
 
-def _collect_problems(out: str) -> list:
-    """按 skill 脚本的输出格式收集违规项。
-
-    脚本把明细打在 stderr 的续行（两空格缩进）里，只有标题行带 ✗：
-        ✗ 2 处违规（stage=full）：
-          E01 缺少钩子
-          S01 未在 art 里登记
-    这里保留标题行 + 紧随其后的缩进明细，避免只剩一行空标题。
-    """
-    problems: list = []
-    in_detail = False
-    for ln in out.splitlines():
-        s = ln.strip()
-        if not s:
-            continue
-        if s.startswith("✗"):
-            problems.append(s)
-            in_detail = True
-            continue
-        if in_detail and ln[:1] in (" ", "\t"):
-            problems.append(s)
-            continue
-        in_detail = False
-        if "违规" in s or "错误" in s or "Error" in s:
-            problems.append(s)
-    return problems
+def _find(files: Dict[str, Path], *, suffix: str = "", contain: str = "") -> Optional[str]:
+    for rel in sorted(files or {}):
+        name = Path(rel).name
+        if suffix and name.endswith(suffix):
+            return rel
+        if contain and contain in name:
+            return rel
+    return None
 
 
-def _relax(kind: str, data: Dict, problems: list) -> list:
-    """把单集项目上不可能成立的门的违规项降级掉。
-
-    skill 的 `major-early` 门要求「大爆点在最后一集之前出现」，
-    单集项目恒不成立——这不是内容缺陷，不能报红。改写成说明行供 UI 展示。
-    """
-    if kind != "outline" or not problems:
-        return problems
-    total = (data.get("params") or {}).get("episodes") or len(data.get("episodes") or [])
+def _parse_jsonl(path: Path) -> Optional[Dict]:
     try:
-        total = int(total)
-    except (TypeError, ValueError):
-        total = 0
-    if total > 1:
-        return problems
-    if not any("大爆点不在最后一集" in row for row in problems):
-        return problems
-    details = [row for row in problems
-               if not row.startswith("✗") and "大爆点不在最后一集" not in row]
-    if not details:
-        return []
-    return [f"✗ {len(details)} 处违规："] + details
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    total = passed = failed = 0
+    problems: List[str] = []
+    notes: List[str] = []
+    checked_at = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        checked_at = checked_at or str(row.get("at") or "")
+        kind = str(row.get("kind") or "")
+        if kind == "run":
+            total = max(total, int(row.get("gates") or 0))
+            failed = max(failed, int(row.get("failed") or 0))
+        elif kind == "fail":
+            label = str(row.get("label") or row.get("gate") or "").strip()
+            detail = str(row.get("detail") or "").strip()
+            problems.append(f"{label}：{detail}"[:600] if label else detail[:600])
+        elif kind == "note":
+            notes.append(str(row.get("detail") or row.get("label") or "")[:400])
+    if not total and not problems:
+        return None
+    passed = max(0, total - failed) if total else 0
+    if not total:
+        total = len(problems)
+    return {
+        "status": STATUS_FAIL if problems else STATUS_OK,
+        "passed": passed if problems else total,
+        "total": total,
+        "failed": failed or len(problems),
+        "problems": problems[:40],
+        "notes": notes[:10],
+        "checked_at": checked_at or _now(),
+    }
 
 
-def _blocking(problems: list) -> list:
-    return [p for p in problems if not p.startswith("✗")]
+def _parse_report_html(path: Path, doc_name: str) -> Optional[Dict]:
+    try:
+        html = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    m = _GATEPILL_RE.search(html)
+    if not m:
+        return None
+    text = m.group("text") or ""
+    ratio = _RATIO_RE.search(text)
+    if not ratio:
+        return None
+    passed, total = int(ratio.group(1)), int(ratio.group(2))
+    failed = max(0, total - passed)
+    problems: List[str] = []
+    if failed:
+        # 明细只能从展示层捞：抓带失败标记的行，抓不到就只报数量（不编造）
+        for row in re.findall(r"<li[^>]*class=\"[^\"]*fail[^\"]*\"[^>]*>([^<]{4,300})</li>", html):
+            problems.append(row.strip())
+            if len(problems) >= 40:
+                break
+        if not problems:
+            problems = [f"{failed} 条门失败（report.html 只有汇总，明细未结构化）"]
+    return {
+        "status": STATUS_FAIL if failed else STATUS_OK,
+        "passed": passed, "total": total, "failed": failed,
+        "problems": problems,
+        "notes": ["门结果来自 report.html 的展示徽标（gatepill），脚本改版即失效"
+                  if failed else ""],
+        "checked_at": _now(),
+    }
 
 
-def _now() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def stale(note: str = "改动后门未复跑") -> Dict:
+    """就地编辑后门标记：不覆盖历史结果，只把状态改成 stale。"""
+    return {
+        "status": STATUS_STALE,
+        "passed": 0, "total": 0,
+        "problems": [], "notes": [note],
+        "checked_at": _now(),
+    }
 
 
 def hint_of(gates: Optional[Dict]) -> str:
-    """把上次质量门的失败项整理成喂回 LLM 的修正提示。"""
-    if not gates or gates.get("status") != "fail":
+    """把上次质量门的失败项整理成「重跑时带上的提示」（只作业务提示，不改 schema）。"""
+    if not gates or gates.get("status") != STATUS_FAIL:
         return ""
     rows = gates.get("problems") or []
     return "\n".join(f"- {r}" for r in rows[:20])
 
 
-def notes_of(gates: Optional[Dict]) -> list:
-    """门的说明行（未运行原因 / 单集项目豁免）：不是缺陷，只给 UI 展示。"""
+def notes_of(gates: Optional[Dict]) -> List[str]:
+    """门的说明行（未运行原因 / 展示层降级）：不是缺陷，只给 UI 展示。"""
     if not gates:
         return []
-    return list(gates.get("notes") or [])
+    return [n for n in (gates.get("notes") or []) if n]
 
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

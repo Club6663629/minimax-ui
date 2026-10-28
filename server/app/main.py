@@ -92,6 +92,8 @@ def _migrate_advideo() -> None:
         "ad_image_cost": "INTEGER DEFAULT 0",
         "video_prompt_mode": "VARCHAR(16) DEFAULT ''",
         "ad_auto_confirm": "TINYINT(1) DEFAULT 1",
+        # H3 段帧数：5+17n（24fps）。短剧段长按帧算，才装得下 12.9583s（311 帧）
+        "frames": "INTEGER DEFAULT 0",
     }
     with engine.begin() as conn:
         for col, typ in ddl.items():
@@ -100,12 +102,63 @@ def _migrate_advideo() -> None:
                 logger.info("已为 tasks 表补充 %s 列", col)
 
 
+def _migrate_hibtv() -> None:
+    """轻量迁移：短剧表补「小说正文 / codex 产物溯源 / 资产主图」列（幂等）。
+
+    - `hibtv_projects`：novel_*（存量把 `script_text` 拷过去当 legacy 小说）
+    - `hibtv_docs`：meta（stage / codex_job_id / sha256 / 产物清单）
+    - `hibtv_assets`：main_path / main_upload_id / main_meta（单图直出；`views` 只读兼容）
+    - `hibtv_jobs`：codex_job_id / artifacts / usage
+    `hibtv_frames` 是新表，由 `Base.metadata.create_all` 建。
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import text
+
+    insp = sa_inspect(engine)
+    ddl = {
+        "hibtv_projects": {
+            "novel_name": "VARCHAR(255) DEFAULT ''",
+            "novel_path": "VARCHAR(512) DEFAULT ''",
+            "novel_text": "TEXT",
+        },
+        "hibtv_docs": {"meta": "TEXT"},
+        "hibtv_assets": {
+            "main_path": "VARCHAR(512) DEFAULT ''",
+            "main_upload_id": "INTEGER",
+            "main_meta": "TEXT",
+        },
+        "hibtv_jobs": {
+            "codex_job_id": "VARCHAR(64) DEFAULT ''",
+            "artifacts": "TEXT",
+            "usage": "TEXT",
+        },
+    }
+    with engine.begin() as conn:
+        for table, cols in ddl.items():
+            if not insp.has_table(table):
+                continue
+            have = {c["name"] for c in insp.get_columns(table)}
+            for col, typ in cols.items():
+                if col in have:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {typ}"))
+                logger.info("已为 %s 表补充 %s 列", table, col)
+    # 存量项目：老「定稿剧本」当小说正文（文本阶段需重跑，像素/成片不受影响）
+    with engine.begin() as conn:
+        if insp.has_table("hibtv_projects"):
+            conn.execute(text(
+                "UPDATE hibtv_projects SET novel_text = script_text "
+                "WHERE (novel_text IS NULL OR novel_text = '') "
+                "AND script_text IS NOT NULL AND script_text <> ''"))
+
+
 def _bootstrap() -> None:
     """建表 + 轻量迁移 + 按环境变量创建初始管理员。"""
     Base.metadata.create_all(bind=engine)
     _migrate()
     _migrate_advideo()
     _migrate_uploads()
+    _migrate_hibtv()
     if settings.admin_email and settings.admin_password:
         db = SessionLocal()
         try:
@@ -141,10 +194,32 @@ def _recover_hibtv_jobs() -> None:
         db.close()
 
 
+async def _reconcile_codex_jobs() -> None:
+    """启动自愈：网关重启会把 queued 重新入队（可能重复烧 token）。
+
+    对比 `/v1/jobs?status=queued|running` 与本地已知 jid 表，把不认识的 job 全部 cancel。
+    网关不可达时只记日志：那是红态问题，不是启动阻塞问题。
+    """
+    if not getattr(settings, "hibtv_enabled", False):
+        return
+    from .services import hibtv_codex
+
+    db = SessionLocal()
+    try:
+        n = await hibtv_codex.reconcile_orphans(db)
+        if n:
+            logger.warning("启动取消 %d 条不认识的网关作业（防重复烧 token）", n)
+    except Exception:  # noqa: BLE001
+        logger.exception("网关作业自愈失败（不影响启动）")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     _bootstrap()
     _recover_hibtv_jobs()
+    await _reconcile_codex_jobs()
     start_worker()
     counts = pool.counts()
     logger.info(

@@ -1,11 +1,15 @@
-/** 出视频：整集成片 + 时间轴 + 按段重跑 + 导出（cutlist 计划 / 实测并列）。 */
+/** 出视频：整集成片 + 时间轴 + 按段重跑 + 导出（cutlist 计划 / 实测并列）。
+ *
+ * 出片只有一条路：ref2v + 每切一张关键帧。这里的前置校验就是「关键帧齐否」：
+ * 缺图 / 段长超 13s / 切数≠图数 → 段级出片按钮置灰，并说清楚卡在哪。
+ */
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { hibtvApi, mediaUrl } from "../api";
 import { Stage } from "../HibtvLayout";
 import { Empty, GateChips, Loading, PageHead, VideoBox, fmtTime } from "../components/ui";
 import { errText, useDoc, useHibtv } from "../state";
-import type { OutlineData, RenderItem, SegmentList } from "../types";
+import type { FrameList, HibtvFrame, OutlineData, RenderItem, Segment, SegmentList } from "../types";
 
 export default function VideoPage() {
   const { ep: epParam = "1" } = useParams();
@@ -18,18 +22,21 @@ export default function VideoPage() {
 
   const [list, setList] = useState<SegmentList | null>(null);
   const [renders, setRenders] = useState<RenderItem[]>([]);
+  const [frames, setFrames] = useState<HibtvFrame[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!project) return;
     setLoading(true);
     try {
-      const [segRes, renderRes] = await Promise.all([
+      const [segRes, renderRes, frameRes] = await Promise.all([
         hibtvApi.listSegments(project.id, ep),
         hibtvApi.listRenders(project.id, ep),
+        hibtvApi.listFrames(project.id, ep),
       ]);
       setList(segRes);
       setRenders(renderRes);
+      setFrames((frameRes as FrameList).frames || []);
     } catch (err) {
       toast(errText(err));
     } finally {
@@ -59,6 +66,39 @@ export default function VideoPage() {
   const cuts = segments.reduce((n, s) => n + (s.cuts || []).length, 0);
   const planSecs = segments.reduce((n, s) => n + (s.planSeconds || 0), 0);
   const sceneName = (idx?: number) => outline.scenes?.[(idx || 1) - 1]?.name || `场景 ${idx || 1}`;
+  const cap = status?.segMaxSeconds || 13;
+
+  /** 出片前置校验：段长 / 图位齐否 / 切数=图数（ref2v 少一张图就会切到空白）。 */
+  const readiness = (seg: Segment) => {
+    const rows = frames.filter((f) => f.segId === seg.id);
+    const cuts = (seg.cuts || []).length;
+    const missing = rows.filter((f) => !f.url).map((f) => f.cutIndex);
+    const done = rows.length - missing.length;
+    const total = rows.length || cuts;
+    if (seg.oversize)
+      return { ok: false, done, total, why: `段长 ${seg.planSeconds.toFixed(1)}s 超过 ${cap}s：需重跑本集 storyboard` };
+    if (!rows.length) return { ok: false, done, total, why: "还没有图位：先跑本集分镜" };
+    if (missing.length) return { ok: false, done, total, why: `缺关键帧 f${missing.join(" / f")}` };
+    if (rows.length !== cuts)
+      return { ok: false, done, total, why: `切数 ${cuts} ≠ 关键帧 ${rows.length}` };
+    return { ok: true, done, total, why: `ref2v 原样直出：${rows.length} 张关键帧` };
+  };
+
+  const genOne = async (seg: Segment) => {
+    if (!project) return;
+    const state = readiness(seg);
+    if (!state.ok) {
+      toast(`${seg.id}：${state.why}`);
+      return;
+    }
+    try {
+      const res = await hibtvApi.generateSegment(project.id, seg.id, {});
+      toast(`${seg.id} 已排队：v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.refs} 张关键帧`);
+      void load();
+    } catch (err) {
+      toast(errText(err));
+    }
+  };
 
   const compose = async () => {
     if (!project) return;
@@ -115,10 +155,48 @@ export default function VideoPage() {
     <>
       <div className="panel-sec">
         <div className="panel-title">
-          引用素材 <span className="r">{withVideo} 段有片</span>
+          参考图 · 关键帧 <span className="r">
+            {frames.filter((f) => f.url).length} / {frames.length} 已出
+          </span>
         </div>
-        <div className="tiny dim" style={{ lineHeight: 1.8 }}>
-          成片阶段只读：这里列出这集所有段真正发出去的参考图。要换素材去对应段的「引用素材」里改，改完可以只重跑那一段。
+        <div className="tiny dim" style={{ lineHeight: 1.8, marginBottom: 8 }}>
+          出片时按切序号挂 f1..fN（≤ 9 张）；换图去段的「图位条」里重出 / 上传，然后只重跑那一段。
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(46px, 1fr))", gap: 4 }}>
+          {frames.map((f) => (
+            <a
+              key={f.id}
+              href={f.url ? mediaUrl(f.url) : undefined}
+              target="_blank"
+              rel="noreferrer"
+              title={`${f.segId} · f${f.cutIndex}`}
+              style={{
+                display: "block",
+                aspectRatio: "9 / 12",
+                borderRadius: 4,
+                overflow: "hidden",
+                background: "#141210",
+                border: `1px solid ${f.url ? "var(--line-3)" : "rgba(224,116,90,.45)"}`,
+              }}
+            >
+              {f.url ? (
+                <img
+                  src={mediaUrl(f.url)}
+                  alt={`${f.segId}-f${f.cutIndex}`}
+                  loading="lazy"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <span
+                  className="tiny dim"
+                  style={{ display: "grid", placeItems: "center", height: "100%", fontSize: 9 }}
+                >
+                  缺
+                </span>
+              )}
+            </a>
+          ))}
+          {!frames.length && <span className="tiny dim">还没有关键帧</span>}
         </div>
       </div>
       <div className="panel-sec">
@@ -196,6 +274,10 @@ export default function VideoPage() {
         right={
           <>
             <GateChips gates={boardDoc?.gates} />
+            <span className={`chip ${frames.length && frames.every((f) => f.url) ? "green" : "red"}`}>
+              关键帧 {frames.filter((f) => f.url).length}/{frames.length}
+            </span>
+            <span className="chip gold">段 ≤ {cap}s</span>
             <button className="btn gold" onClick={() => void compose()} disabled={!withVideo}
               title={withVideo ? "按段顺序拼成本集" : "还没有任何一段出过片，先出一段再合成"}>
               {latest ? "重新合成" : "合成成片"}
@@ -254,9 +336,9 @@ export default function VideoPage() {
             {segments.map((s, i) => (
               <span
                 key={s.id}
-                className={`tl ${i === 0 ? "on" : ""}`}
+                className={`tl ${s.oversize ? "bad" : i === 0 ? "on" : ""}`}
                 onClick={() => navigate(`/hibtv/storyboard/${ep}/${s.id}`)}
-                title={`${s.id} · ${s.planSeconds.toFixed(1)}s`}
+                title={`${s.id} · ${s.planSeconds.toFixed(1)}s${s.oversize ? " · 超限，需重跑分镜" : ""}`}
               >
                 {i + 1}
               </span>
@@ -276,6 +358,9 @@ export default function VideoPage() {
         <div className="card-hd">
           <span className="t">按段看 / 按段重跑</span>
           <span className="chip">{segments.length} 段</span>
+          <span className="chip" title="段级出片 = ref2v + 每切一张关键帧">
+            出片前置：关键帧齐 + 段长 ≤ {cap}s
+          </span>
           <span style={{ marginLeft: "auto" }} />
           <span className="tiny dim">点一段进一段的镜头页</span>
         </div>
@@ -286,39 +371,62 @@ export default function VideoPage() {
               <th>场次</th>
               <th>镜</th>
               <th>时长</th>
+              <th>图位</th>
               <th>成片</th>
               <th>版本</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {segments.map((s) => (
-              <tr key={s.id}>
-                <td className="id">{s.id}</td>
-                <td className="small">{sceneName(s.data?.sceneIndex)}</td>
-                <td className="mono">{(s.cuts || []).length}</td>
-                <td className="mono">{s.planSeconds.toFixed(1)}s</td>
-                <td>
-                  {s.url ? (
-                    <span className="chip green">有片</span>
-                  ) : (
-                    <span className="chip ghost">待出</span>
-                  )}
-                </td>
-                <td className="small dim">v{s.currentVersion || 0}</td>
-                <td style={{ textAlign: "right" }}>
-                  <button
-                    className="btn xs"
-                    onClick={() => navigate(`/hibtv/storyboard/${ep}/${s.id}`)}
-                  >
-                    看镜头
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {segments.map((s) => {
+              const st = readiness(s);
+              return (
+                <tr key={s.id}>
+                  <td className="id">{s.id}</td>
+                  <td className="small">{sceneName(s.data?.sceneIndex)}</td>
+                  <td className="mono">{(s.cuts || []).length}</td>
+                  <td className="mono">
+                    {s.oversize ? (
+                      <span className="chip red">{s.planSeconds.toFixed(1)}s 超限</span>
+                    ) : (
+                      `${s.planSeconds.toFixed(1)}s`
+                    )}
+                  </td>
+                  <td>
+                    <span className={`chip tiny ${st.ok ? "green" : "gold"}`} title={st.why}>
+                      {st.total ? `${st.done}/${st.total}` : "无图位"}
+                    </span>
+                  </td>
+                  <td>
+                    {s.url ? (
+                      <span className="chip green">有片</span>
+                    ) : (
+                      <span className="chip ghost">待出</span>
+                    )}
+                  </td>
+                  <td className="small dim">v{s.currentVersion || 0}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      className={`btn xs ${st.ok ? "gold" : ""}`}
+                      onClick={() => void genOne(s)}
+                      title={st.why}
+                    >
+                      {s.url ? "重出" : "出片"}
+                    </button>
+                    <button
+                      className="btn xs ghost"
+                      style={{ marginLeft: 4 }}
+                      onClick={() => navigate(`/hibtv/storyboard/${ep}/${s.id}`)}
+                    >
+                      看镜头
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {!segments.length && (
               <tr>
-                <td colSpan={7} style={{ padding: 18 }}>
+                <td colSpan={8} style={{ padding: 18 }}>
                   {loading ? (
                     <Loading text="读取本集分镜…" />
                   ) : (

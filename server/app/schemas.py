@@ -96,7 +96,9 @@ class VideoCreateIn(BaseModel):
     mode: Literal["t2v", "flf2v", "r2v", "director"]
     prompt: str = Field(min_length=1, max_length=2000)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
-    duration: Literal[5, 8, 10, 15] = 5
+    # 秒数放宽为 (0,15]：短剧段要传 12.9583s（311 帧 / 24fps，H3 只出 5+17n 帧），
+    # 原来的 Literal[5,8,10,15] 装不下它 —— 直接传 13 会被向上吸附到 13.67s。
+    duration: float = Field(default=5, gt=0, le=15)
     resolution: Literal["768p", "1k", "2k", "4k"] = "768p"
     enhance: bool = True
     scene: Literal["general", "drama", "ecommerce", "music"] = "general"
@@ -363,6 +365,8 @@ class HibtvProjectPatch(BaseModel):
     minutes_max: Optional[int] = None
     aspect_ratio: Optional[str] = None
     keeps: Optional[str] = None
+    novel_name: Optional[str] = None
+    novel_text: Optional[str] = None
 
 
 class HibtvDocPatch(BaseModel):
@@ -373,7 +377,9 @@ class HibtvDocPatch(BaseModel):
 
 
 class HibtvJobIn(BaseModel):
-    kind: Literal["outline", "cast", "art", "script", "storyboard", "images", "compose"]
+    """作业类型：7 个文本 stage 走 codex 网关，images/compose 走平台像素。"""
+    kind: Literal["outline", "cast", "art", "refs", "script", "staging",
+                  "storyboard", "images", "compose"]
     ep: int = 0
     payload: dict = {}
 
@@ -385,12 +391,15 @@ class HibtvAssetPatch(BaseModel):
 
 
 class HibtvImageIn(BaseModel):
-    """出图动作：sheet=一张多视图设定稿（默认主路径）；anchor=只出锚点；
-    all=补齐全部视图；views=指定视图；regen=单视图重出。"""
-    action: Literal["sheet", "anchor", "all", "views", "regen", "confirm"] = "sheet"
-    view: str = ""
-    views: list[str] = []
+    """资产图动作（一资产一张单图，没有视图维度）：
+    draw=首次出图 / regen=重出这一张 / confirm=人工过目写底账。"""
+    action: Literal["draw", "regen", "confirm"] = "draw"
     hint: str = ""
+
+
+class HibtvFrameImageIn(BaseModel):
+    """关键帧出图：prompt 非空即覆盖本帧提示词（写进变更底账，可撤销）。"""
+    prompt: str = ""
 
 
 class HibtvSegmentGenerateIn(BaseModel):

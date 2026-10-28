@@ -40,26 +40,26 @@ export function Plate({
 const ACTS = [
   {
     key: "regen",
-    tip: "重新生成：",
-    desc: "同一套提示词再出一版，旧版随时能换回",
+    tip: "重出：",
+    desc: "同一套提示词再出这一张，旧图不留",
     path: "M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10",
   },
   {
     key: "reroll",
     tip: "改图：",
-    desc: "写一句修改要求，原图作参考（其余几张会标成过期）",
+    desc: "写一句修改要求，原图当参考重出这一张",
     path: "M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z",
   },
   {
     key: "upload",
     tip: "上传：",
-    desc: "换成你自己的图",
+    desc: "换成你自己的图（顶掉主图）",
     path: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
   },
   {
     key: "del",
-    tip: "删除：",
-    desc: "从这一集移除，可撤销",
+    tip: "隐藏：",
+    desc: "从素材库隐藏，可撤销",
     path: "M4 7h16M10 4h4M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7",
   },
 ];
@@ -172,36 +172,44 @@ export function InlineEdit({
 /* ------------------------------------------------------------------ 质量门 */
 export function GateChips({ gates, none }: { gates?: Gates; none?: string }) {
   if (!gates || !gates.status || gates.status === "empty") {
-    // 角色/美术没有接线确定性质量门（skill 的 validate 需要书稿正文），
-    // 以前一律写「质量门未运行」——看着像漏跑，实际是没这道门。
+    // 门结果只来自网关产物（.gates.jsonl / report.html）；这一类没有门就如实说没有。
     if (none) {
       return (
         <span className="chip ghost" title={none}>
-          无确定性质量门
+          产物里没有门结果
         </span>
       );
     }
     return <span className="chip ghost">质量门未运行</span>;
   }
-  if (gates.status === "skipped") {
-    // 未运行的原因在后端 notes 里（缺 node / 缺脚本）；它不是缺陷，不报红
+  if (gates.status === "stale") {
+    // 就地改稿后门没复跑：如实标，不伪装成通过
     return (
-      <span className="chip ghost" title={(gates.notes || gates.problems || []).join("\n")}>
-        质量门未运行
+      <span className="chip gold" title={(gates.notes || []).join("\n")}>
+        改动后门未复跑
       </span>
     );
   }
+  if (gates.status === "skipped") {
+    return (
+      <span className="chip ghost" title={(gates.notes || gates.problems || []).join("\n")}>
+        产物里没有门结果
+      </span>
+    );
+  }
+  const passed = gates.passed ?? 0;
+  const total = gates.total ?? 0;
   if (gates.status === "ok") {
     const notes = gates.notes || [];
     return (
-      <span className="chip green" title={notes.join("\n")}>
-        质量门通过{notes.length ? ` · ${notes.length} 项豁免` : ""}
+      <span className="chip green" title={[...notes, gates.source ? `来源 ${gates.source}` : ""].filter(Boolean).join("\n")}>
+        质量门 {total ? `${passed}/${total}` : "通过"}
       </span>
     );
   }
   return (
     <span className="chip red" title={(gates.problems || []).join("\n")}>
-      质量门 {(gates.problems || []).length} 项待修
+      质量门 {(gates.failed || (gates.problems || []).length) || 1} 项待修
     </span>
   );
 }

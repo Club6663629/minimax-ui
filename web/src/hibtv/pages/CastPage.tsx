@@ -1,23 +1,32 @@
-/** 角色：每人一张卡（锚点大图 + 三视图 + 提示词 / 音色），出图与版本都在卡上。 */
+/** 角色：每人一张卡（一图 + 提示词 / 音色 / 分层），出图与重出都在卡上。
+ *
+ * 文本来自 codex 的 `novel-characters`（cast.json），像素由平台按 `image.prompt`
+ * 出一张 896×1152 竖版单图；**没有多视图 / 锚点 / 派生**。
+ */
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { hibtvApi, maskHost } from "../api";
 import { Stage } from "../HibtvLayout";
 import { AssetCard, useAssets } from "../components/AssetCard";
+import { CodexLight, useCodexGate } from "../components/CodexLight";
+import { ArtifactsDrawer } from "../components/StageArtifacts";
 import { Empty, GateChips, GateList, GenBar, Loading, PageHead } from "../components/ui";
 import { useHibtv, useJob, usePatch } from "../state";
+import type { CastCharacter } from "../types";
 
 export default function CastPage() {
   const navigate = useNavigate();
-  const { project, status, runJob, toast } = useHibtv();
-  const { data, doc, loading } = usePatch("cast");
+  const { project, status, runJob, toast, openLayer, closeLayer } = useHibtv();
+  const { data, doc, loading, reload: reloadDoc } = usePatch("cast");
   const job = useJob("cast");
   const { assets, loading: assetsLoading, reload } = useAssets("cast");
+  const gate = useCodexGate();
 
-  const characters = useMemo(
-    () => ((data?.characters || []) as { id: string; importance?: string }[]) || [],
+  const characters = useMemo<CastCharacter[]>(
+    () => (data?.characters || []) as CastCharacter[],
     [data],
   );
+
   const groups = useMemo(() => {
     const order = ["protagonist", "supporting", "minor", "other"];
     const label: Record<string, string> = {
@@ -26,8 +35,7 @@ export default function CastPage() {
       minor: "功能角色",
       other: "其他",
     };
-    // cast 文档的 importance 实际取值是 protagonist / major（novel-characters schema）；
-    // 以前只列 protagonist/supporting/minor，major 会被整个丢掉（页头写 4 人、页面只有 2 张卡）。
+    // cast 文档的 importance 实际取值是 protagonist / major（novel-characters schema）
     const bucket = (imp?: string): string => {
       if (imp === "protagonist") return "protagonist";
       if (imp === "minor") return "minor";
@@ -43,28 +51,31 @@ export default function CastPage() {
       .filter((g) => g.rows.length);
   }, [assets]);
 
-  // 设定稿是唯一产物：没有设定稿也没有旧锚点图，才算“缺”
-  const missing = useMemo(
-    () => assets.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path).length,
-    [assets],
-  );
+  const missing = useMemo(() => assets.filter((a) => !a.main?.path).length, [assets]);
 
   const drawAll = async () => {
     if (!project) return;
-    const pending = assets.filter((a) => !a.sheet?.path && !a.views[a.anchor]?.path);
+    const pending = assets.filter((a) => !a.main?.path);
     if (!pending.length) {
-      toast("全部角色都已有四视图设定稿；要换某一人的版式，点他卡片上的「重出四视图」");
+      toast("全部角色都已有单图；要换某一人的图，点他卡片上的「重出这一张」");
       return;
     }
-    for (const asset of pending) {
-      try {
-        await hibtvApi.assetImage(project.id, asset.id, { action: "sheet" });
-      } catch {
-        /* 单张失败不影响其余 */
-      }
+    try {
+      // 一次作业出全部缺图（一资产一张，尺寸按类型固定）
+      await hibtvApi.createJob(project.id, { kind: "images", payload: { mode: "assets", kind: "cast" } });
+      toast(`已排入出图队列：${pending.length} 张角色单图（896×1152）`);
+      reload();
+    } catch {
+      toast("排队失败，请稍后重试");
     }
-    toast(`已排入出图队列：${pending.length} 张四视图设定稿`);
-    reload();
+  };
+
+  const rerun = () => {
+    if (!gate.ok) {
+      toast(gate.why);
+      return;
+    }
+    void runJob("cast");
   };
 
   const head = (
@@ -73,32 +84,30 @@ export default function CastPage() {
       title={<>角色 <span className="chip" style={{ verticalAlign: "middle" }}>{assets.length} 人</span></>}
       right={
         <>
-          <GateChips gates={doc?.gates} none="角色卡走 skill 的 cast schema，但没有接线 node 确定性校验；逐项检修看下方提示词与对齐检查" />
+          <CodexLight />
+          <GateChips gates={doc?.gates} none="角色表没有结构化门结果（skill 的门只写在产物里）" />
           <button className="btn ghost" onClick={() => void drawAll()} disabled={!missing}>
-            {missing ? `出四视图（缺 ${missing} 人）` : "四视图已齐"}
+            {missing ? `出单图（缺 ${missing} 人）` : "单图已齐"}
           </button>
-          <button className="btn gold" onClick={() => void runJob("cast")}>
-            {characters.length ? "重新生成角色卡" : "基于大纲生成全部"}
+          <button className="btn gold" onClick={rerun} disabled={!gate.ok} title={gate.why}>
+            {characters.length ? "重新生成角色表" : "基于大纲生成全部"}
           </button>
         </>
       }
     />
   );
 
-  // 设定稿固定 16:9（与视频横竖版无关），画幅由后端给（默认 2752×1536 = Qwen-Image-2.1 2K）
-  const sheetSize = (assets[0]?.sheetSpec?.size || []).join("×") || "2752×1536";
-
   const toolbar = (
     <div className="toolbar">
       <span className="lab">出图设置 · 本剧题目</span>
-      <span className="chip">锚点模型 {maskHost(status?.image?.worker) || "qwen21"}</span>
-      <span className="chip">派生模型 同锚点模型</span>
-      <span className={`chip ${status?.anchorConfirm ? "gold" : "ghost"}`}>
-        锚点出完先确认{status?.anchorConfirm ? " · 开" : " · 关"}
-      </span>
-      <span className="chip">设定稿 16:9 · {sheetSize}</span>
+      <span className="chip">出图节点 {maskHost(status?.image?.worker) || "qwen21"}</span>
+      <span className="chip">角色图 {(status?.assetSizes?.cast || [896, 1152]).join("×")}</span>
+      <span className="chip">提示词语言 {status?.promptLang === "zh" ? "中文" : "英文"}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span className="sp" />
+      <button className="btn sm ghost" onClick={() => openLayer(<ArtifactsDrawer projectId={project?.id || 0} jobId={job?.id || 0} onClose={closeLayer} />)}>
+        产物 / 评审报告
+      </button>
       <span className="chip i" onClick={() => navigate("/hibtv/settings")}>
         项目设置 →
       </span>
@@ -108,7 +117,7 @@ export default function CastPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>
@@ -117,13 +126,13 @@ export default function CastPage() {
     );
   }
 
-  const notReady = !doc?.data?.characters?.length && !assetsLoading && assets.length === 0;
+  const notReady = !characters.length && !assetsLoading && assets.length === 0;
 
   return (
     <Stage>
       {head}
       {toolbar}
-      <GenBar job={job} onCancel={job ? () => void hibtvApi.cancelJob(project.id, job.id) : undefined} />
+      <GenBar job={job} onCancel={job ? () => void hibtvApi.cancelRemoteJob(project.id, job.id) : undefined} />
       <GateList gates={doc?.gates} />
 
       {loading && !data ? <Loading /> : null}
@@ -135,18 +144,14 @@ export default function CastPage() {
             title="当前还没有角色数据"
             sub={
               job?.status === "failed"
-                ? `角色卡生成失败：${job.error}`
-                : "点一次会基于现有大纲同时生成角色卡、角色提示词与音色建议；已经存在的角色数据不会被覆盖。"
+                ? `角色表生成失败：${job.error}`
+                : "点一次会由 codex 跑 novel-characters：出角色表 + 形象提示词 + 音色建议；已存在的角色数据不会被覆盖。"
             }
           >
-            <div className="toolbar" style={{ justifyContent: "center", margin: "0 0 12px" }}>
-              <span className="lab">本次生成</span>
-              <span className="chip">画面 {project.aspectRatio}</span>
-              <span className="chip">模型 {status?.llm?.model || "deepseek"}</span>
-            </div>
-            <button className="btn gold" onClick={() => void runJob("cast")}>
+            <button className="btn gold" onClick={rerun} disabled={!gate.ok}>
               基于大纲生成全部
             </button>
+            {!gate.ok && <div className="tiny red" style={{ marginTop: 8 }}>{gate.why}</div>}
           </Empty>
         </div>
       ) : (
@@ -161,13 +166,14 @@ export default function CastPage() {
               </div>
               <div className="cast-grid">
                 {g.rows.map((a) => (
-                  <AssetCard key={a.id} asset={a} onChanged={() => void reload()} />
+                  <AssetCard key={a.id} asset={a} onChanged={() => void reload().then(() => reloadDoc())} />
                 ))}
               </div>
             </div>
           ))}
           <div className="tiny dim" style={{ marginTop: 16, lineHeight: 1.9 }}>
-            提示：锚点图是「正面全身」，其余视图都照着它派生；换掉锚点后派生图标会打斜纹，点「接受 v2」即恢复。
+            一角色一张图：提示词直接用 skill 的 <span className="mono">image.prompt</span>
+            （反向词 <span className="mono">negativePrompt</span>），改提示词后点「重出这一张」。
             <br />
             出图按张扣积分（{status?.cost?.image ?? 0} 积分 / 张），系统失败全额退。
           </div>

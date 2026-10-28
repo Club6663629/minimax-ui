@@ -11,6 +11,7 @@ import OutlinePage from "./hibtv/pages/OutlinePage";
 import OverviewPage from "./hibtv/pages/OverviewPage";
 import ScriptPage from "./hibtv/pages/ScriptPage";
 import SettingsPage from "./hibtv/pages/SettingsPage";
+import StagingPage from "./hibtv/pages/StagingPage";
 import VideoPage from "./hibtv/pages/VideoPage";
 import { HibtvProvider } from "./hibtv/state";
 import AdminPage from "./pages/AdminPage";
@@ -81,6 +82,8 @@ export default function App() {
             <Route path="art" element={<ArtPage />} />
             <Route path="script" element={<Navigate to="/hibtv/script/1" replace />} />
             <Route path="script/:ep" element={<ScriptPage />} />
+            <Route path="staging" element={<Navigate to="/hibtv/staging/1" replace />} />
+            <Route path="staging/:ep" element={<StagingPage />} />
             <Route path="storyboard" element={<BoardPage />} />
             <Route path="storyboard/:ep" element={<BoardPage />} />
             <Route path="storyboard/:ep/:seg" element={<BoardPage />} />

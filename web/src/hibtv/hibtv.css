@@ -306,6 +306,9 @@
 .hibtv-root .timeline .tl{flex:1;height:26px;border-radius:4px;background:rgba(255,255,255,.05);border:1px solid transparent;display:flex;align-items:center;justify-content:center;font:9.5px var(--mono);color:#8f877b;cursor:pointer}
 .hibtv-root .timeline .tl:hover{border-color:var(--line);color:var(--gold-2)}
 .hibtv-root .timeline .tl.on{background:rgba(224,179,106,.16);border-color:var(--line);color:var(--gold-2)}
+/* 超限段（段长 > 13s / 缺关键帧）：一律红标，不伪装成可出片 */
+.hibtv-root .timeline .tl.bad{background:rgba(224,116,90,.14);border-color:rgba(224,116,90,.45);color:#e0745a}
+.hibtv-root .mini-row .dot.bad{color:#e0745a}
 .hibtv-root .layer{position:fixed;inset:0;z-index:60;display:none}
 .hibtv-root .layer.open{display:block}
 .hibtv-root .scrim{position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(2px)}

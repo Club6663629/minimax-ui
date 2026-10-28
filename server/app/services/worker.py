@@ -953,7 +953,10 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         final_prompt = task.enhanced_prompt or task.prompt
-        mode, ratio, duration = task.mode, task.aspect_ratio, task.duration
+        mode, ratio = task.mode, task.aspect_ratio
+        # H3 只出 5+17n 帧（24fps）：段长按帧回算，否则 13s 会被吸附成 13.67s（超限）
+        duration = (int(task.frames) / 24.0) if int(getattr(task, "frames", 0) or 0) \
+            else task.duration
         vmode = _video_prompt_mode(task)   # llm/content_ir=直接用增强结果（不再叠本地层）/ local=本地规则
         # B1 提示词拼装移到下面 image_paths 装配完成后（[SET] 段需要知道参考图张数）
         try:
@@ -1294,10 +1297,12 @@ async def _advideo_image_loop() -> None:
 
 
 # ---------------------------------------------------------------- ⑥ 短剧作业
-# LLM 类作业可并发（不占 GPU）；出图 / 拼接与 adimage 一样串行，避免节点排队打架。
-HIBTV_LLM_KINDS = ("outline", "cast", "art", "script", "storyboard")
+# 文本 7 段由 codex 网关执行，而网关是**单并发**（CODEX_GW_CONCURRENCY=1）：
+# 平台侧多开只会堆在网关队列里重复烧 token，所以这里也串行（并发 1）。
+# 出图 / 拼接与 adimage 一样串行，避免节点排队打架。
+HIBTV_TEXT_KINDS = ("outline", "cast", "art", "refs", "script", "staging", "storyboard")
 HIBTV_SERIAL_KINDS = ("images", "compose")
-HIBTV_LLM_CONCURRENCY = 2
+HIBTV_TEXT_CONCURRENCY = 1
 
 
 def _claim_hibtv_job() -> Optional[int]:
@@ -1309,12 +1314,12 @@ def _claim_hibtv_job() -> Optional[int]:
         # 中断遗留的作业不收拾掉，后续出图 / 拼接会永久排队。
         hibtv_jobs.recover_running_jobs(db, only_stale=True)
         running = db.query(HibtvJob).filter(HibtvJob.status == "running").all()
-        llm_running = len([j for j in running if j.kind in HIBTV_LLM_KINDS])
+        text_running = len([j for j in running if j.kind in HIBTV_TEXT_KINDS])
         busy = {j.kind for j in running if j.kind in HIBTV_SERIAL_KINDS}
         candidates = (db.query(HibtvJob).filter(HibtvJob.status == "queued")
                       .order_by(HibtvJob.id).limit(30).all())
         for job in candidates:
-            if job.kind in HIBTV_LLM_KINDS and llm_running >= HIBTV_LLM_CONCURRENCY:
+            if job.kind in HIBTV_TEXT_KINDS and text_running >= HIBTV_TEXT_CONCURRENCY:
                 continue
             if job.kind in HIBTV_SERIAL_KINDS and job.kind in busy:
                 continue
@@ -1342,7 +1347,7 @@ async def _run_hibtv_job(job_id: int) -> None:
 
 
 async def _hibtv_jobs_loop() -> None:
-    """短剧作业领取循环：LLM 并发 2、出图/拼接串行；未启用时空转。"""
+    """短剧作业领取循环：文本段串行（网关单并发）、出图/拼接串行；未启用时空转。"""
     while True:
         try:
             if not getattr(settings, "hibtv_enabled", False):

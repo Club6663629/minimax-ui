@@ -114,6 +114,12 @@ def download_hibtv_file(
         ".webp": "image/webp",
         ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
         ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+        # codex 产物：report.html 要在 sandbox iframe 里渲染，必须给 text/html；
+        # md/json/jsonl 只是下载/预览，给 text/plain 更安全（不会被执行）。
+        ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+        ".md": "text/plain; charset=utf-8", ".json": "text/plain; charset=utf-8",
+        ".jsonl": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+        ".zip": "application/zip",
     }.get(path.suffix.lower(), "application/octet-stream")
     if download:
         return FileResponse(path, media_type=media_type, filename=path.name)

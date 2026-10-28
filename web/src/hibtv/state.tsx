@@ -11,7 +11,15 @@ import {
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { hibtvApi, HibtvError } from "./api";
-import type { DocKind, HibtvDoc, HibtvJob, HibtvProject, HibtvStatus, JobKind } from "./types";
+import type {
+  CodexStatus,
+  DocFileKind,
+  HibtvDoc,
+  HibtvJob,
+  HibtvProject,
+  HibtvStatus,
+  JobKind,
+} from "./types";
 
 const PROJECT_KEY = "hibtv_project_id";
 
@@ -31,6 +39,9 @@ interface HibtvCtx {
   projects: HibtvProject[];
   project: HibtvProject | null;
   status: HibtvStatus | null;
+  /** codex 网关自检结果；null = 还没查过，available=false 时页面必须红态并禁提 */
+  codex: CodexStatus | null;
+  codexError: string;
   jobs: HibtvJob[];
   /** 每次有作业结束 / 文档被本地改写时自增，页面据此重取文档。 */
   revision: number;
@@ -39,6 +50,7 @@ interface HibtvCtx {
   refreshProject: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshProjects: () => Promise<void>;
+  refreshCodex: () => Promise<void>;
   bump: () => void;
   toast: (msg: string, action?: ToastAction) => void;
   layer: ReactNode | null;
@@ -69,6 +81,8 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
   const [projectId, setProjectId] = useState<number>(() => Number(localStorage.getItem(PROJECT_KEY) || 0));
   const [project, setProject] = useState<HibtvProject | null>(null);
   const [status, setStatus] = useState<HibtvStatus | null>(null);
+  const [codex, setCodex] = useState<CodexStatus | null>(null);
+  const [codexError, setCodexError] = useState("");
   const [jobs, setJobs] = useState<HibtvJob[]>([]);
   const [revision, setRevision] = useState(0);
   const [ready, setReady] = useState(false);
@@ -114,6 +128,17 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
     }
   }, [toast]);
 
+  const refreshCodex = useCallback(async () => {
+    try {
+      setCodex(await hibtvApi.codexStatus());
+      setCodexError("");
+    } catch (err) {
+      // 掉线时后端返 503，body 里是「为什么不可用」：红态要能说清楚
+      setCodex(null);
+      setCodexError(errText(err));
+    }
+  }, []);
+
   const refreshProject = useCallback(async () => {
     if (!projectId) return;
     try {
@@ -153,9 +178,10 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
         /* 未启用时 status 也可能 503，页面按降级处理 */
       }
       await refreshProjects();
+      await refreshCodex();
       setReady(true);
     })();
-  }, [refreshProjects]);
+  }, [refreshProjects, refreshCodex]);
 
   useEffect(() => {
     if (!projectId) {
@@ -234,6 +260,8 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
     projects,
     project,
     status,
+    codex,
+    codexError,
     jobs,
     revision,
     activeJobs,
@@ -241,6 +269,7 @@ export function HibtvProvider({ children }: { children: ReactNode }) {
     refreshProject,
     refreshJobs,
     refreshProjects,
+    refreshCodex,
     bump,
     toast,
     layer,
@@ -290,7 +319,9 @@ export function labelOfKind(kind: string): string {
     outline: "大纲",
     cast: "角色卡",
     art: "美术设定",
+    refs: "参考图",
     script: "剧本",
+    staging: "站位",
     storyboard: "分镜",
     images: "出图",
     compose: "整集拼接",
@@ -299,7 +330,7 @@ export function labelOfKind(kind: string): string {
 }
 
 /** 读一份文档；作业一结束（revision 变化）自动重取。 */
-export function useDoc(kind: DocKind, ep = 0) {
+export function useDoc(kind: DocFileKind, ep = 0) {
   const { project, revision, toast } = useHibtv();
   const [doc, setDoc] = useState<HibtvDoc | null>(null);
   const [loading, setLoading] = useState(false);
@@ -324,7 +355,7 @@ export function useDoc(kind: DocKind, ep = 0) {
 }
 
 /** 读一份文档，并提供「改一个 JSON 路径 + 撤销」的就地编辑能力。 */
-export function usePatch(kind: DocKind, ep = 0) {
+export function usePatch(kind: DocFileKind, ep = 0) {
   const { project, toast, bump } = useHibtv();
   const { doc, data, loading, reload, setDoc } = useDoc(kind, ep);
 

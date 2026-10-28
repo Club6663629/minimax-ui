@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -51,6 +51,8 @@ class Task(Base):
     enhanced_prompt: Mapped[str] = mapped_column(Text, default="")
     aspect_ratio: Mapped[str] = mapped_column(String(8), default="16:9")
     duration: Mapped[int] = mapped_column(Integer, default=5)
+    # H3 段帧数（5+17n，24fps）：短剧段长按帧算，才装得下 12.9583s（311 帧）；0=按 duration 推算
+    frames: Mapped[int] = mapped_column(Integer, default=0)
     resolution: Mapped[str] = mapped_column(String(8), default="768p")  # 768p | 2k
     enhance: Mapped[bool] = mapped_column(Boolean, default=True)
     scene: Mapped[str] = mapped_column(String(16), default="general")  # general|drama|ecommerce|music
@@ -134,9 +136,12 @@ class RedeemCode(Base):
 
 
 class HibtvProject(Base):
-    """短剧工作台项目：一次「定稿剧本 + 美术设定」的导入。
+    """短剧工作台项目：一次「小说正文 + 业务参数」的导入。
 
-    状态：draft（已建项目，待解析）→ outlining（解析/大纲中）→ ready（可进入制作）
+    文本归 codex：大纲/角色/美术/参考图/剧本/站位/分镜都由网关跑 skill 产出，
+    平台只存「小说原文 + 业务意图」，不再要求用户上传定稿剧本与美术设定。
+
+    状态：draft（已建项目，待跑大纲）→ ready（大纲已回填）
     """
 
     __tablename__ = "hibtv_projects"
@@ -150,6 +155,12 @@ class HibtvProject(Base):
     minutes_max: Mapped[int] = mapped_column(Integer, default=5)
     aspect_ratio: Mapped[str] = mapped_column(String(8), default="9:16")
 
+    # 小说正文（文本阶段唯一事实来源；input 里只给绝对路径，不内联几十万字）
+    novel_name: Mapped[str] = mapped_column(String(255), default="")
+    novel_path: Mapped[str] = mapped_column(String(512), default="")
+    novel_text: Mapped[str] = mapped_column(Text, default="")
+
+    # 人工素材（可选，老项目兼容）：不再参与文本生成，只当参考资料
     script_name: Mapped[str] = mapped_column(String(255), default="")
     script_path: Mapped[str] = mapped_column(String(512), default="")
     script_text: Mapped[str] = mapped_column(Text, default="")
@@ -158,7 +169,7 @@ class HibtvProject(Base):
     art_text: Mapped[str] = mapped_column(Text, default="")
     # 必须保留的名场面 / 场次（自由文本）
     keeps: Mapped[str] = mapped_column(Text, default="")
-    # 解析汇总：{episodes, scenes, lines, cast, scene, prop, effect}
+    # 解析汇总（历史字段，改为大纲回填后不再由平台正则解析）
     detected: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
@@ -166,20 +177,24 @@ class HibtvProject(Base):
 
 
 class HibtvDoc(Base):
-    """内核文档：outline / cast / art / script / storyboard，data 存 skill schema 的原始 JSON。
+    """内核文档：outline / cast / art / script / staging / storyboard。
 
-    ep=0 表示全集级文档（outline/cast/art），>0 表示分集文档（script/storyboard 按集存）。
+    data 存 skill 产物的**原始 JSON**（平台只搬运、不改写）。
+    ep=0 表示全集级文档（outline/cast/art），>0 表示分集文档（script/staging/storyboard）。
+    meta 存 stage / codex_job_id / 主产物 sha256 / 全部产物清单（溯源用）。
     """
 
     __tablename__ = "hibtv_docs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(16))     # outline|cast|art|script|storyboard
+    kind: Mapped[str] = mapped_column(String(16))     # outline|cast|art|script|staging|storyboard
     ep: Mapped[int] = mapped_column(Integer, default=0)
     data: Mapped[str] = mapped_column(Text, default="{}")
-    # 质量门结果：{status: ok|fail|skipped, problems: [...], checked_at, runner}
+    # 质量门结果：{status: ok|fail|skipped|stale, passed, total, problems, notes, checked_at}
     gates: Mapped[str] = mapped_column(Text, default="{}")
+    # 产物溯源：{stage, codex_job_id, sha256, artifacts:[{path,bytes}], usage:{...}}
+    meta: Mapped[str] = mapped_column(Text, default="{}")
     version: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="empty")  # empty|running|done|failed
     error: Mapped[str] = mapped_column(Text, default="")
@@ -188,7 +203,10 @@ class HibtvDoc(Base):
 
 
 class HibtvAsset(Base):
-    """角色 / 场景 / 道具卡：一条资产对应一个锚点图 + N 个派生视图。"""
+    """角色 / 场景 / 道具卡：一条资产 = **一张主图**（完全按 skill 的 image.prompt）。
+
+    多视图设定稿 / 4 格裁格 / 派生视图 / 锚点锁定已永久下线；`views` 列只读兼容老项目。
+    """
 
     __tablename__ = "hibtv_assets"
 
@@ -197,14 +215,47 @@ class HibtvAsset(Base):
     kind: Mapped[str] = mapped_column(String(8), index=True)   # cast|scene|prop
     code: Mapped[str] = mapped_column(String(16), default="")  # C01|S01|P01
     name: Mapped[str] = mapped_column(String(120), default="")
-    # 卡片内容：提示词 / 音色 / 层级 / 关系 / 原文案
+    # 卡片内容：skill 的原始 JSON（image.prompt / image.negativePrompt / persona / voice …）
     data: Mapped[str] = mapped_column(Text, default="{}")
-    # 视图表：{view: {path, upload_id, version, uploaded, stale, task_id}}
+    # 主图：一张就是全部（无派生）
+    main_path: Mapped[str] = mapped_column(String(512), default="")
+    main_upload_id: Mapped[Optional[int]] = mapped_column(Integer)
+    # {width,height,prompt,negative,seed,seconds,at,uploaded}
+    main_meta: Mapped[str] = mapped_column(Text, default="{}")
+    # 旧版多视图表（只读兼容：历史项目只展示首张，标「旧版多视图」）
     views: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(16), default="empty")  # empty|drawing|review|done
     version: Mapped[int] = mapped_column(Integer, default=0)
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class HibtvFrame(Base):
+    """关键帧：**每切一张**（f1..fN），与 `manifest.pictures` / `prompt.md` 的 Picture 序号一一对应。
+
+    ref2v 出片时按 `cut_index` 顺序挂参考图；少一张就会「切到空白」，所以这里不允许缺号。
+    """
+
+    __tablename__ = "hibtv_frames"
+    __table_args__ = (UniqueConstraint("project_id", "seg_id", "cut_index",
+                                       name="uq_hibtv_frame"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
+    ep: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    seg_id: Mapped[str] = mapped_column(String(16), default="", index=True)   # E01-01
+    cut_index: Mapped[int] = mapped_column(Integer, default=1)                # 1 起（= Picture N）
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    negative: Mapped[str] = mapped_column(Text, default="")
+    # 参考图 upload.id 清单（场景图 + 出场角色图）
+    refs: Mapped[str] = mapped_column(Text, default="[]")
+    path: Mapped[str] = mapped_column(String(512), default="")
+    upload_id: Mapped[Optional[int]] = mapped_column(Integer)
+    meta: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="empty")  # empty|drawing|done|failed
+    version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -246,20 +297,30 @@ class HibtvRender(Base):
 
 
 class HibtvJob(Base):
-    """短剧作业：LLM 生成 / 出图 / 拼接，统一状态机供前端轮询。"""
+    """短剧作业：codex 文本阶段 / 出图 / 关键帧 / 拼接，统一状态机供前端轮询。
+
+    文本阶段是网关 job 的本地映射：`codex_job_id` 是网关 jid，`ref` 是幂等键，
+    `artifacts` 是产物索引 JSON，`usage` 是 tokens / 耗时 / attempts。
+    """
 
     __tablename__ = "hibtv_jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("hibtv_projects.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(16))       # outline|cast|art|script|storyboard|images|compose
+    kind: Mapped[str] = mapped_column(String(16))       # outline|cast|art|refs|script|staging|storyboard|images|compose
     ep: Mapped[int] = mapped_column(Integer, default=0)
-    ref: Mapped[str] = mapped_column(String(32), default="")  # 资产 code / 段号等
+    ref: Mapped[str] = mapped_column(String(32), default="")  # 幂等键 / 资产 code / 段号
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     stage: Mapped[str] = mapped_column(String(120), default="")
     payload: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
+    # 网关 job id（文本阶段）；出图/拼接为空
+    codex_job_id: Mapped[str] = mapped_column(String(64), default="")
+    # 产物索引：[{path, bytes}]（本机 DATA_DIR 下副本）
+    artifacts: Mapped[str] = mapped_column(Text, default="[]")
+    # {input_tokens, cached_input_tokens, output_tokens, elapsed_sec, attempts, timeout_kind, queue_position}
+    usage: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

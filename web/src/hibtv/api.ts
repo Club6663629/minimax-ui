@@ -1,10 +1,14 @@
 /** 短剧工作台 API：复用海白菜的 JWT 与 fileUrl 约定（<img>/<video> 带 token 查询参数）。 */
 import { getToken, fileUrl } from "../api/client";
 import type {
+  ArtifactList,
   ChangeItem,
-  DocKind,
+  CodexStatus,
+  DocFileKind,
+  FrameList,
   HibtvAsset,
   HibtvDoc,
+  HibtvFrame,
   HibtvJob,
   HibtvProject,
   HibtvStatus,
@@ -17,9 +21,12 @@ import type {
 
 export class HibtvError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** 503 时后端会把自检结果塞在 detail 里（掉线原因要能看见） */
+  detail: unknown;
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -38,8 +45,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   if (!resp.ok) {
     const detail = (data as { detail?: unknown } | null)?.detail;
-    const message = typeof detail === "string" ? detail : `请求失败 (${resp.status})`;
-    throw new HibtvError(resp.status, message);
+    let message = `请求失败 (${resp.status})`;
+    if (typeof detail === "string") message = detail;
+    else if (detail && typeof detail === "object") {
+      const note = (detail as { note?: string }).note;
+      if (note) message = note;
+    }
+    throw new HibtvError(resp.status, message, detail);
   }
   return data as T;
 }
@@ -58,13 +70,37 @@ export function maskHost(raw?: string): string {
   );
 }
 
+export interface CreateProjectForm {
+  novel?: File | null;
+  name?: string;
+  text?: string;
+  genre?: string;
+  episodes?: number;
+  minutesMin?: number;
+  minutesMax?: number;
+  ratio?: string;
+  keeps?: string;
+}
+
 export const hibtvApi = {
   status: () => request<HibtvStatus>(`${base}/status`),
+  codexStatus: () => request<CodexStatus>(`${base}/ai/codex/status`),
 
   listProjects: () => request<HibtvProject[]>(`${base}/projects`),
   getProject: (id: number) => request<HibtvProject>(`${base}/projects/${id}`),
-  createProject: (form: FormData) =>
-    request<HibtvProject>(`${base}/projects`, { method: "POST", body: form }),
+  createProject: (form: CreateProjectForm) => {
+    const body = new FormData();
+    if (form.novel) body.append("novel", form.novel);
+    body.append("name", form.name || "");
+    body.append("text", form.text || "");
+    body.append("genre", form.genre || "");
+    body.append("episodes", String(form.episodes || 0));
+    body.append("minutes_min", String(form.minutesMin ?? 2));
+    body.append("minutes_max", String(form.minutesMax ?? 5));
+    body.append("ratio", form.ratio || "9:16");
+    body.append("keeps", form.keeps || "");
+    return request<HibtvProject>(`${base}/projects`, { method: "POST", body });
+  },
   patchProject: (id: number, body: Record<string, unknown>) =>
     request<HibtvProject>(`${base}/projects/${id}`, {
       method: "PATCH",
@@ -72,9 +108,9 @@ export const hibtvApi = {
     }),
   deleteProject: (id: number) => request<void>(`${base}/projects/${id}`, { method: "DELETE" }),
 
-  getDoc: (id: number, kind: DocKind, ep = 0) =>
+  getDoc: (id: number, kind: DocFileKind, ep = 0) =>
     request<HibtvDoc>(`${base}/projects/${id}/docs/${kind}?ep=${ep}`),
-  patchDoc: (id: number, kind: DocKind, body: { path: string; value: unknown; ep?: number }) =>
+  patchDoc: (id: number, kind: DocFileKind, body: { path: string; value: unknown; ep?: number }) =>
     request<HibtvDoc>(`${base}/projects/${id}/docs/${kind}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -89,6 +125,14 @@ export const hibtvApi = {
     }),
   cancelJob: (id: number, jobId: number) =>
     request<HibtvJob>(`${base}/projects/${id}/jobs/${jobId}/cancel`, { method: "POST" }),
+  /** 文本段：取消跑在网关上的作业（不调 DELETE，产物还能下载） */
+  cancelRemoteJob: (id: number, jobId: number) =>
+    request<HibtvJob>(`${base}/projects/${id}/jobs/${jobId}/cancel-remote`, { method: "POST" }),
+
+  artifacts: (id: number, jobId = 0) =>
+    request<ArtifactList>(`${base}/projects/${id}/artifacts?job_id=${jobId}`),
+  artifactsZipUrl: (id: number, jobId = 0) =>
+    mediaUrl(`/api/hibtv/projects/${id}/artifacts/download?job_id=${jobId}`),
 
   listAssets: (id: number, kind = "") =>
     request<HibtvAsset[]>(`${base}/projects/${id}/assets${kind ? `?kind=${kind}` : ""}`),
@@ -101,20 +145,34 @@ export const hibtvApi = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  assetImage: (
-    id: number,
-    assetId: number,
-    body: { action: "sheet" | "anchor" | "all" | "views" | "regen" | "confirm"; view?: string; views?: string[]; hint?: string },
-  ) =>
+  /** draw=首次出图 / regen=重出这一张 / confirm=人工过目 */
+  assetImage: (id: number, assetId: number, body: { action: "draw" | "regen" | "confirm"; hint?: string }) =>
     request<HibtvJob | HibtvAsset>(`${base}/projects/${id}/assets/${assetId}/image`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  uploadAsset: (id: number, assetId: number, file: File, view = "") => {
+  uploadAsset: (id: number, assetId: number, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("view", view);
     return request<HibtvAsset>(`${base}/projects/${id}/assets/${assetId}/upload`, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  listFrames: (id: number, ep: number, segId = "") =>
+    request<FrameList>(
+      `${base}/projects/${id}/frames?ep=${ep}${segId ? `&seg_id=${encodeURIComponent(segId)}` : ""}`,
+    ),
+  frameImage: (id: number, frameId: number, prompt = "") =>
+    request<HibtvJob>(`${base}/projects/${id}/frames/${frameId}/image`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    }),
+  uploadFrame: (id: number, frameId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<HibtvFrame>(`${base}/projects/${id}/frames/${frameId}/upload`, {
       method: "POST",
       body: form,
     });
@@ -125,17 +183,27 @@ export const hibtvApi = {
   getSegment: (id: number, segId: string) =>
     request<Segment>(`${base}/projects/${id}/segments/${segId}`),
   generateSegment: (id: number, segId: string, body: { prompt?: string }) =>
-    request<{ ok: boolean; taskId: number; v: number; cost: number; seconds: number; refs: number; planSeconds: number }>(
-      `${base}/projects/${id}/segments/${segId}/generate`,
-      { method: "POST", body: JSON.stringify(body) },
-    ),
+    request<{
+      ok: boolean;
+      taskId: number;
+      v: number;
+      cost: number;
+      seconds: number;
+      frames: number;
+      refs: number;
+      planSeconds: number;
+    }>(`${base}/projects/${id}/segments/${segId}/generate`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   chooseVersion: (id: number, segId: string, v: number) =>
     request<Segment>(`${base}/projects/${id}/segments/${segId}/choose`, {
       method: "POST",
       body: JSON.stringify({ v }),
     }),
+  /** 镜头重修 = 重跑本集 storyboard（平台不改写提示词） */
   rebuildSegment: (id: number, segId: string) =>
-    request<Segment>(`${base}/projects/${id}/segments/${segId}/rebuild`, { method: "POST" }),
+    request<HibtvJob>(`${base}/projects/${id}/segments/${segId}/rebuild`, { method: "POST" }),
 
   renderEpisode: (id: number, ep: number) =>
     request<HibtvJob>(`${base}/projects/${id}/episodes/${ep}/render`, { method: "POST" }),

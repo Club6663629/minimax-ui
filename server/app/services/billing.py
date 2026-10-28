@@ -8,7 +8,19 @@ from ..config import settings
 from ..models import CreditLog, User
 
 
-def compute_cost(duration: int, resolution: str) -> int:
+# 计费档位（秒）：H3 只出 5+17n 帧，12.9583s 这类值按“不小于它的最小档”计费
+_DURATION_TIERS = (5, 8, 10, 15)
+
+
+def _tier(duration) -> int:
+    need = float(duration or 0)
+    for tier in _DURATION_TIERS:
+        if need <= tier + 1e-6:
+            return tier
+    return _DURATION_TIERS[-1]
+
+
+def compute_cost(duration: float, resolution: str) -> int:
     """单次生成消耗积分。1K/2K 升级走本地超分池（2K 另有云端降级通道）。"""
     _BASE = {
         5: settings.cost_768p_5s,
@@ -16,7 +28,7 @@ def compute_cost(duration: int, resolution: str) -> int:
         10: settings.cost_768p_10s,
         15: settings.cost_768p_15s,
     }
-    cost = _BASE.get(duration, settings.cost_768p_10s)
+    cost = _BASE.get(_tier(duration), settings.cost_768p_10s)
     if resolution == "1k":
         cost += settings.cost_1k_extra
     elif resolution == "2k":

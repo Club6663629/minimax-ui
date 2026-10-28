@@ -180,6 +180,27 @@ http://192.168.10.246:8190|upscale|1k,overflow,unet:seedvr2_3b_fp16.safetensors"
 | `COST_768P_5S` / `COST_768P_10S` | `10` / `20` | 768p 生成计费 |
 | `COST_1K_EXTRA` / `COST_2K_EXTRA` | `8` / `15` | 1K / 2K 升级附加计费 |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | 首次启动自动创建管理员 |
+| `HIBTV_ENABLED` | `true` | 短剧工作台（/hibtv）开关 |
+| `CODEX_GW_ENABLED` / `CODEX_GW_URL` | `true` / `http://127.0.0.1:8910` | codex 网关（文本 7 阶段唯一入口）；只回环，公网已 404 |
+| `CODEX_GW_TOKEN_FILE` | `/data/workspace/codex-gateway/token.txt` | 网关 token **只存文件路径**，不入库、不下发前端 |
+| `CODEX_GW_JOB_TIMEOUT` / `CODEX_GW_SILENCE_TIMEOUT` | `1800` / `600` | 单 job 总时长 / 静默超时（秒）；平台轮询上限 = 前者 + `CODEX_GW_POLL_GRACE` |
+| `HIBTV_IMAGE_PROMPT_LANG` | `en` | 资产单图提示词：`en` = skill 的 `image.prompt`，`zh` = `promptLocal` |
+| `HIBTV_ASSET_SIZE_{CAST,SCENE,PROP}` | `896x1152` / `1280x720` / `1024x1024` | 资产单图尺寸（一资产一张） |
+| `HIBTV_SEG_MAX_SECONDS` | `13` | 段长上限；H3 只出 5+17n 帧，13s → 311 帧 = 12.9583s |
+
+### 短剧文本阶段（codex 网关）运维须知
+
+1. **必须同机**：网关只绑 `127.0.0.1:8910`，平台后端与它必须同机；拆机部署则先开
+   `ssh -L 8910:127.0.0.1:8910 <gw-host>` 隧道，否则短剧文本 7 段全部红态。
+2. **无本地兜底**：`hibtv_llm` / vendored skills / node 门已删除，网关掉线就是不可用
+   （`/api/hibtv/ai/codex/status` 返 503，前端红态并禁用提交），**不会**再"假装生成成功"。
+3. **token 只是路径**：`danger-full-access` + root 意味着持 token 即 root；token 不得入库、
+   不得下发前端，`/v1/*` 也不得反代到公网。
+4. **重启会重排队**：网关重启把 `queued` 重新入队可能重复烧 token，平台启动时会比对
+   `/v1/jobs?status=queued|running`，把不认识的 job `cancel`；`DELETE` 只归档记录不删 workdir，
+   `/data/projects/` 需另做清理（不在本期）。
+5. **产物即真值**：文档/资产/段表全部由网关产物回写（`.gates.jsonl` / `*-report.html`），
+   就地改稿只写变更底账并把门标 `stale`，不伪装成通过。
 
 ## 四、联调注意事项
 

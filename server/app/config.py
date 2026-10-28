@@ -116,33 +116,39 @@ class Settings(BaseSettings):
     # 超分节点 ComfyUI 的 input 绝对目录（供 VOSR2 L2 缓存节点 source_path 用；可 env COMFYUI_INPUT_DIR 覆盖）
     comfyui_input_dir: str = "/data/ComfyUI/input"
 
-    # ---- 短剧工作台 HiBTV（/hibtv）：定稿剧本 + 美术设定 → 大纲/角色/美术/剧本/分镜/出片 ----
+    # ---- 短剧工作台 HiBTV（/hibtv）：小说 → 大纲/角色/美术/参考图/剧本/站位/分镜/出片/成片 ----
     hibtv_enabled: bool = True
-    # 短剧产物根目录（留空 = <DATA_DIR>/hibtv）：剧本解析、文档 JSON、锚点图、段成片、整集成片
+    # 短剧产物根目录（留空 = <DATA_DIR>/hibtv）：小说正文、文档 JSON、资产单图、关键帧、段成片、整集成片
     hibtv_dir: str = ""
-    # 文本 LLM：默认 deepseek（复用 deepseek_api_key / deepseek_api_base）
-    hibtv_llm_provider: str = "deepseek"
-    hibtv_llm_model: str = ""            # 留空 → deepseek_llm_model
-    hibtv_llm_temperature: float = 0.5
-    hibtv_llm_max_tokens: int = 8192
-    hibtv_llm_timeout: int = 300
-    # off = 不调 LLM，直接用剧本解析骨架产出文档（联调/无 key 环境）
-    hibtv_llm_mode: str = "on"
-    # 生图节点（留空 = advideo_image_worker）；出图间隔秒（留空 = advideo_image_gap_sec）
+    # 生图节点（留空 = advideo_image_worker）；出图间隔秒
     hibtv_image_worker: str = ""
     hibtv_image_gap_sec: float = 5.0
-    hibtv_image_width: int = 1088          # 9:16 竖屏锚点图画布
-    hibtv_image_height: int = 1920
-    # 多视图设定稿画幅：默认 Qwen-Image-2.1 官方 16:9 原生 2K（2752×1536）；
-    # 低于推荐值等于把每格细节再降一档，显存不够才调小（0 = 用内置值）
-    hibtv_sheet_width: int = 0
-    hibtv_sheet_height: int = 0
-    # 段视频单次上限秒数（H3 可用档位 5/8/10/15；默认 10）
-    hibtv_seg_max_seconds: int = 10
-    # 质量门：node 可执行文件（vendored skill 脚本零依赖，需 Node ≥18）
-    hibtv_node_bin: str = "node"
-    # 锚点图出完是否等待人工确认再出派生视图
-    hibtv_anchor_confirm: bool = True
+    # 关键帧画布（9:16 原生网格 768×1344；16:9 用 1344×768，见 comfyui.SOURCE_SIZES）
+    hibtv_image_width: int = 768
+    hibtv_image_height: int = 1344
+    # 资产单图提示词语言：en = skill 的 image.prompt（默认）/ zh = image.promptLocal
+    hibtv_image_prompt_lang: str = "en"
+    # 资产单图尺寸（按资产类型固定，可逐类覆盖；格式 WxH）
+    hibtv_asset_size_cast: str = "896x1152"
+    hibtv_asset_size_scene: str = "1280x720"
+    hibtv_asset_size_prop: str = "1024x1024"
+    # 段视频单次上限秒数：H3 只出 5+17n 帧（24fps），13s → 311 帧 = 12.9583s
+    hibtv_seg_max_seconds: float = 13.0
+
+    # ---- codex 网关（文本 7 阶段唯一真值来源；网关自身归运维/其它 agent，本仓库只做 client）----
+    # 网关只绑 127.0.0.1:8910 且公网 /v1/* 已 404 → 平台后端必须与网关同机。
+    codex_gw_enabled: bool = True
+    codex_gw_url: str = "http://127.0.0.1:8910"
+    # token 只存文件路径或环境变量，**绝不入库、绝不下发前端**
+    codex_gw_token: str = ""
+    codex_gw_token_file: str = "/data/workspace/codex-gateway/token.txt"
+    codex_gw_timeout: float = 30.0            # 单次 HTTP 超时（不是 job 超时）
+    codex_gw_job_timeout: int = 1800          # job 总时长上限（网关默认值）
+    codex_gw_silence_timeout: int = 600       # 静默超时（网关默认值）
+    codex_gw_default_effort: str = "medium"    # low | medium | high
+    codex_gw_poll_interval: float = 5.0       # 轮询间隔秒
+    codex_gw_poll_grace: int = 120            # 平台轮询上限 = job timeout + 该值
+    codex_gw_project_prefix: str = "hibtv-"     # 网关 project_id 命名空间
 
     # ---- 云端实例（远程开机/关机）----
     # clouds/*.env 所在目录（一台实例一个文件）；留空 = <server>/clouds
@@ -195,28 +201,18 @@ class Settings(BaseSettings):
         return bool(self.advideo_llm_api_key) and str(self.advideo_image_prompt_mode).lower() == "llm"
 
     @property
-    def hibtv_llm_provider_name(self) -> str:
-        """短剧文本 provider（默认 deepseek）。"""
-        return (str(self.hibtv_llm_provider or "deepseek").strip().lower() or "deepseek")
-
-    @property
-    def hibtv_llm_api_key(self) -> str:
-        return self.deepseek_api_key if self.hibtv_llm_provider_name == "deepseek" else self.qwen_api_key
-
-    @property
-    def hibtv_llm_api_base(self) -> str:
-        return self.deepseek_api_base if self.hibtv_llm_provider_name == "deepseek" else self.qwen_api_base
-
-    @property
-    def hibtv_llm_model_name(self) -> str:
-        if self.hibtv_llm_model:
-            return self.hibtv_llm_model
-        return self.deepseek_llm_model if self.hibtv_llm_provider_name == "deepseek" else self.qwen_llm_model
-
-    @property
-    def hibtv_llm_enabled(self) -> bool:
-        """短剧 LLM 是否可用：开关为 on 且当前 provider 配了 key。"""
-        return str(self.hibtv_llm_mode).lower() != "off" and bool(self.hibtv_llm_api_key)
+    def hibtv_asset_sizes(self) -> dict:
+        """资产单图尺寸表：{kind: (w, h)}，逐类可覆盖。"""
+        out = {}
+        for kind, raw in (("cast", self.hibtv_asset_size_cast),
+                          ("scene", self.hibtv_asset_size_scene),
+                          ("prop", self.hibtv_asset_size_prop)):
+            w, _, h = str(raw or "").lower().partition("x")
+            try:
+                out[kind] = (int(w), int(h))
+            except (TypeError, ValueError):
+                out[kind] = {"cast": (896, 1152), "scene": (1280, 720), "prop": (1024, 1024)}[kind]
+        return out
 
     @property
     def video_llm_enabled(self) -> bool:
