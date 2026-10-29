@@ -74,14 +74,18 @@ def _find(files: Dict[str, Path], *, suffix: str = "", contain: str = "") -> Opt
 
 
 def _parse_jsonl(path: Path) -> Optional[Dict]:
+    """读 `.gates.jsonl`，只认【最后一轮】run 及其后的 fail 明细。
+
+    网关会多轮重试（先 fail 再修），中间轮的失败不能当最终结论：
+    旧实现用 max(failed) 取各轮最大值、并把所有历史 fail 累积进 problems，
+    导致“最后一轮 18/18 全绿”仍被判 fail、顶着历史问题入库。
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
-    total = passed = failed = 0
-    problems: List[str] = []
-    notes: List[str] = []
-    checked_at = ""
+    rounds: List[Dict] = []
+    loose: List[str] = []
     for line in lines:
         line = line.strip()
         if not line:
@@ -92,30 +96,46 @@ def _parse_jsonl(path: Path) -> Optional[Dict]:
             continue
         if not isinstance(row, dict):
             continue
-        checked_at = checked_at or str(row.get("at") or "")
         kind = str(row.get("kind") or "")
         if kind == "run":
-            total = max(total, int(row.get("gates") or 0))
-            failed = max(failed, int(row.get("failed") or 0))
-        elif kind == "fail":
+            rounds.append({"at": str(row.get("at") or ""),
+                           "gates": int(row.get("gates") or 0),
+                           "failed": int(row.get("failed") or 0),
+                           "problems": [], "notes": []})
+            continue
+        target = rounds[-1] if rounds else None
+        if kind == "fail":
             label = str(row.get("label") or row.get("gate") or "").strip()
             detail = str(row.get("detail") or "").strip()
-            problems.append(f"{label}：{detail}"[:600] if label else detail[:600])
+            msg = f"{label}：{detail}"[:600] if label else detail[:600]
+            (target["problems"] if target is not None else loose).append(msg)
         elif kind == "note":
-            notes.append(str(row.get("detail") or row.get("label") or "")[:400])
+            note = str(row.get("detail") or row.get("label") or "")[:400]
+            (target["notes"] if target is not None else loose).append(note)
+    last = rounds[-1] if rounds else None
+    problems = list(last["problems"] if last is not None else loose)[:40]
+    notes = list(last["notes"] if last is not None else [])[:10]
+    total = int(last["gates"]) if last is not None else 0
+    failed = int(last["failed"]) if last is not None else 0
+    if not problems and failed:
+        problems = [f"最后一轮有 {failed} 项门未通过（产物未给明细）"]
     if not total and not problems:
         return None
-    passed = max(0, total - failed) if total else 0
     if not total:
         total = len(problems)
+    if problems:
+        passed = max(0, total - max(failed, len(problems)))
+    else:
+        passed = total
     return {
         "status": STATUS_FAIL if problems else STATUS_OK,
-        "passed": passed if problems else total,
+        "passed": passed,
         "total": total,
         "failed": failed or len(problems),
-        "problems": problems[:40],
-        "notes": notes[:10],
-        "checked_at": checked_at or _now(),
+        "problems": problems,
+        "notes": notes,
+        "checked_at": (str(last["at"]) if last is not None else "") or _now(),
+        "rounds": len(rounds),
     }
 
 
