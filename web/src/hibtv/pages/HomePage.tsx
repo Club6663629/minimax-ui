@@ -56,7 +56,7 @@ function minutesOf(seconds: number): [number, number] {
 }
 
 export default function HibtvHomePage() {
-  const { projects, selectProject, refreshProjects, refreshProject, toast, project: cur } = useHibtv();
+  const { projects, selectProject, refreshProjects, toast, project: cur } = useHibtv();
   const navigate = useNavigate();
   const gate = useCodexGate();
   const [open, setOpen] = useState(false);
@@ -165,7 +165,6 @@ export default function HibtvHomePage() {
               className={`prow ${cur?.id === p.id ? "cur" : ""}`}
               onClick={() => {
                 selectProject(p.id);
-                void refreshProject();
                 navigate("/hibtv/overview");
               }}
             >
@@ -234,6 +233,8 @@ export default function HibtvHomePage() {
       </div>
 
       {open && (
+        <div className="layer open">
+          <div className="scrim" onClick={() => setOpen(false)} />
         <Modal
           eyebrow="NEW PROJECT · novel"
           title="新建短剧项目"
@@ -380,6 +381,7 @@ export default function HibtvHomePage() {
             </span>
           </div>
         </Modal>
+        </div>
       )}
     </Stage>
   );
