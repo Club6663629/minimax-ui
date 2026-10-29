@@ -240,6 +240,7 @@ async def submit(
     stage: str,
     input: str,                                         # noqa: A002 —— 网关字段名就叫 input
     project_id: str = "default",
+    user: str = "",
     reasoning_effort: str = "",
     timeout: Optional[int] = None,
     silence_timeout: Optional[int] = None,
@@ -254,6 +255,7 @@ async def submit(
         "stage": stage,
         "input": text,
         "project_id": (project_id or "default").strip() or "default",
+        "user": user,
         "reasoning_effort": (reasoning_effort
                              or str(getattr(settings, "codex_gw_default_effort", "medium"))).strip(),
         "timeout": int(timeout or getattr(settings, "codex_gw_job_timeout", 1800)),

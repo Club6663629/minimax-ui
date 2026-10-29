@@ -134,16 +134,21 @@ def upstream_key(db: Session, project: HibtvProject, kind: str, ep: int) -> str:
 
 # ------------------------------------------------------------------ 上游引用
 def latest_done(db: Session, project_id: int, kind: str, ep: int) -> Optional[HibtvJob]:
-    from .hibtv_jobs import jloads
+    from .hibtv_jobs import get_doc, jloads
 
+    # A persisted, done document is authoritative.  A gateway job may have
+    # been marked cancelled after its artifacts were already applied.
     jobs = (db.query(HibtvJob)
             .filter(HibtvJob.project_id == project_id, HibtvJob.kind == kind,
-                    HibtvJob.status == "done")
-            .order_by(HibtvJob.id.desc()).limit(10).all())
+                    HibtvJob.status.in_(("done", "cancelled")))
+            .order_by(HibtvJob.id.desc()).limit(50).all())
     for job in jobs:
         if doc_ep(kind, job.ep) != doc_ep(kind, ep):
             continue
-        if jloads(job.artifacts, []):
+        if not jloads(job.artifacts, []):
+            continue
+        doc = get_doc(db, project_id, kind, doc_ep(kind, ep))
+        if job.status == "done" or (doc is not None and doc.status == "done"):
             return job
     return None
 
@@ -163,6 +168,26 @@ def main_artifact(artifacts: List[Dict], kind: str) -> str:
     return ""
 
 
+def _resolve_upstream_ref(project: HibtvProject, up: str, gateway_jid: str,
+                          abs_path: str) -> str:
+    """优先使用原网关路径；网关迁移后回退到本机保留的上游产物。"""
+    original = Path(abs_path)
+    if original.is_file():
+        return abs_path
+
+    local = job_dir(project.id, gateway_jid) / original.name
+    if local.is_file():
+        return str(local)
+
+    ref_path = project_dir(project.id) / "refs" / f"{up}-{original.name}"
+    if ref_path.is_file():
+        return str(ref_path)
+    raise RuntimeError(
+        f"上游「{up}」产物在本机找不到：{abs_path}"
+        "（旧网关路径，且本地副本缺失，需重跑那一段）"
+    )
+
+
 def upstream_refs(db: Session, project: HibtvProject, kind: str, ep: int) -> Dict[str, str]:
     """上游引用：{label: 网关侧绝对路径}。缺上游就报错（不猜、不降级）。"""
     from .hibtv_jobs import jloads
@@ -175,7 +200,7 @@ def upstream_refs(db: Session, project: HibtvProject, kind: str, ep: int) -> Dic
         abs_path = main_artifact(jloads(job.artifacts, []), up)
         if not abs_path:
             raise RuntimeError(f"上游「{up}」的产物清单里没有可引用的绝对路径")
-        out[label] = abs_path
+        out[label] = _resolve_upstream_ref(project, up, job.codex_job_id, abs_path)
     return out
 
 
@@ -303,6 +328,7 @@ async def run(db: Session, project: HibtvProject, job: HibtvJob) -> None:
             created = await gw.submit(
                 stage=STAGES[kind], input=text,
                 project_id=gw.gateway_project_id(project.id),
+                user=f"hibtv-u{project.user_id}",
                 timeout=timeout, silence_timeout=silence)
             job.codex_job_id = str(created.get("id") or "")
             db.commit()
