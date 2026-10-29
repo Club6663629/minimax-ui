@@ -85,7 +85,9 @@ def _parse_jsonl(path: Path) -> Optional[Dict]:
     except OSError:
         return None
     rounds: List[Dict] = []
-    loose: List[str] = []
+    # 还没出现 run 行时的游离明细（老产物可能只有 fail/note）：分开存，note 不能被吞
+    loose_problems: List[str] = []
+    loose_notes: List[str] = []
     for line in lines:
         line = line.strip()
         if not line:
@@ -108,13 +110,13 @@ def _parse_jsonl(path: Path) -> Optional[Dict]:
             label = str(row.get("label") or row.get("gate") or "").strip()
             detail = str(row.get("detail") or "").strip()
             msg = f"{label}：{detail}"[:600] if label else detail[:600]
-            (target["problems"] if target is not None else loose).append(msg)
+            (target["problems"] if target is not None else loose_problems).append(msg)
         elif kind == "note":
             note = str(row.get("detail") or row.get("label") or "")[:400]
-            (target["notes"] if target is not None else loose).append(note)
+            (target["notes"] if target is not None else loose_notes).append(note)
     last = rounds[-1] if rounds else None
-    problems = list(last["problems"] if last is not None else loose)[:40]
-    notes = list(last["notes"] if last is not None else [])[:10]
+    problems = list(last["problems"] if last is not None else loose_problems)[:40]
+    notes = list(last["notes"] if last is not None else loose_notes)[:10]
     total = int(last["gates"]) if last is not None else 0
     failed = int(last["failed"]) if last is not None else 0
     if not problems and failed:

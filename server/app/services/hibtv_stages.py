@@ -348,7 +348,7 @@ def _apply_staging(db, project, ep, files) -> Dict:
 
 # ------------------------------------------------------------------ storyboard
 def _apply_storyboard(db, project, ep, files) -> Dict:
-    from .hibtv_jobs import jdumps, sync_segments
+    from .hibtv_jobs import get_doc, jdumps, jloads, sync_segments
 
     hit = pick(files, suffix="-storyboard.json")
     if hit is None:
@@ -385,7 +385,6 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         h3 = (pmd.strip() or str(seg.get("h3Prompt") or "").strip())
         if not h3:
             raise StageError(f"{seg_id} 缺 h3Prompt / prompt.md（段出片没有入参）")
-        from .hibtv_jobs import get_doc, jloads  # D5: 本函数原缺这两个名字的导入（分镜 stage 走到 96% 抛 NameError）
         cast_doc = get_doc(db, project.id, "cast")
         cast_rows = (jloads(cast_doc.data, {}).get("characters") or []) if cast_doc else []
         line_speakers = _script_line_speakers(db, project, ep)
