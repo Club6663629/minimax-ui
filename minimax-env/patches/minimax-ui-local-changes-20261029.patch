@@ -1,0 +1,840 @@
+diff --git a/server/app/routers/hibtv.py b/server/app/routers/hibtv.py
+index d0ba1ee..74d04d6 100644
+--- a/server/app/routers/hibtv.py
++++ b/server/app/routers/hibtv.py
+@@ -69,7 +69,7 @@ from ..services.billing import add_credits, compute_ad_image_cost, compute_cost
+ router = APIRouter(prefix="/api/hibtv", tags=["hibtv"])
+ 
+ DOC_KINDS = hibtv_jobs.DOC_KINDS          # outline/cast/art/staging/script/storyboard
+-EP_KINDS = hibtv_jobs.EP_KINDS            # script/storyboard（按集）
++EP_KINDS = hibtv_jobs.EP_KINDS            # script/staging/storyboard（按集）
+ TEXT_EXTS = {".md", ".markdown", ".txt"}
+ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+ MAX_TEXT_BYTES = 8 * 1024 * 1024
+diff --git a/server/app/services/codex_gateway.py b/server/app/services/codex_gateway.py
+index 71928fd..e67b0c6 100644
+--- a/server/app/services/codex_gateway.py
++++ b/server/app/services/codex_gateway.py
+@@ -240,6 +240,7 @@ async def submit(
+     stage: str,
+     input: str,                                         # noqa: A002 —— 网关字段名就叫 input
+     project_id: str = "default",
++    user: str = "",
+     reasoning_effort: str = "",
+     timeout: Optional[int] = None,
+     silence_timeout: Optional[int] = None,
+@@ -254,6 +255,7 @@ async def submit(
+         "stage": stage,
+         "input": text,
+         "project_id": (project_id or "default").strip() or "default",
++        "user": user,
+         "reasoning_effort": (reasoning_effort
+                              or str(getattr(settings, "codex_gw_default_effort", "medium"))).strip(),
+         "timeout": int(timeout or getattr(settings, "codex_gw_job_timeout", 1800)),
+diff --git a/server/app/services/hibtv_codex.py b/server/app/services/hibtv_codex.py
+index f080427..da5af5f 100644
+--- a/server/app/services/hibtv_codex.py
++++ b/server/app/services/hibtv_codex.py
+@@ -9,6 +9,8 @@ import asyncio
+ import hashlib
+ import json
+ import logging
++import os
++import shutil
+ from pathlib import Path
+ from typing import Dict, List, Optional, Tuple
+ 
+@@ -21,6 +23,15 @@ from . import hibtv_stages
+ 
+ logger = logging.getLogger(__name__)
+ 
++GW_MATERIALS_HOST = Path(os.environ.get(
++    "HIBTV_GW_MATERIALS_HOST",
++    "/root/sai-v2/dw-engine/tenants/xiaojun/data/workspace/hibtv-materials",
++))
++GW_MATERIALS_MOUNT = Path(os.environ.get(
++    "HIBTV_GW_MATERIALS_MOUNT",
++    "/data/workspace/hibtv-materials",
++))
++
+ # 平台 job kind → 网关 stage
+ STAGES = gw.STAGES
+ TEXT_KINDS = tuple(STAGES)
+@@ -60,6 +71,24 @@ def source_path(project_id: int) -> Path:
+     return project_dir(project_id) / "source.txt"
+ 
+ 
++def gateway_source_path(project_id: int) -> Path:
++    """给 codex 的正文路径（网关容器内可见）。"""
++    return GW_MATERIALS_MOUNT / str(int(project_id)) / "source.txt"
++
++
++def _publish_source(project_id: int, local_path: Path) -> Path:
++    """把平台正文同步到网关素材目录；复制失败必须阻断任务。"""
++    target = GW_MATERIALS_HOST / str(int(project_id)) / "source.txt"
++    try:
++        target.parent.mkdir(parents=True, exist_ok=True)
++        shutil.copy2(local_path, target)
++    except OSError as exc:
++        raise RuntimeError(f"网关素材中转失败：{local_path} -> {target}：{exc}") from exc
++    if not target.is_file() or target.stat().st_size != local_path.stat().st_size:
++        raise RuntimeError(f"网关素材中转校验失败：{target}")
++    return target
++
++
+ def job_dir(project_id: int, gateway_jid: str) -> Path:
+     d = project_dir(project_id) / "codex" / (gateway_jid or "unknown")
+     d.mkdir(parents=True, exist_ok=True)
+@@ -69,6 +98,7 @@ def job_dir(project_id: int, gateway_jid: str) -> Path:
+ def write_source(project_id: int, text: str) -> str:
+     path = source_path(project_id)
+     path.write_text(text or "", encoding="utf-8")
++    _publish_source(project_id, path)
+     return str(path)
+ 
+ 
+@@ -104,16 +134,21 @@ def upstream_key(db: Session, project: HibtvProject, kind: str, ep: int) -> str:
+ 
+ # ------------------------------------------------------------------ 上游引用
+ def latest_done(db: Session, project_id: int, kind: str, ep: int) -> Optional[HibtvJob]:
+-    from .hibtv_jobs import jloads
++    from .hibtv_jobs import get_doc, jloads
+ 
++    # A persisted, done document is authoritative.  A gateway job may have
++    # been marked cancelled after its artifacts were already applied.
+     jobs = (db.query(HibtvJob)
+             .filter(HibtvJob.project_id == project_id, HibtvJob.kind == kind,
+-                    HibtvJob.status == "done")
+-            .order_by(HibtvJob.id.desc()).limit(10).all())
++                    HibtvJob.status.in_(("done", "cancelled")))
++            .order_by(HibtvJob.id.desc()).limit(50).all())
+     for job in jobs:
+         if doc_ep(kind, job.ep) != doc_ep(kind, ep):
+             continue
+-        if jloads(job.artifacts, []):
++        if not jloads(job.artifacts, []):
++            continue
++        doc = get_doc(db, project_id, kind, doc_ep(kind, ep))
++        if job.status == "done" or (doc is not None and doc.status == "done"):
+             return job
+     return None
+ 
+@@ -133,6 +168,26 @@ def main_artifact(artifacts: List[Dict], kind: str) -> str:
+     return ""
+ 
+ 
++def _resolve_upstream_ref(project: HibtvProject, up: str, gateway_jid: str,
++                          abs_path: str) -> str:
++    """优先使用原网关路径；网关迁移后回退到本机保留的上游产物。"""
++    original = Path(abs_path)
++    if original.is_file():
++        return abs_path
++
++    local = job_dir(project.id, gateway_jid) / original.name
++    if local.is_file():
++        return str(local)
++
++    ref_path = project_dir(project.id) / "refs" / f"{up}-{original.name}"
++    if ref_path.is_file():
++        return str(ref_path)
++    raise RuntimeError(
++        f"上游「{up}」产物在本机找不到：{abs_path}"
++        "（旧网关路径，且本地副本缺失，需重跑那一段）"
++    )
++
++
+ def upstream_refs(db: Session, project: HibtvProject, kind: str, ep: int) -> Dict[str, str]:
+     """上游引用：{label: 网关侧绝对路径}。缺上游就报错（不猜、不降级）。"""
+     from .hibtv_jobs import jloads
+@@ -145,7 +200,7 @@ def upstream_refs(db: Session, project: HibtvProject, kind: str, ep: int) -> Dic
+         abs_path = main_artifact(jloads(job.artifacts, []), up)
+         if not abs_path:
+             raise RuntimeError(f"上游「{up}」的产物清单里没有可引用的绝对路径")
+-        out[label] = abs_path
++        out[label] = _resolve_upstream_ref(project, up, job.codex_job_id, abs_path)
+     return out
+ 
+ 
+@@ -159,10 +214,21 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
+     lines: List[str] = [head]
+ 
+     if kind == "outline":
+-        src = project.novel_path or (str(source_path(project.id))
+-                                    if source_path(project.id).exists() else "")
+-        if not src:
+-            raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
++        local_source = source_path(project.id)
++        if not local_source.is_file():
++            # 兼容历史项目：旧数据可能只存了 project.novel_path，本地没有 source.txt。
++            legacy = str(project.novel_path or "").strip()
++            if legacy and Path(legacy).is_file():
++                try:
++                    local_source.parent.mkdir(parents=True, exist_ok=True)
++                    shutil.copy2(legacy, local_source)
++                except OSError as exc:
++                    raise RuntimeError("历史小说正文复制失败，先补小说再跑大纲") from exc
++            else:
++                raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
++        # 重跑旧项目时也补建中转副本；历史数据不做批量迁移。
++        _publish_source(project.id, local_source)
++        src = str(gateway_source_path(project.id))
+         lines.append(
+             f"把这部小说改编成 {int(project.episodes or 1)} 集竖屏短剧大纲，"
+             f"每集约 {minutes:g} 分钟，画面 {ratio}。")
+@@ -262,6 +328,7 @@ async def run(db: Session, project: HibtvProject, job: HibtvJob) -> None:
+             created = await gw.submit(
+                 stage=STAGES[kind], input=text,
+                 project_id=gw.gateway_project_id(project.id),
++                user=f"hibtv-u{project.user_id}",
+                 timeout=timeout, silence_timeout=silence)
+             job.codex_job_id = str(created.get("id") or "")
+             db.commit()
+diff --git a/server/app/services/hibtv_frames.py b/server/app/services/hibtv_frames.py
+index 7735c45..81fcce4 100644
+--- a/server/app/services/hibtv_frames.py
++++ b/server/app/services/hibtv_frames.py
+@@ -19,12 +19,15 @@ from . import comfyui, hibtv_image
+ 
+ logger = logging.getLogger(__name__)
+ 
+-# 每切最多挂几张参考图：场景 1 + 角色 2（再多会把画面挤成拼贴，模型也不认）
+-MAX_REFS = 3
++# 场景 1 + 全部出场角色；短剧单场最多 3 人，所以上限是 4。
++# 多图模型会把多张角色卡误当成同一人物多视图，prompt_for() 必须逐槽声明身份。
++MAX_REFS = 4
+ # 画面硬约束：竖屏构图 + 禁屏内文字（平台唯一允许追加的两句，属像素约束不是内容）
+ FRAME_TAIL = "竖屏构图，画面里不出现字幕、水印或任何叠加文字"
+ NEGATIVE = ("text, subtitle, watermark, logo, signature, caption, border, frame, "
+-            "multiple panels, split screen, contact sheet, collage")
++            "multiple panels, split screen, contact sheet, collage, "
++            "duplicate person, cloned face, identical twins, two identical men, "
++            "extra person, character sheet, multi-view grid")
+ 
+ 
+ def _loads(raw) -> Dict:
+@@ -61,9 +64,81 @@ def lighting_of(db: Session, project: HibtvProject, ep: int, scene_index: int) -
+     return ""
+ 
+ 
+-def prompt_for(frame: HibtvFrame, lighting: str = "") -> str:
++def prompt_for(frame: HibtvFrame, lighting: str = "", *,
++               characters: Optional[List[Dict]] = None,
++               refs: Optional[List[Dict]] = None) -> str:
++    """生成关键帧 prompt，并把每个参考图槽位绑定到唯一角色身份。
++
++    `characters` 按 frame.meta.characters 的顺序传入；`refs` 的每个条目含
++    kind/code/name/path。多角色时必须明确“不同的人”和“不得复制”，否则 i2i
++    模型会把角色卡当成同一主体的多视图并复制其中一张脸。
++    """
+     base = (frame.prompt or "").strip()
+-    parts = [p for p in (base, lighting.strip(), FRAME_TAIL) if p]
++    parts: List[str] = []
++
++    def add(text: str) -> None:
++        text = (text or "").strip()
++        if text and not any(text in existing for existing in parts):
++            parts.append(text)
++
++    add(base)
++    add(lighting)
++    add(FRAME_TAIL)
++    _seen_codes = set()
++    rows = []
++    for row in (characters or []):
++        code = str(row.get("code") or "")
++        if code and code not in _seen_codes:
++            _seen_codes.add(code)
++            rows.append(row)
++    ref_rows = [row for row in (refs or []) if row.get("path")]
++    if ref_rows:
++        mapping = ["参考图身份锁：每张角色卡只代表一个角色，不是同一人物的多视图"]
++        for idx, ref in enumerate(ref_rows, start=1):
++            if ref.get("kind") == "scene":
++                mapping.append(
++                    f"Picture {idx} = 场景 {ref.get('code')} {ref.get('name', '')}"
++                    "（环境/空间一致性锚点，本身不含额外人物）")
++            else:
++                mapping.append(
++                    f"Picture {idx} = {ref.get('code')} {ref.get('name', '')}"
++                    f"（{ref.get('gender') or '性别按角色卡'}，"
++                    f"{ref.get('identity') or '身份按角色卡'}）")
++        add("；".join(mapping) + "。")
++
++    from .hibtv_jobs import jloads as _jloads
++    try:
++        declared_max = int((_jloads(frame.meta, {}) or {}).get("maxOnScreen") or 0)
++    except (TypeError, ValueError):
++        declared_max = 0
++    named = len(rows)
++    # 画面人数 = 去重具名角色数与声明上限取大者：具名角色必全出场，正数 maxOnScreen
++    # 表示另有未具名群演，与 H3 视频 prompt（_bind_h3_prompt）口径保持一致。
++    count = max(named, max(0, declared_max))
++    if named:
++        extra = count - named
++        extra_note = (
++            f"其余 {extra} 人为未具名群演/背景人物，不可辨认，不得与具名角色串脸。"
++            if extra > 0 else "")
++        ids = "、".join(str(row["code"]) for row in rows)
++        names = "；".join(
++            f"{row['code']} {row.get('name', '')}"
++            f"（{row.get('gender') or '性别按角色卡'}，"
++            f"{row.get('identity') or '身份按角色卡'}）"
++            for row in rows)
++        add(f"画面人数硬约束：maxOnScreen={count}；画面中必须恰好有 {count} 个不同的人，"
++            f"具名角色只允许 {names} 出场，{ids} 每人只能出现一次。{extra_note}"
++            f"{'这些角色必须是不同的人，' if count > 1 else ''}"
++            "不得重复；禁止克隆、分身、相同的脸、双胞胎、额外超出人数的人物、角色设定图、"
++            "多视图拼贴。每个角色只允许一张脸和一个身体，"
++            "不得把多张角色卡的共同特征融合成一张脸。")
++    elif count > 0:
++        add(f"画面人数硬约束：maxOnScreen={count}；画面中必须恰好有 {count} 个不同的人，"
++            "均为未具名群演/背景人物，不可辨认、不得有清晰主语脸；"
++            "禁止克隆、分身、相同的脸、额外超出人数的人物。")
++    else:
++        add("画面人数硬约束：maxOnScreen=0；画面中不得出现完整人物或可辨认人脸，"
++            "禁止凭空添加人物、额外人物、克隆或分身。")
+     return "；".join(parts) if parts else FRAME_TAIL
+ 
+ 
+@@ -82,6 +157,97 @@ def _asset_main(db: Session, project: HibtvProject, kind: str, code: str) -> Opt
+     return path if path.exists() else None
+ 
+ 
++def _asset_row(db: Session, project: HibtvProject, kind: str,
++               code: str) -> Optional[HibtvAsset]:
++    if not code:
++        return None
++    return (db.query(HibtvAsset)
++            .filter(HibtvAsset.project_id == project.id, HibtvAsset.kind == kind,
++                    HibtvAsset.code == code)
++            .first())
++
++
++def _ref_from_asset(db: Session, project: HibtvProject,
++                    asset: Optional[HibtvAsset]) -> Optional[Dict]:
++    from .hibtv_jobs import abs_path
++
++    if asset is None or not (asset.main_path or "").strip():
++        return None
++    path = abs_path(project.id, asset.main_path)
++    if not path.exists():
++        return None
++    return {"kind": asset.kind, "code": asset.code, "name": asset.name, "path": path}
++
++
++def character_specs_for(db: Session, project: HibtvProject,
++                        frame: HibtvFrame) -> List[Dict]:
++    """按 cut.characters 顺序返回本帧角色身份；去重但不改原出场顺序。"""
++    out: List[Dict] = []
++    seen = set()
++    for raw in _loads(frame.meta).get("characters") or []:
++        code = str(raw or "").strip()
++        if not code or code in seen:
++            continue
++        seen.add(code)
++        asset = _asset_row(db, project, "cast", code)
++        data = _loads(asset.data) if asset is not None else {}
++        persona = data.get("persona") or {}
++        out.append({
++            "code": code,
++            "name": str(data.get("name") or (asset.name if asset else code)),
++            "gender": str(persona.get("gender") or ""),
++            "identity": str(persona.get("identity") or ""),
++        })
++    return out
++
++
++def ref_specs_for(db: Session, project: HibtvProject, frame: HibtvFrame,
++                  seg: Optional[HibtvSegment]) -> List[Dict]:
++    """返回与 generate_image(image_names) 完全同序的场景/角色参考图说明。"""
++    out: List[Dict] = []
++    scene = _asset_row(db, project, "scene", _scene_code(db, project, int(frame.ep), seg))
++    scene_ref = _ref_from_asset(db, project, scene)
++    if scene_ref:
++        out.append(scene_ref)
++    for raw in _loads(frame.meta).get("characters") or []:
++        code = str(raw or "").strip()
++        if not code or any(row.get("code") == code and row.get("kind") == "cast"
++                           for row in out):
++            continue
++        asset = _asset_row(db, project, "cast", code)
++        ref = _ref_from_asset(db, project, asset)
++        if ref:
++            data = _loads(asset.data)
++            persona = data.get("persona") or {}
++            ref["gender"] = str(persona.get("gender") or "")
++            ref["identity"] = str(persona.get("identity") or "")
++            out.append(ref)
++    return out[:MAX_REFS]
++
++
++async def ensure_scene_main(db: Session, project: HibtvProject, frame: HibtvFrame,
++                            seg: Optional[HibtvSegment]) -> Optional[Path]:
++    """关键帧开工前确保场景主图存在；没有就先用场景卡同一套图片模型生成。"""
++    code = _scene_code(db, project, int(frame.ep), seg)
++    if not code:
++        raise RuntimeError(f"{frame.seg_id} f{int(frame.cut_index)} 未解析到场景 code，"
++                           "不能缺场景锚点出关键帧")
++    asset = _asset_row(db, project, "scene", code)
++    if asset is None:
++        raise RuntimeError(f"{frame.seg_id} f{int(frame.cut_index)} 找不到场景资产 {code}")
++    existing = _asset_main(db, project, "scene", code)
++    if existing is not None:
++        return existing
++    from . import hibtv_assets
++
++    logger.info("关键帧引用缺场景主图，先生成 %s：%s", code, asset.name)
++    await hibtv_assets.draw(db, project, asset)
++    generated = _asset_main(db, project, "scene", code)
++    if generated is None:
++        raise RuntimeError(f"场景 {code} 生成后仍没有可读主图")
++    return generated
++
++
+ def _scene_code(db: Session, project: HibtvProject, ep: int, seg: Optional[HibtvSegment]) -> str:
+     """段 → 场 → 场景资产 code（分镜的 `sceneIndex` 与剧本 `scenes[]` 同序）。"""
+     from .hibtv_jobs import get_doc, jloads
+@@ -104,16 +270,8 @@ def _scene_code(db: Session, project: HibtvProject, ep: int, seg: Optional[Hibtv
+ 
+ def refs_for(db: Session, project: HibtvProject, frame: HibtvFrame,
+              seg: Optional[HibtvSegment]) -> List[Path]:
+-    """该切的参考图：场景主图 + 出场角色主图（≤ MAX_REFS）。"""
+-    out: List[Path] = []
+-    scene = _asset_main(db, project, "scene", _scene_code(db, project, int(frame.ep), seg))
+-    if scene is not None:
+-        out.append(scene)
+-    for code in (_loads(frame.meta).get("characters") or [])[:MAX_REFS - len(out)]:
+-        path = _asset_main(db, project, "cast", str(code or ""))
+-        if path is not None and path not in out:
+-            out.append(path)
+-    return out[:MAX_REFS]
++    """该切的参考图：场景主图 + 全部出场角色主图，顺序与身份锁一致。"""
++    return [Path(row["path"]) for row in ref_specs_for(db, project, frame, seg)]
+ 
+ 
+ async def draw(db: Session, project: HibtvProject, frame: HibtvFrame) -> Dict:
+@@ -127,12 +285,23 @@ async def draw(db: Session, project: HibtvProject, frame: HibtvFrame) -> Dict:
+     lighting = payload.get("lighting") or lighting_of(db, project, int(frame.ep),
+                                                      int((_loads(seg.data).get("sceneIndex")
+                                                           if seg else 0) or 0))
+-    prompt = prompt_for(frame, str(lighting or ""))
++    await ensure_scene_main(db, project, frame, seg)
++    characters = character_specs_for(db, project, frame)
++    ref_specs = ref_specs_for(db, project, frame, seg)
++    # 人数与参考图必须同源：任一角色缺可用主图、或被 MAX_REFS 截断，都会让 prompt 声明的人数
++    # 大于实际可参考的脸 -> 模型猜脸/串脸。此处直接失败，禁止静默省略。
++    ref_cast = {str(r.get("code")) for r in ref_specs if r.get("kind") == "cast"}
++    missing = [str(c["code"]) for c in characters if str(c["code"]) not in ref_cast]
++    if missing:
++        raise RuntimeError(
++            f"{frame.seg_id} f{int(frame.cut_index)} 角色 {missing} 缺少可用角色主图或超出"
++            f"单帧参考图上限 {MAX_REFS} 张（含场景）：先补角色主图或拆分镜头后再出关键帧")
++    prompt = prompt_for(frame, str(lighting or ""), characters=characters, refs=ref_specs)
+     width, height = canvas(project)
+     rel = rel_for(frame)
+     out_abs = project_dir(project.id) / rel
+     old_abs = abs_path(project.id, frame.path) if (frame.path or "").strip() else None
+-    ref_paths = [p for p in refs_for(db, project, frame, seg)
++    ref_paths = [p for p in (Path(row["path"]) for row in ref_specs)
+                  if p != (old_abs if old_abs and old_abs.exists() else None)]
+     result = await hibtv_image.generate_image(
+         prompt=prompt, out_path=out_abs, ref_paths=ref_paths, width=width, height=height,
+diff --git a/server/app/services/hibtv_image.py b/server/app/services/hibtv_image.py
+index 7ec807b..8eb26ef 100644
+--- a/server/app/services/hibtv_image.py
++++ b/server/app/services/hibtv_image.py
+@@ -162,6 +162,19 @@ def pad_to_grid(path: Path, width: int, height: int) -> Path:
+     return path
+ 
+ 
++def _merge_negative(base: str, extra: str, limit: int = 1600) -> str:
++    """合并公共/关键帧负向词，去重且不截掉后加入的同角色复制约束。"""
++    out: List[str] = []
++    seen = set()
++    for raw in (base or "").split(",") + (extra or "").split(","):
++        term = raw.strip()
++        key = term.casefold()
++        if term and key not in seen:
++            seen.add(key)
++            out.append(term)
++    return ", ".join(out)[:limit]
++
++
+ def _inject(prompt: str, image_names: Sequence[str], *, width: int, height: int, seed: int,
+             prefix: str, text_only: bool, negative: str = "",
+             keep_adv_negative: bool = True) -> dict:
+@@ -194,8 +207,8 @@ def _inject(prompt: str, image_names: Sequence[str], *, width: int, height: int,
+     if negative.strip():
+         base = str(wf[advimage.NODE_ENCODE]["inputs"].get("negative_prompt") or "")
+         wf[advimage.NODE_ENCODE]["inputs"]["negative_prompt"] = (
+-            f"{base}, {negative.strip()}"[:900]
+-            if (keep_adv_negative and base) else negative.strip()[:900]
++            _merge_negative(base, negative) if (keep_adv_negative and base)
++            else negative.strip()[:1600]
+         )
+     # 关 PE：474.prompt 直接吃 484.on_false，也就是我们的提示词原文
+     wf[advimage.NODE_SWITCH]["inputs"]["switch"] = False
+diff --git a/server/app/services/hibtv_jobs.py b/server/app/services/hibtv_jobs.py
+index 695c1e8..d336ab7 100644
+--- a/server/app/services/hibtv_jobs.py
++++ b/server/app/services/hibtv_jobs.py
+@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
+ TEXT_KINDS = ("outline", "cast", "art", "refs", "script", "staging", "storyboard")
+ # 全集级文档（ep 恒为 0）与按集文档
+ DOC_KINDS = ("outline", "cast", "art", "staging", "script", "storyboard")
+-EP_KINDS = ("script", "storyboard")
++EP_KINDS = ("script", "staging", "storyboard")
+ 
+ 
+ # ------------------------------------------------------------------ 路径与 JSON
+diff --git a/server/app/services/hibtv_stages.py b/server/app/services/hibtv_stages.py
+index 5d7770f..89213c8 100644
+--- a/server/app/services/hibtv_stages.py
++++ b/server/app/services/hibtv_stages.py
+@@ -385,13 +385,18 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
+         h3 = (pmd.strip() or str(seg.get("h3Prompt") or "").strip())
+         if not h3:
+             raise StageError(f"{seg_id} 缺 h3Prompt / prompt.md（段出片没有入参）")
++        cast_doc = get_doc(db, project.id, "cast")
++        cast_rows = (jloads(cast_doc.data, {}).get("characters") or []) if cast_doc else []
++        line_speakers = _script_line_speakers(db, project, ep)
++        h3 = _bind_h3_prompt(h3, seg, cast_rows, line_speakers)
+         secs = cut_seconds(seg)
+         manifest_secs = float(item.get("seconds") or 0)
+         if manifest_secs and abs(manifest_secs - secs) > SECONDS_TOLERANCE * max(1, len(cuts)):
+             checked.append({"seg": seg_id, "note": f"manifest {manifest_secs}s ≠ Σ切 {secs}s"})
+         oversize = max(secs, manifest_secs) > MAX_SEGMENT_SECONDS + 1e-6
+         seg["h3Prompt"] = h3
+-        seg["promptSource"] = "prompt.md" if pmd else "storyboard.h3Prompt"
++        seg["promptSource"] = (("prompt.md" if pmd else "storyboard.h3Prompt")
++                               + "+identity-binding")
+         seg["promptSha8"] = sha8(h3)
+         seg["frameCount"] = len(cuts)
+         seg["pictureCount"] = len(pictures) or len(cuts)
+@@ -417,6 +422,147 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
+     }
+ 
+ 
++_H3_LOCK_MARK = "[[hibtv_identity_speaker_lock_v1]]"
++_DIALOGUE_RE = re.compile(r"<d>(.*?)</d>", re.IGNORECASE | re.DOTALL)
++_SPEAKER_RE = re.compile(r"\(S(\d+)\)", re.IGNORECASE)
++
++
++def _dialogue_key(text: str) -> str:
++    text = re.sub(r"<[^>]+>", "", text or "")
++    text = re.sub(r"^\s*\[[^\]]+\]", "", text)
++    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE).casefold()
++
++
++def _script_line_speakers(db: Session, project: HibtvProject, ep: int) -> Dict[str, str]:
++    """台词原文 → 角色 ID；用于给没有 (S#) 的 <d> 补回明确归属。"""
++    from .hibtv_jobs import get_doc, jloads
++
++    doc = get_doc(db, project.id, "script", ep)
++    row = episode_of(jloads(doc.data, {}).get("episodes") if doc else [], ep)
++    found: Dict[str, set] = {}
++    for scene in row.get("scenes") or []:
++        for beat in scene.get("flow") or []:
++            line = _dialogue_key(str(beat.get("line") or ""))
++            speaker = str(beat.get("speaker") or "").strip()
++            if line and speaker:
++                found.setdefault(line, set()).add(speaker)
++    return {key: next(iter(codes)) for key, codes in found.items() if len(codes) == 1}
++
++
++def _bind_h3_prompt(h3: str, seg: Dict, cast_rows: List[Dict],
++                    line_speakers: Optional[Dict[str, str]] = None) -> str:
++    """把孤立 S# 展开为角色身份，并为每个 Shot 写入人数/口型/台词归属锁。"""
++    if not h3 or _H3_LOCK_MARK in h3:
++        return h3
++    cast = [row for row in (cast_rows or []) if str(row.get("id") or "").strip()]
++    code_to_speaker = {str(row["id"]): f"S{i + 1}" for i, row in enumerate(cast)}
++    by_code = {str(row["id"]): row for row in cast}
++    line_speakers = line_speakers or {}
++    cuts = seg.get("cuts") or []
++
++    legend = []
++    for row in cast:
++        code = str(row["id"])
++        persona = row.get("persona") or {}
++        legend.append(
++            f"{code_to_speaker[code]} = {code} {row.get('name') or code}"
++            f"（{persona.get('gender') or '性别见角色卡'}；"
++            f"{persona.get('identity') or '身份见角色卡'}；"
++            "位置按对应 Shot 的角色顺序确定）")
++
++    shot_locks: Dict[int, str] = {}
++    for match in re.finditer(r"(?m)^\[Shot\s+(\d+)\]", h3):
++        shot_no = int(match.group(1))
++        if shot_no > len(cuts):
++            raise StageError(f"{seg.get('id') or '分镜段'} Shot {shot_no} 没有对应 cut")
++        cut = cuts[shot_no - 1] or {}
++        chars = list(dict.fromkeys(
++            str(code) for code in (cut.get("characters") or []) if str(code)))
++        unknown = [code for code in chars if code not in by_code]
++        if unknown:
++            raise StageError(
++                f"{seg.get('id') or '分镜段'} Shot {shot_no} 引用未知角色 {unknown}")
++        try:
++            declared_max = int(cut.get("maxOnScreen") or 0)
++        except (TypeError, ValueError):
++            declared_max = 0
++        # 画面人数 = 去重具名角色数与导演声明上限取大者：具名角色必须全部出场；
++        # 正数 maxOnScreen 可能含未具名群演，需保留；负数按 0 处理避免非法人数。
++        max_on_screen = max(len(chars), max(0, declared_max))
++
++        next_shot = re.search(r"(?m)^\[Shot\s+\d+\]", h3[match.end():])
++        end = match.end() + next_shot.start() if next_shot else len(h3)
++        soundscape = re.search(r"(?m)^overall_soundscape:", h3[match.end():end])
++        if soundscape:
++            end = match.end() + soundscape.start()
++        body = h3[match.start():end]
++
++        speakers: List[str] = []
++        for dialogue in _DIALOGUE_RE.finditer(body):
++            code = line_speakers.get(_dialogue_key(dialogue.group(1)), "")
++            if not code:
++                prior = body[:dialogue.start()]
++                labels = _SPEAKER_RE.findall(prior)
++                if labels:
++                    label = f"S{labels[-1]}"
++                    code = next((cid for cid, sid in code_to_speaker.items()
++                                 if sid == label), "")
++            if not code and len(chars) == 1:
++                code = chars[0]
++            if not code:
++                raise StageError(
++                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 台词无法绑定角色："
++                    f"{dialogue.group(1)[:80]}")
++            if code not in chars:
++                raise StageError(
++                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 说话人 {code} "
++                    f"不在 cut.characters {chars} 中")
++            if code not in speakers:
++                speakers.append(code)
++
++        people = "、".join(
++            f"{code} {by_code[code].get('name') or code}（第 {i + 1} 位）"
++            for i, code in enumerate(chars)) or "无完整人物"
++        if speakers:
++            speaker_text = " and ".join(
++                f"{code_to_speaker[code]} ({code} {by_code[code].get('name') or code})"
++                for code in speakers)
++            speech = (f"Only {speaker_text} speaks; all other characters keep "
++                      "their mouths closed.")
++        else:
++            speech = "No character speaks; all characters keep their mouths closed."
++        shot_locks[shot_no] = (
++            f"Character/speaker lock: maxOnScreen={max_on_screen}; "
++            f"exactly {max_on_screen} different people in frame ({people}); "
++            "the same character must never appear twice; no clones, twins, duplicate "
++            f"faces, extra people, character sheet or multi-view grid. {speech}")
++
++    if not shot_locks:
++        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 没有 [Shot N] 结构")
++
++    def add_lock(match):
++        no = int(match.group(2))
++        body = match.group(0).rstrip()
++        return f"{body} {shot_locks[no]}\n"
++
++    bound = re.sub(
++        r"(?ms)^(\[Shot\s+(\d+)\].*?)(?=^\[Shot\s+\d+\]|\noverall_soundscape:|\Z)",
++        add_lock, h3)
++    block = "\n".join([
++        _H3_LOCK_MARK,
++        "Character and speaker binding (authoritative):",
++        *legend,
++        "Every S# is permanently bound to the listed character ID and name. "
++        "Never transfer a line to another character.",
++        "",
++        "",
++    ])
++    marker = "integrated_multimodal_description:"
++    if marker not in bound:
++        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 缺 {marker}")
++    return bound.replace(marker, block + marker, 1)
++
++
+ def _load_manifest(files: Dict[str, Path]) -> Dict[str, Dict]:
+     hit = pick(files, contain="manifest", suffix=".json")
+     if hit is None:
+@@ -442,7 +588,7 @@ def _load_prompts(files: Dict[str, Path]) -> Dict[str, str]:
+     return out
+ 
+ 
+-_PICTURE_RE = re.compile(r"^\s*Picture\s+(\d+)\b", re.IGNORECASE)
++_PICTURE_RE = re.compile(r"^\s*(?:[-*#>\u2022]+\s*)?Picture\s+(\d+)\b", re.IGNORECASE)
+ 
+ 
+ def _count_pictures(prompt_md: str) -> int:
+@@ -481,6 +627,7 @@ def sync_frames(db: Session, project: HibtvProject, ep: int,
+                 "size": cut.get("size") or "",
+                 "camera": cut.get("camera") or "",
+                 "characters": cut.get("characters") or [],
++                "maxOnScreen": cut.get("maxOnScreen"),
+                 "props": cut.get("props") or [],
+                 "startsAt": (item.get("cutStarts") or [])[i - 1] if i - 1 < len(item.get("cutStarts") or []) else None,
+                 "expected": pictures[i - 1] if i - 1 < len(pictures) else "",
+diff --git a/server/tests/test_hibtv_gw_materials.py b/server/tests/test_hibtv_gw_materials.py
+new file mode 100644
+index 0000000..b52e39d
+--- /dev/null
++++ b/server/tests/test_hibtv_gw_materials.py
+@@ -0,0 +1,61 @@
++import tempfile
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++
++from app.services import hibtv_codex as hibtv
++
++
++class GatewayMaterialsTest(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory(prefix="hibtv-gw-materials-test-")
++        self.root = Path(self.tmp.name)
++        self.old_hibtv_dir = hibtv.HIBTV_DIR
++        self.old_host = hibtv.GW_MATERIALS_HOST
++        self.old_mount = hibtv.GW_MATERIALS_MOUNT
++        hibtv.HIBTV_DIR = self.root / "local"
++        hibtv.GW_MATERIALS_HOST = self.root / "host"
++        hibtv.GW_MATERIALS_MOUNT = self.root / "mount"
++
++    def tearDown(self):
++        hibtv.HIBTV_DIR = self.old_hibtv_dir
++        hibtv.GW_MATERIALS_HOST = self.old_host
++        hibtv.GW_MATERIALS_MOUNT = self.old_mount
++        self.tmp.cleanup()
++
++    def test_write_source_publishes_identical_gateway_copy(self):
++        local = Path(hibtv.write_source(37, "最后一班地铁\n"))
++        staged = hibtv.GW_MATERIALS_HOST / "37" / "source.txt"
++
++        self.assertEqual(local.read_bytes(), staged.read_bytes())
++        self.assertEqual(str(hibtv.gateway_source_path(37)),
++                         str(self.root / "mount" / "37" / "source.txt"))
++
++    def test_outline_uses_container_path_not_platform_path(self):
++        hibtv.write_source(37, "最后一班地铁\n")
++        project = SimpleNamespace(
++            id=37,
++            novel_path="/data/minimax-ui/hibtv/37/source.txt",
++            minutes_min=1,
++            aspect_ratio="9:16",
++            episodes=1,
++            keeps="",
++        )
++
++        task = hibtv.task_for(None, project, "outline", 0)
++
++        expected = str(hibtv.gateway_source_path(37))
++        self.assertIn(f"小说正文：{expected}", task)
++        self.assertNotIn(project.novel_path, task)
++
++    def test_publish_failure_is_loud(self):
++        blocker = self.root / "not-a-directory"
++        blocker.write_text("x", encoding="utf-8")
++        hibtv.GW_MATERIALS_HOST = blocker
++
++        with self.assertRaisesRegex(RuntimeError, "网关素材中转失败"):
++            hibtv.write_source(37, "must fail")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/web/src/hibtv/pages/ArtPage.tsx b/web/src/hibtv/pages/ArtPage.tsx
+index e9de4e7..c3d3a4e 100644
+--- a/web/src/hibtv/pages/ArtPage.tsx
++++ b/web/src/hibtv/pages/ArtPage.tsx
+@@ -201,11 +201,19 @@ export default function ArtPage() {
+             {anchors.map((row) => (
+               <div key={row.id} style={{ padding: "3px 0" }}>
+                 <span className="mono dim">{row.id}</span> {row.name}：
+-                {row.anchors.map((a) => (
+-                  <span key={a} className="chip ghost" style={{ marginLeft: 4 }}>
+-                    {a}
+-                  </span>
+-                ))}
++                {row.anchors.map((anchor, i) =>
++                  typeof anchor === "string" ? (
++                    <span key={`${row.id}-${i}`} className="chip ghost" style={{ marginLeft: 4 }}>
++                      {anchor}
++                    </span>
++                  ) : (
++                    <div key={`${row.id}-${i}`} style={{ marginTop: 4, paddingLeft: 28 }}>
++                      {anchor.name ? <strong>{anchor.name}</strong> : null}
++                      {anchor.name && anchor.desc ? "：" : null}
++                      {anchor.desc || null}
++                    </div>
++                  ),
++                )}
+               </div>
+             ))}
+             <div className="dim" style={{ marginTop: 6 }}>
+diff --git a/web/src/hibtv/pages/HomePage.tsx b/web/src/hibtv/pages/HomePage.tsx
+index 53d893c..89fde1a 100644
+--- a/web/src/hibtv/pages/HomePage.tsx
++++ b/web/src/hibtv/pages/HomePage.tsx
+@@ -56,7 +56,7 @@ function minutesOf(seconds: number): [number, number] {
+ }
+ 
+ export default function HibtvHomePage() {
+-  const { projects, selectProject, refreshProjects, refreshProject, toast, project: cur } = useHibtv();
++  const { projects, selectProject, refreshProjects, toast, project: cur } = useHibtv();
+   const navigate = useNavigate();
+   const gate = useCodexGate();
+   const [open, setOpen] = useState(false);
+@@ -165,7 +165,6 @@ export default function HibtvHomePage() {
+               className={`prow ${cur?.id === p.id ? "cur" : ""}`}
+               onClick={() => {
+                 selectProject(p.id);
+-                void refreshProject();
+                 navigate("/hibtv/overview");
+               }}
+             >
+@@ -234,6 +233,8 @@ export default function HibtvHomePage() {
+       </div>
+ 
+       {open && (
++        <div className="layer open">
++          <div className="scrim" onClick={() => setOpen(false)} />
+         <Modal
+           eyebrow="NEW PROJECT · novel"
+           title="新建短剧项目"
+@@ -380,6 +381,7 @@ export default function HibtvHomePage() {
+             </span>
+           </div>
+         </Modal>
++        </div>
+       )}
+     </Stage>
+   );
+diff --git a/web/src/hibtv/types.ts b/web/src/hibtv/types.ts
+index 6a9abab..931ab00 100644
+--- a/web/src/hibtv/types.ts
++++ b/web/src/hibtv/types.ts
+@@ -448,12 +448,14 @@ export interface RefLayerDoc {
+   outfits?: Record<string, { top?: RefLayer; bottom?: RefLayer; details?: RefLayer }>;
+ }
+ 
++export type ArtAnchor = string | { name?: string; desc?: string };
++
+ export interface ArtScene {
+   id: string;
+   name: string;
+   primary?: boolean;
+   summary?: string;
+-  anchors?: string[];
++  anchors?: ArtAnchor[];
+   lighting?: string[];
+   usage?: { episodes?: number[]; beats?: number[] };
+   variantOf?: string;
+@@ -464,6 +466,7 @@ export interface ArtScene {
+ export interface ArtProp {
+   id: string;
+   name?: string;
++  anchors?: ArtAnchor[];
+   scale?: string;
+   states?: string[];
+   relatedScenes?: string[];
