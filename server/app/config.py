@@ -129,11 +129,15 @@ class Settings(BaseSettings):
     # 资产单图提示词语言：en = skill 的 image.prompt（默认）/ zh = image.promptLocal
     hibtv_image_prompt_lang: str = "en"
     # 资产单图尺寸（按资产类型固定，可逐类覆盖；格式 WxH）
-    hibtv_asset_size_cast: str = "896x1152"
+    hibtv_asset_size_cast: str = "832x1248"
     hibtv_asset_size_scene: str = "1280x720"
     hibtv_asset_size_prop: str = "1024x1024"
     # 段视频单次上限秒数：H3 只出 5+17n 帧（24fps），13s → 311 帧 = 12.9583s
     hibtv_seg_max_seconds: float = 13.0
+    # 网关技能部署版本；升级 skills 后修改，避免复用旧产物
+    hibtv_skills_revision: str = ""
+    # 段边界音频淡入淡出，避免波形突变；不改变画面切点
+    hibtv_audio_fade_seconds: float = 0.025
 
     # ---- codex 网关（文本 7 阶段唯一真值来源；网关自身归运维/其它 agent，本仓库只做 client）----
     # 网关只绑 127.0.0.1:8910 且公网 /v1/* 已 404 → 平台后端必须与网关同机。

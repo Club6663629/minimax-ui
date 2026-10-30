@@ -119,7 +119,7 @@ function useRenders(ep: number) {
 /** 把本集帧按段分组，拿到「已出 / 共几」的快照。 */
 function frameStats(frames: HibtvFrame[] | undefined, segId: string) {
   const rows = (frames || []).filter((f) => f.segId === segId);
-  return { done: rows.filter((f) => f.url).length, total: rows.length, rows };
+  return { done: rows.filter((f) => f.ready).length, total: rows.length, rows };
 }
 
 /* ------------------------------------------------------------------ 图位条 */
@@ -209,7 +209,7 @@ function FrameStrip({
         }}
       >
         {frames.map((f) => {
-          const isMissing = !f.url;
+          const isMissing = !f.ready;
           return (
             <div
               key={f.id}
@@ -552,7 +552,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
           </span>
         </>
       }
-      lede="整集成片按段拼；每段 ≤ 13 秒、每切 2–5 秒一个镜头。没有分镜图也能出片：有帧走路 A（每切一张干净关键帧），缺帧走路 B（拿角色/场景/道具锚点兜底）。"
+      lede="整集成片按当前段清单拼接；每切生成一张干净关键帧，按编号输入 ref2v。分镜图缺失或过期时暂停出片。"
       right={
         <>
           <CodexLight />
@@ -714,7 +714,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
       <div className="tiny dim" style={{ marginTop: 12, lineHeight: 1.9 }}>
         段长上限 {cap}s（H3 只出 5+17n 帧，13s 会吸附成 13.67s，所以请求 311 帧 = 12.9583s）。
         <br />
-        图位数字是「已出关键帧 / 需出张数」；分镜图可选，缺图时出片会走后端路 B（锚点兜底），不再拦下。
+        图位数字是「有效关键帧 / 需出张数」；补齐当前分镜的所有图片后才能出片，过期图片不能继续引用。
         <span className="link" style={{ marginLeft: 8 }} onClick={() => void reloadFrames()}>
           刷新图位
         </span>
@@ -799,6 +799,14 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
   const generate = async () => {
     if (!project || !seg) return;
+    if (seg.framesReady === false) {
+      toast("分镜图缺失或过期，请先补齐当前版本的关键帧");
+      return;
+    }
+    if (seg.timingMismatch) {
+      toast("分镜时长未对齐模型帧预算，请重跑本集分镜");
+      return;
+    }
     if (seg.status === "running") {
       toast("这段正在出片，等它跑完再点，避免重复扣积分");
       return;
@@ -810,14 +818,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     setBusy(true);
     try {
       const res = await hibtvApi.generateSegment(project.id, segId, {});
-      const route =
-        res.refSource === "frames"
-          ? `路 A · ${res.refs} 张关键帧`
-          : res.refSource === "assets"
-            ? `路 B · ${res.refs} 张锚点参考（本段缺分镜图，拿场景/角色/道具锚点兜底）`
-            : res.refs
-              ? `${res.refs} 张参考图`
-              : "文生视频（无分镜图也无锚点资产）";
+      const route = `ref2v · ${res.refs} 张当前关键帧`;
       toast(
         `已排队出片：${segId} v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.cost} 积分 · ${route}`,
       );
@@ -830,7 +831,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     }
   };
 
-  /** 补齐全部：一次出齐本段所有缺帧（分镜图可选，不出也能走路 B 出片）。 */
+  /** 补齐全部：一次出齐本段所有缺帧（完整分镜图是当前 ref2v 路线的必要输入）。 */
   const fillAllFrames = async () => {
     if (!project || !seg) return;
     try {
@@ -962,13 +963,13 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           <span style={{ marginLeft: "auto" }} />
           <button
             className="btn sm gold"
-            disabled={busy || generating || seg.oversize}
+            disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
             title={
               seg.oversize
                 ? "段长超限：先重跑本集 storyboard"
                 : seg.framesReady === false
-                  ? `缺关键帧 f${missing.join(" / f")}：走后端路 B，拿场景/角色/道具锚点兜底出片`
-                  : "路 A：ref2v + 每切关键帧原样直出"
+                  ? `关键帧 f${missing.join(" / f")} 缺失或过期，请先补齐`
+                  : "ref2v：按序挂载当前全部关键帧"
             }
             onClick={() => void generate()}
           >
@@ -997,18 +998,18 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
       <div className="panel-sec">
         <div className="panel-title">
-          出片入参 <span className="r">{seg.framesReady === false ? "ref2v · 路 B 锚点兜底" : `ref2v · 路 A ${cuts.length} 帧`}</span>
+          出片入参 <span className="r">{seg.framesReady === false ? "等待有效关键帧" : `ref2v · ${cuts.length} 张分镜图`}</span>
         </div>
         <div className="tiny dim" style={{ lineHeight: 1.9 }}>
-          提示词 = prompt.md 原文（Picture N 钉切点），平台不裁剪、不改写；
+          提示词来自已校验的分镜正文（Picture N 对应 fN），平台不改写；
           {seg.framesReady === false
-            ? "本段分镜图不齐→走路 B：拿场景/角色（锚点+大头照）/道具锚点当参考（视频绝不吃多视图网格）。"
+            ? "本段分镜图缺失或过期，补齐后才能出片，不使用资产图替代。"
             : "参考图 = f1..fN 干净单帧按序号挂，`ref_image_size=match` 负责归一。"}
           {seg.promptSha8 ? ` 当前提示词 sha256 前 8 位：${seg.promptSha8}` : ""}
         </div>
         {missing.length ? (
           <div className="tiny" style={{ marginTop: 6, color: "var(--gold-2)" }}>
-            缺关键帧 f{missing.join(" / f")}：不拦出片，现在会走路 B（锚点兜底）。想先定构图就点“补齐全部”把分镜图出齐，再走路 A。
+            关键帧 f{missing.join(" / f")} 缺失或过期，请补齐当前版本后再出片。
           </div>
         ) : null}
       </div>
@@ -1092,9 +1093,9 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           <div className="card" style={{ marginBottom: 12 }}>
             <div className="card-hd">
               <span className="t">分镜图</span>
-              <span className="chip">可选</span>
+              <span className="chip">出片必需</span>
               <span style={{ marginLeft: "auto" }} />
-              <span className="tiny dim">不出也能出片</span>
+              <span className="tiny dim">缺失或过期时暂停出片</span>
             </div>
             <div className="card-bd">
               <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
@@ -1109,8 +1110,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                 </button>
               </div>
               <div className="tiny dim" style={{ lineHeight: 1.9 }}>
-                没有分镜图也能出片——直接拿角色与场景（含大头照）、道具的锚点图当参考出视频（后端路 B 兜底）。
-                想先定构图，或者某一镜出片总不对，再给它出分镜图；出齐后走路 A（每切一张干净关键帧 f1..fN）。
+                每切生成一张干净剧情画面 f1..fN。角色、场景和道具的适用视图先作用到分镜图，再由分镜图输入视频。
+                上游修改后需要重新生成受影响的关键帧，图片序号必须与当前分镜一致。
                 多视图网格 / 派生拼格绝不进视频模型（会被识别成多主体 → ID 漂移 / 双胞胎）。
               </div>
             </div>
@@ -1166,15 +1167,15 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
             <span className="chip">
               切 {cuts.length} · 图 {seg.pictureCount || 0}
             </span>
-            <span className="tiny dim">分镜图可选，不出也能出片</span>
+            <span className="tiny dim">每切一张当前有效的分镜图</span>
             <span className="sp" style={{ marginLeft: "auto" }} />
             <button className="btn xs" disabled={busy || generating} onClick={() => void fillAllFrames()}>
               补齐全部缺帧
             </button>
             <button
               className="btn xs"
-              disabled={busy || generating || seg.oversize}
-              title={seg.framesReady === false ? "缺帧也出片：走后端路 B（锚点兜底）" : "路 A：ref2v + 每切关键帧"}
+              disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
+              title={seg.framesReady === false ? "请先补齐有效分镜图" : "ref2v：每切一张关键帧"}
               onClick={() => void generate()}
             >
               用当前提示词出片
@@ -1320,8 +1321,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               <span style={{ marginLeft: "auto" }} />
               <button
                 className="btn xs"
-                disabled={busy || generating || seg.oversize}
-                title={seg.framesReady === false ? "缺帧也出片：走后端路 B（锚点兜底）" : "路 A：ref2v + 每切关键帧"}
+                disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
+                title={seg.framesReady === false ? "请先补齐有效分镜图" : "ref2v：每切一张关键帧"}
                 onClick={() => void generate()}
               >
                 重新生成视频

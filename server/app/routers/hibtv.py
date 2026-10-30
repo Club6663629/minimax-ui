@@ -11,6 +11,7 @@
 """
 import json
 import shutil
+from uuid import uuid4
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -65,6 +66,8 @@ from ..services import (
     hibtv_jobs,
 )
 from ..services.billing import add_credits, compute_ad_image_cost, compute_cost
+from ..services.hibtv_contracts import (digest, file_hash, asset_input, current_segments,
+                                        segment_input, require_document)
 
 router = APIRouter(prefix="/api/hibtv", tags=["hibtv"])
 
@@ -119,6 +122,8 @@ def _project_payload(db: Session, project: HibtvProject) -> Dict:
               .all())
     segs = db.query(HibtvSegment).filter(HibtvSegment.project_id == project.id).all()
     frames = db.query(HibtvFrame).filter(HibtvFrame.project_id == project.id).all()
+    segs = [s for s in segs if hibtv_jobs.jloads(s.data, {}).get("active") is not False]
+    frames = [f for f in frames if hibtv_jobs.jloads(f.meta, {}).get("active") is not False]
     asset_count = {"cast": 0, "scene": 0, "prop": 0}
     for asset in assets:
         asset_count[asset.kind] = asset_count.get(asset.kind, 0) + 1
@@ -129,6 +134,7 @@ def _project_payload(db: Session, project: HibtvProject) -> Dict:
         "episodes": int(project.episodes or 1),
         "minutesMin": int(project.minutes_min or 2),
         "minutesMax": int(project.minutes_max or 5),
+        "targetSeconds": hibtv_codex.target_seconds(db, project),
         "aspectRatio": project.aspect_ratio or "9:16",
         "novelName": project.novel_name or "",
         "hasNovel": bool((project.novel_text or "").strip() or (project.novel_path or "").strip()),
@@ -154,7 +160,7 @@ def _project_payload(db: Session, project: HibtvProject) -> Dict:
         },
         "frameCount": {
             "total": len(frames),
-            "done": len([f for f in frames if (f.path or "").strip()]),
+            "done": sum(hibtv_frames.frame_current(db, project, f) for f in frames),
         },
     }
 
@@ -192,6 +198,9 @@ def _resync(db: Session, project: HibtvProject, kind: str, ep: int = 0) -> None:
     elif kind == "storyboard":
         # 改镜头（秒数/描述/景别）必须落到段表，否则段页与出片时长取到的是旧值
         hibtv_jobs.sync_segments(db, project, ep, data)
+        from ..services.hibtv_stages import sync_frames
+        segments = next((e.get("segments", []) for e in data.get("episodes", []) if int(e.get("ep") or 0) == ep), [])
+        sync_frames(db, project, ep, {}, segments)
 
 
 def _mark_stale(db: Session, doc: HibtvDoc, why: str = "改动后门未复跑") -> None:
@@ -594,6 +603,13 @@ def patch_asset(project_id: int, asset_id: int, body: HibtvAssetPatch,
     asset = db.get(HibtvAsset, asset_id)
     if asset is None or asset.project_id != project.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "资产不存在")
+    if asset.kind == "cast" and body.data:
+        from ..services.hibtv_contracts import design
+        current = hibtv_jobs.jloads(asset.data, {})
+        edited = {**current, **body.data}
+        if design(edited) != design(current):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "角色生产提示词由网关导出，请修改角色文档后重新运行角色参考阶段")
     if body.name is not None and body.name != asset.name:
         _log_change(db, project.id, f"asset:{asset.id}", "name", asset.name, body.name)
         asset.name = body.name[:120]
@@ -605,6 +621,10 @@ def patch_asset(project_id: int, asset_id: int, body: HibtvAssetPatch,
         merged = hibtv_jobs.jloads(asset.data, {})
         old_raw = hibtv_jobs.jdumps(merged)
         merged.update(body.data)
+        if asset_input(merged) != asset_input(hibtv_jobs.jloads(asset.data, {})):
+            merged["imageConfirmed"] = False
+            merged.pop("confirmedHash", None)
+            hibtv_assets.mark_stale(asset, "__anchor")
         _log_change(db, project.id, f"asset:{asset.id}", "data", old_raw, merged)
         asset.data = hibtv_jobs.jdumps(merged)
     asset.updated_at = hibtv_jobs.now()
@@ -625,10 +645,10 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "资产不存在")
 
     if body.action == "confirm":
-        data = hibtv_jobs.jloads(asset.data, {})
-        data["imageConfirmed"] = True
-        asset.data = hibtv_jobs.jdumps(data)
-        asset.status = "done" if (asset.main_path or "").strip() else "empty"
+        try:
+            hibtv_assets.confirm_image(db, project, asset, body.view)
+        except RuntimeError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         asset.updated_at = hibtv_jobs.now()
         db.commit()
         return hibtv_jobs.asset_payload(project.id, asset)
@@ -636,7 +656,7 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
     payload: Dict = {"mode": "assets", "asset_id": asset.id, "kind": asset.kind}
     if body.action == "draw_view":
         view = body.view.strip()
-        if not view or hibtv_assets.view_spec(asset.kind, view) is None:
+        if not view or hibtv_assets.view_spec(asset.kind, view, hibtv_jobs.jloads(asset.data, {})) is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "派生视图 view 非法")
         if hibtv_assets.anchor_id(asset.kind) == view:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "锚点请用 draw/regen 出图")
@@ -689,7 +709,11 @@ async def upload_asset(project_id: int, asset_id: int,
 
     view = (view or "").strip()
     is_anchor = not view or view == hibtv_assets.anchor_id(asset.kind)
-    fname = "main" if is_anchor else view
+    if view and hibtv_assets.view_spec(asset.kind, view, hibtv_jobs.jloads(asset.data, {})) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "未知资产视图")
+    if not is_anchor and not hibtv_assets.main_current(project, asset):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "先确认当前锚点再上传派生图")
+    fname = ("main" if is_anchor else view) + "-" + uuid4().hex
     rel = f"assets/{asset.kind}/{asset.code or asset.id}/{fname}{suffix}"
     path = hibtv_jobs.project_dir(project.id) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -714,8 +738,16 @@ def list_frames(project_id: int, ep: int = Query(default=1, ge=1),
     if seg_id:
         query = query.filter(HibtvFrame.seg_id == seg_id)
     rows = query.order_by(HibtvFrame.seg_id, HibtvFrame.cut_index).all()
-    return {"ep": ep, "frames": [_frame_payload(project.id, f) for f in rows],
-            "done": len([f for f in rows if (f.path or "").strip()]), "total": len(rows)}
+    rows = [f for f in rows if hibtv_jobs.jloads(f.meta, {}).get("active") is not False]
+    items = []
+    for frame in rows:
+        item = _frame_payload(project.id, frame)
+        item["ready"] = hibtv_frames.frame_current(db, project, frame)
+        if not item["ready"] and frame.path:
+            item["status"] = "stale"
+        items.append(item)
+    return {"ep": ep, "frames": items,
+            "done": sum(bool(item["ready"]) for item in items), "total": len(rows)}
 
 
 def _frame_payload(project_id: int, frame: HibtvFrame) -> Dict:
@@ -733,7 +765,8 @@ def _frame_payload(project_id: int, frame: HibtvFrame) -> Dict:
 
 def _frame_or_404(db: Session, project: HibtvProject, frame_id: int) -> HibtvFrame:
     frame = db.get(HibtvFrame, frame_id)
-    if frame is None or frame.project_id != project.id:
+    if (frame is None or frame.project_id != project.id
+            or hibtv_jobs.jloads(frame.meta, {}).get("active") is False):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "关键帧不存在")
     return frame
 
@@ -750,6 +783,10 @@ def frame_image(project_id: int, frame_id: int, body: HibtvFrameImageIn,
         _log_change(db, project.id, f"frame:{frame.id}", "prompt", old,
                     body.prompt.strip())
         frame.prompt = body.prompt.strip()
+        meta = hibtv_jobs.jloads(frame.meta, {})
+        meta["overridePrompt"] = frame.prompt
+        meta["stale"] = bool(frame.path)
+        frame.meta = hibtv_jobs.jdumps(meta)
     payload: Dict = {"mode": "frames", "frame_ids": [frame.id],
                      "ep": frame.ep, "seg_id": frame.seg_id}
     steps = hibtv_jobs.image_steps(db, project, payload)
@@ -783,13 +820,18 @@ async def upload_frame(project_id: int, frame_id: int,
     content = await file.read()
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "图片不能超过 20MB")
-    rel = f"frames/{frame.seg_id}/f{int(frame.cut_index)}{suffix}"
+    rel = f"frames/{frame.seg_id}/f{int(frame.cut_index)}-{uuid4().hex}{suffix}"
     path = hibtv_jobs.project_dir(project.id) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     frame.path = rel
     frame.upload_id = hibtv_jobs.register_upload(db, project.user_id, path) or 0
     frame.status = "review"
+    meta = hibtv_jobs.jloads(frame.meta, {})
+    meta.update({"uploaded": True, "stale": False, "sha256": file_hash(path),
+                 "renderedPlanHash": meta.get("planHash"), "dependencies": [],
+                 "contextHash": hibtv_frames.context_hash(db, project, frame.ep)})
+    frame.meta = hibtv_jobs.jdumps(meta)
     frame.version = int(frame.version or 0) + 1
     frame.updated_at = hibtv_jobs.now()
     db.commit()
@@ -822,6 +864,7 @@ def list_segments(project_id: int, ep: int = Query(default=1, ge=1),
     rows = (db.query(HibtvSegment)
             .filter(HibtvSegment.project_id == project.id, HibtvSegment.ep == ep)
             .order_by(HibtvSegment.idx).all())
+    rows = [row for row in rows if hibtv_jobs.jloads(row.data, {}).get("active") is not False]
     return {
         "ep": ep,
         "segments": [hibtv_jobs.segment_payload(project.id, s) for s in rows],
@@ -845,7 +888,7 @@ def _segment_detail(db: Session, project: HibtvProject, seg: HibtvSegment) -> Di
     frames = hibtv_frames.plan(db, project, seg.seg_id, ep=seg.ep)
     payload["frames"] = frames
     payload["missingFrames"] = [f["cutIndex"] for f in frames
-                                if not f["path"] or not f["uploadId"]]
+                                if not f.get("ready")]
     payload["framesReady"] = bool(frames) and not payload["missingFrames"]
     # 出片请求值：H3 只出 5+17n 帧（24fps），13s 上限 = 311 帧 = 12.9583s
     plan_seconds = float(payload["planSeconds"] or 0)
@@ -866,9 +909,15 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
     prompt = (body.prompt or data.get("h3Prompt") or "").strip()
     if not prompt:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "本段还没有 H3 提示词，先跑分镜")
-    if body.prompt:
-        data["h3Prompt"] = body.prompt.strip()
-        seg.data = hibtv_jobs.jdumps(data)
+    if body.prompt and body.prompt.strip() != str(data.get("h3Prompt") or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "提示词修改需回到网关重生成并校验，不能绕过当前分镜合同")
+    try:
+        expected = next((row for row in current_segments(db, project, seg.ep, checked=True)
+                         if row["id"] == seg_id), None)
+        if expected is None or digest(segment_input(expected)) != digest(segment_input(data)):
+            raise RuntimeError("当前分镜与段表不一致，请重新导入")
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     cuts = data.get("cuts") or []
     plan = round(sum(float(c.get("seconds") or 0) for c in cuts), 3)
@@ -879,11 +928,16 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
             f"本段计划 {plan:.1f}s，超过单次生成上限 {cap:g}s：“先拆镜头再出片”，"
             f"超限请重跑本集 storyboard（平台不拆段、不改提示词）")
 
-    # 分镜图可选：每切都有分镜图走路 A（f1..fN 干净单帧），缺帧走路 B
-    # （挂场景/角色/道具锚点兜底）；两者都空则回落 t2v。视频绝不吃多视图网格。
-    ref_ids, ref_source = hibtv_frames.segment_video_refs(db, project, seg)
+    frames_n = data.get("generationFrames")
+    if (not isinstance(frames_n, int) or isinstance(frames_n, bool) or frames_n < 5
+            or (frames_n - 5) % 17 or abs(frames_n / 24 - plan) > 0.001):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "分镜时长未对齐 H3 合法帧预算，请在网关重跑分镜")
+    try:
+        ref_ids, ref_source = hibtv_frames.segment_video_refs(db, project, seg)
+        input_hash = hibtv_frames.video_input_hash(db, project, seg)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    frames_n = h3_time.frames_for(plan or cap)
     seconds = round(frames_n / 24.0, 4)
     cost = compute_cost(seconds, "768p")
     if user.credits < cost:
@@ -892,7 +946,7 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
 
     task = Task(
         user_id=user.id,
-        mode="r2v" if ref_ids else "t2v",
+        mode="r2v",
         prompt=prompt,                       # prompt.md 原文：Picture N 就是切点契约
         aspect_ratio=project.aspect_ratio or "9:16",
         duration=max(5, int(round(seconds))),
@@ -910,6 +964,8 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
     version = max([int(v.get("v") or 0) for v in versions] or [0]) + 1
     versions.append({
         "v": version, "task_id": task.id, "path": "", "seconds": 0,
+        "inputHash": input_hash, "segmentHash": digest(segment_input(data)),
+        "frames": frames_n, "refImageIds": ref_ids,
         "at": hibtv_jobs.now().strftime("%Y-%m-%d %H:%M"),
     })
     seg.versions = hibtv_jobs.jdumps(versions)
@@ -950,8 +1006,14 @@ def choose_version(project_id: int, seg_id: str, body: HibtvSegmentChooseIn,
     project = _project(db, project_id, user)
     seg = _segment_or_404(db, project, seg_id)
     versions = hibtv_jobs.jloads(seg.versions, [])
-    if not any(int(v.get("v") or 0) == int(body.v) for v in versions):
+    selected = next((v for v in versions if int(v.get("v") or 0) == int(body.v)), None)
+    if selected is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "版本不存在")
+    try:
+        if not selected.get("path") or selected.get("inputHash") != hibtv_frames.video_input_hash(db, project, seg):
+            raise RuntimeError("该视频版本依赖旧输入或尚未完成，不能作为当前成片")
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     seg.current_version = int(body.v)
     seg.updated_at = hibtv_jobs.now()
     db.commit()
@@ -965,18 +1027,22 @@ def render_episode(project_id: int, ep: int,
                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     project = _project(db, project_id, user)
     hibtv_jobs.sync_segment_tasks(db, project, ep)
-    rows = (db.query(HibtvSegment)
-            .filter(HibtvSegment.project_id == project.id, HibtvSegment.ep == ep)
-            .order_by(HibtvSegment.idx).all())
-    if not rows:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "本集还没有分镜段，先跑分镜")
-    missing = [s.seg_id for s in rows if not (_current_version(s).get("path"))]
-    if missing:
-        head = "、".join(missing[:5])
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"{len(missing)} 段还没有成片（{head}…），先全部出片再拼接")
-    if not hibtv_compose.ffmpeg_bin():
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "服务端未安装 ffmpeg，无法拼接")
+    try:
+        expected = current_segments(db, project, ep, checked=True)
+        by_id = {s.seg_id: s for s in db.query(HibtvSegment).filter(
+            HibtvSegment.project_id == project.id, HibtvSegment.ep == ep).all()}
+        for row in expected:
+            seg = by_id.get(row["id"])
+            if seg is None:
+                raise RuntimeError(f"{row['id']} 缺少当前分段记录")
+            version = _current_version(seg)
+            if not version.get("path") or version.get("inputHash") != hibtv_frames.video_input_hash(db, project, seg):
+                raise RuntimeError(f"{row['id']} 尚无与当前输入匹配的视频，请先生成")
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    compose_status = hibtv_compose.status()
+    if not compose_status["available"]:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, compose_status["note"])
 
     active = (db.query(HibtvJob)
               .filter(HibtvJob.project_id == project.id, HibtvJob.kind == "compose",

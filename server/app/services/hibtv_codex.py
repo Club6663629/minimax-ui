@@ -2,7 +2,7 @@
 
 一条线划死：**文本归 codex，像素归平台**。
 - 本模块只写「业务意图 + 上游产物引用」，schema 由 skill 自带，平台不拼提示词；
-- 上游一律用网关机器上的**绝对路径**（取自 `artifacts[].abs`），绝不把 JSON 全文塞进 input；
+- 上游使用数据库当前内容的不可变快照，发布后传网关容器内的绝对路径；
 - 首段（outline）也不内联小说正文：先落 `DATA_DIR/hibtv/{id}/source.txt` 再给绝对路径。
 """
 import asyncio
@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from ..config import HIBTV_DIR, settings
 from ..models import HibtvJob, HibtvProject
 from . import codex_gateway as gw
-from . import hibtv_stages
+from . import hibtv_stages, h3_time
+from .hibtv_contracts import CONTRACT_VERSION, digest, document_inputs, project_input, require_document, file_hash, stage_data
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +40,12 @@ TEXT_KINDS = tuple(STAGES)
 UPSTREAM: Dict[str, List[Tuple[str, str]]] = {
     "outline": [],
     "cast": [("上游大纲", "outline")],
-    "art": [("上游大纲", "outline")],
+    "art": [("上游大纲", "outline"), ("上游角色表", "cast")],
     "refs": [("上游角色表", "cast")],
-    "script": [("上游大纲", "outline"), ("上游美术", "art")],
-    "staging": [("上游剧本", "script"), ("上游美术", "art")],
+    "script": [("上游大纲", "outline"), ("上游美术", "art"), ("上游角色表", "cast")],
+    "staging": [("上游剧本", "script"), ("上游美术", "art"), ("上游大纲", "outline")],
     "storyboard": [("上游剧本", "script"), ("上游美术", "art"),
                    ("上游角色表", "cast"), ("上游站位", "staging")],
-}
-# 各 stage「主产物」的文件名特征（用来从产物清单里挑出要引用给下游的那个文件）
-MAIN_SUFFIX: Dict[str, str] = {
-    "outline": "-outline.json",
-    "cast": "-cast.json",
-    "art": "art.json",
-    "refs": "_asset.json",
-    "script": "-script.json",
-    "staging": "staging.json",
-    "storyboard": "-storyboard.json",
 }
 MAX_ATTEMPTS = 3          # 首次 + 最多 2 次重试
 
@@ -105,15 +96,13 @@ def write_source(project_id: int, text: str) -> str:
 # ------------------------------------------------------------------ 幂等
 def fingerprint(project: HibtvProject, kind: str, ep: int, hint: str = "",
                 upstream_key: str = "") -> str:
-    """幂等键：项目 + 段 + 集 + 输入指纹 + 提示。
+    """按当前材料、业务参数、交接版本和技能部署版本计算幂等键。"""
+    material = {"contract": CONTRACT_VERSION, "project": project_input(project),
+                "kind": kind, "ep": ep, "hint": hint, "upstream": upstream_key,
+                "cap": settings.hibtv_seg_max_seconds,
+                "gatewaySkillsRevision": getattr(settings, "hibtv_skills_revision", "")}
+    return digest(material)[:32]
 
-    同键且已 done → 直接复用，不烧 token；小说正文改了、上游产物换了或 hint 变了才会重跑。
-    `upstream_key` 由调用方传上游 job 的 `codex_job_id`（最准的「上游版本」）。
-    """
-    material = project.novel_text or "" if kind == "outline" else upstream_key
-    raw = (f"{project.id}:{kind}:{ep}:{hint}:"
-           f"{hashlib.sha256(str(material).encode()).hexdigest()}")
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
 def doc_ep(kind: str, ep: int) -> int:
@@ -122,98 +111,80 @@ def doc_ep(kind: str, ep: int) -> int:
 
 
 def upstream_key(db: Session, project: HibtvProject, kind: str, ep: int) -> str:
-    """上游版本指纹：取每个上游段最近一次成功 job 的网关 jid（最准的「上游版本」）。"""
-    if kind == "outline":
-        return ""
-    parts: List[str] = []
-    for _label, up in UPSTREAM.get(kind, []):
-        job = latest_done(db, project.id, up, ep)
-        parts.append(str(job.codex_job_id or job.id) if job is not None else "-")
-    return "|".join(parts)
+    """当前上游 JSON 内容指纹，界面修订也会改变它。"""
+    return digest(document_inputs(db, project, kind, ep))
+
 
 
 # ------------------------------------------------------------------ 上游引用
-def latest_done(db: Session, project_id: int, kind: str, ep: int) -> Optional[HibtvJob]:
-    from .hibtv_jobs import get_doc, jloads
-
-    # A persisted, done document is authoritative.  A gateway job may have
-    # been marked cancelled after its artifacts were already applied.
-    jobs = (db.query(HibtvJob)
-            .filter(HibtvJob.project_id == project_id, HibtvJob.kind == kind,
-                    HibtvJob.status.in_(("done", "cancelled")))
-            .order_by(HibtvJob.id.desc()).limit(50).all())
-    for job in jobs:
-        if doc_ep(kind, job.ep) != doc_ep(kind, ep):
-            continue
-        if not jloads(job.artifacts, []):
-            continue
-        doc = get_doc(db, project_id, kind, doc_ep(kind, ep))
-        if job.status == "done" or (doc is not None and doc.status == "done"):
-            return job
-    return None
-
-
-def main_artifact(artifacts: List[Dict], kind: str) -> str:
-    """从产物清单里挑主产物的**网关侧绝对路径**（下游 input 引用的就是它）。"""
-    suffix = MAIN_SUFFIX.get(kind, "")
-    rows = [a for a in (artifacts or []) if isinstance(a, dict)]
-    for row in rows:
-        name = Path(str(row.get("path") or "")).name
-        if suffix and name.endswith(suffix) and not name.startswith("intake"):
-            if row.get("abs"):
-                return str(row["abs"])
-    for row in rows:
-        if row.get("abs"):
-            return str(row["abs"])
-    return ""
-
-
-def _resolve_upstream_ref(project: HibtvProject, up: str, gateway_jid: str,
-                          abs_path: str) -> str:
-    """优先使用原网关路径；网关迁移后回退到本机保留的上游产物。"""
-    original = Path(abs_path)
-    if original.is_file():
-        return abs_path
-
-    local = job_dir(project.id, gateway_jid) / original.name
-    if local.is_file():
-        return str(local)
-
-    ref_path = project_dir(project.id) / "refs" / f"{up}-{original.name}"
-    if ref_path.is_file():
-        return str(ref_path)
-    raise RuntimeError(
-        f"上游「{up}」产物在本机找不到：{abs_path}"
-        "（旧网关路径，且本地副本缺失，需重跑那一段）"
-    )
+def publish_material(project_id: int, name: str, content: bytes) -> str:
+    """不可变材料副本：返回明确映射到网关容器的路径。"""
+    sha = hashlib.sha256(content).hexdigest()
+    rel = Path(str(project_id)) / "snapshots" / sha / Path(name).name
+    target = GW_MATERIALS_HOST / rel
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.write_bytes(content)
+        if file_hash(target) != sha:
+            raise OSError("材料内容校验失败")
+    except OSError as exc:
+        raise RuntimeError(f"网关素材中转失败：{target}：{exc}") from exc
+    return str(GW_MATERIALS_MOUNT / rel)
 
 
 def upstream_refs(db: Session, project: HibtvProject, kind: str, ep: int) -> Dict[str, str]:
-    """上游引用：{label: 网关侧绝对路径}。缺上游就报错（不猜、不降级）。"""
+    """发布数据库中的当前版本，不以平台文件可见性猜测网关路径。"""
     from .hibtv_jobs import jloads
 
-    out: Dict[str, str] = {}
+    out = {}
     for label, up in UPSTREAM.get(kind, []):
-        job = latest_done(db, project.id, up, ep)
-        if job is None:
-            raise RuntimeError(f"{kind} 需要上游「{up}」，但还没有成功产物，先跑那一段")
-        abs_path = main_artifact(jloads(job.artifacts, []), up)
-        if not abs_path:
-            raise RuntimeError(f"上游「{up}」的产物清单里没有可引用的绝对路径")
-        out[label] = _resolve_upstream_ref(project, up, job.codex_job_id, abs_path)
+        doc = require_document(db, project, up, ep)
+        name = f"{up}-E{doc_ep(up, ep):02d}.json"
+        content = json.dumps(stage_data(up, jloads(doc.data, {})), ensure_ascii=False,
+                             sort_keys=True).encode("utf-8")
+        out[label] = publish_material(project.id, name, content)
     return out
+
+
+def target_seconds(db, project):
+    from .hibtv_jobs import get_doc, jloads
+    doc = get_doc(db, project.id, "outline") if db is not None else None
+    params = jloads(doc.data, {}).get("params", {}) if doc else {}
+    return float(params.get("minutesPerEpisode") or project.minutes_min or 2) * 60
+
+
+def scene_image_materials(db, project, *, publish=True):
+    from ..models import HibtvAsset
+    from .hibtv_jobs import abs_path, jloads
+    from . import hibtv_assets
+    rows = []
+    for asset in db.query(HibtvAsset).filter(
+            HibtvAsset.project_id == project.id, HibtvAsset.kind == "scene",
+            HibtvAsset.hidden.is_(False)).all():
+        if not hibtv_assets.main_current(project, asset):
+            continue
+        views = [("front", asset.main_path)]
+        for key, item in jloads(asset.views, {}).items():
+            if hibtv_assets.view_current(project, asset, key):
+                views.append((key, item["path"]))
+        for view, rel in views:
+            path = abs_path(project.id, rel)
+            rows.append({"code": asset.code, "view": view, "sha256": file_hash(path),
+                         "path": publish_material(project.id, path.name, path.read_bytes()) if publish else path.name})
+    return rows
 
 
 # ------------------------------------------------------------------ 任务正文（只写业务意图）
 def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
              hint: str = "") -> str:
     stage = STAGES[kind]
-    minutes = float(project.minutes_min or 2)
+    minutes = float(project.minutes_min or 2) if kind == "outline" else target_seconds(db, project) / 60
     ratio = project.aspect_ratio or "9:16"
     head = (f"用 skill `{stage}` 完成流水线这一段；当前工作目录即本段产物目录，所有产物写在这里。")
     lines: List[str] = [head]
 
-    if kind == "outline":
+    if kind in ("outline", "cast", "art"):
         local_source = source_path(project.id)
         if not local_source.is_file():
             # 兼容历史项目：旧数据可能只存了 project.novel_path，本地没有 source.txt。
@@ -226,45 +197,66 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
                     raise RuntimeError("历史小说正文复制失败，先补小说再跑大纲") from exc
             else:
                 raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
-        # 重跑旧项目时也补建中转副本；历史数据不做批量迁移。
-        _publish_source(project.id, local_source)
-        src = str(gateway_source_path(project.id))
-        lines.append(
-            f"把这部小说改编成 {int(project.episodes or 1)} 集竖屏短剧大纲，"
-            f"每集约 {minutes:g} 分钟，画面 {ratio}。")
+        content = getattr(project, "novel_text", "")
+        src = publish_material(project.id, "source.txt", content.encode("utf-8") if content else local_source.read_bytes())
+        lines.append(f"小说正文：{src}")
+    if kind == "outline":
+        orient = "横屏" if ratio == "16:9" else "竖屏"
+        lines.append(f"把这部小说改编成 {int(project.episodes or 1)} 集{orient}短剧大纲，"
+                     f"每集约 {minutes:g} 分钟，画面 {ratio}。")
         if project.keeps.strip():
             lines.append(f"必须保留：{project.keeps.strip()}")
-        lines.append(f"小说正文：{src}")
     else:
-        for label, abs_path in upstream_refs(db, project, kind, ep).items():
-            lines.append(f"{label}：{abs_path}")
+        for label, path in upstream_refs(db, project, kind, ep).items():
+            lines.append(f"{label}：{path}")
         if kind == "cast":
-            lines.append(f"为这 {int(project.episodes or 1)} 集出角色表（含形象提示词与音色提示词）。"
-                         f"单集 {minutes:g} 分钟，{ratio}。")
+            lines.append("从小说原文扫描角色事实与引文，按大纲名单生成角色表、形象与音色提示词。")
         elif kind == "art":
-            lines.append(f"为这 {int(project.episodes or 1)} 集出场景与道具美术设定"
-                         f"（含出图提示词与跨集一致性锚点）。{ratio}。")
+            lines.append(f"生成场景与道具设定、光照和状态提示词及母场景变体关系。画幅 {ratio}。")
         elif kind == "refs":
-            lines.append("为角色表里每个角色出分层参考底稿（identity / face / hair / build / "
-                         "backCue 与 outfit 分层）与参考图提示词。")
+            lines.append(
+                "为每个角色生成 character-refs 分层底稿与参考图生产提示词，不调用出图服务。"
+                "运行技能自带 prompt 导出命令，额外交付 refs-prompts.json："
+                '{"version":1,"tasks":[{"code":"C01","view":"front-full",'
+                '"prompt":"技能导出的完整正向词","negative":"完整反向词",'
+                '"ratio":"2:3","refs":[]}]}。'
+                "每个角色包含 front-full、face-front、side-full、back-full；"
+                "派生项 refs 填所依赖的视图 ID。保留技能完整的身份、服装、画风、取景约束，"
+                "不要用通用视角句替代技能提示词；角色 code 与输入一致。")
         elif kind == "script":
-            lines.append(f"为第 {ep} 集出逐场剧本（场次 / 节拍 / 台词逐字），"
-                         f"目标时长约 {int(minutes * 60)} 秒，{ratio}。")
+            lines.append(f"生成第 {ep} 集逐场剧本、节拍和逐字台词，目标 {minutes * 60:g} 秒，画幅 {ratio}。")
         elif kind == "staging":
-            lines.append(f"为第 {ep} 集出站位（场景平面图物品清单 + 人物点位、朝向、群演）。")
+            images = scene_image_materials(db, project)
+            if images:
+                path = publish_material(project.id, "scene-images.json",
+                                        json.dumps(images, ensure_ascii=False).encode())
+                lines.append(f"已确认场景实图清单：{path}。逐张读取图片，按实图认图与核验站位。")
+            else:
+                lines.append("尚无已确认场景实图：只能输出 readFrom=prompt 的草稿，不声称按图核验。")
+            lines.append(f"生成第 {ep} 集开场人物点位、朝向、出入场与群演，并检查连续性。")
         elif kind == "storyboard":
-            seg_cap = float(getattr(settings, "hibtv_seg_max_seconds", 13) or 13)
-            lines.append(f"为第 {ep} 集出分镜。每段不超过 {seg_cap:g} 秒，"
-                         f"段内每 2–5 秒一个镜头，画面 {ratio}。")
+            cap = h3_time.frames_for(settings.hibtv_seg_max_seconds) / 24
+            lines.append(
+                f"生成第 {ep} 集分镜，画幅 {ratio}；每段不跨场、不超过 {cap:.6f} 秒，"
+                "每切 2–5 秒。使用 H3 完整分镜图协议，每切一张 fN，Picture N 与 fN 严格对应。"
+                "每段 generationFrames 必须是 5+17n 的整数，且 cuts.seconds 之和"
+                "精确等于 generationFrames/24（允许 0.001 秒数值误差）。"
+                "先分配合法帧预算，再同步生成秒数、切点、h3Prompt、manifest；不要事后截短。"
+                "将 staging 的开场走位写入 blocking，后续段继承上一段结束状态；"
+                "每切完整填写六个构图字段与当前人物/道具状态。"
+                "可额外填写 cut.referenceViews（资产编号到视图ID）、cut.propStates（道具编号到状态名）、"
+                "cut.sceneState（场景光照状态名）、cut.extras（实际群演人数）。"
+                "maxOnScreen 是人数上限，不能作为精确人数。VO/画外台词不要求说话人出镜。"
+                "请在网关完成技能 validate，交付原始 h3Prompt、manifest 和最终校验结果，"
+                "平台不改写视频提示词。")
+    lines.append("交付最终 validation.json，格式 {status:ok|fail, checkedFiles:{文件相对路径:文件SHA256}, "
+                 "problems:[]}，覆盖本阶段所有主 JSON（参考图阶段还包括各角色 asset 与 refs-prompts.json）；必须运行技能校验后如实填写，不用固定通过值代替校验。")
     if hint.strip():
         lines.append(f"额外要求：{hint.strip()[:800]}")
     return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ 幂等复用
-MAX_REUSE_AGE_DAYS = 30
-
-
 def _reuse(db: Session, project: HibtvProject, kind: str, ref: str,
            exclude_id: int = 0) -> Optional[Tuple[HibtvJob, Dict[str, Path]]]:
     """同键且已 done → 直接复用本机产物（不烧 token）。产物被清掉了就返回 None 重跑。"""
@@ -299,9 +291,19 @@ async def run(db: Session, project: HibtvProject, job: HibtvJob) -> None:
         raise RuntimeError(f"codex 网关不可用：{gw.status()['note'] or '地址未配置'}"
                            "（本平台无本地兜底，请先恢复网关）")
 
+    input_images = digest(scene_image_materials(db, project, publish=False)) if kind == "staging" else ""
     text = task_for(db, project, kind, ep, hint)
+    if kind == "staging":
+        text += "\n场景实图版本：" + digest(scene_image_materials(db, project))
+    input_versions = document_inputs(db, project, kind, ep)
+    input_project = project_input(project)
+    payload["sceneImagesHash"] = input_images
+    payload["inputVersions"] = input_versions
+    payload["inputText"] = text
+    payload["inputProject"] = input_project
+    job.payload = jdumps(payload)
     # 幂等：同键且已 done → 直接复用产物，不烧 token
-    ref = fingerprint(project, kind, ep, hint, upstream_key(db, project, kind, ep))
+    ref = fingerprint(project, kind, ep, hint, digest({"documents": input_versions, "task": text}))
     job.ref = ref
     db.commit()
     found = _reuse(db, project, kind, ref, exclude_id=job.id)
@@ -345,6 +347,10 @@ async def run(db: Session, project: HibtvProject, job: HibtvJob) -> None:
             save_usage(db, job, usage)
             set_stage(db, job, 96, "回写文档")
             files = {a["path"]: local / a["path"] for a in merged if a.get("bytes")}
+            db.expire_all()
+            if (document_inputs(db, project, kind, ep) != input_versions or project_input(project) != input_project
+                    or (kind == "staging" and digest(scene_image_materials(db, project, publish=False)) != input_images)):
+                raise hibtv_stages.StageError("生成期间上游或项目参数已改变，请基于当前输入重跑")
             hibtv_stages.apply(db, project, kind, ep, files,
                                codex_job_id=job.codex_job_id, usage=usage)
             return
@@ -365,7 +371,7 @@ async def run(db: Session, project: HibtvProject, job: HibtvJob) -> None:
 
 
 def _merge_abs(saved: List[Dict], artifacts: List[Dict]) -> List[Dict]:
-    """本机落盘清单 + 网关侧绝对路径（下游 input 引用 abs，不用本机路径）。"""
+    """本机落盘清单 + 网关侧绝对路径（保留原网关路径用于溯源；下游读取当前内容快照）。"""
     abs_by_path = {str(a.get("path") or ""): str(a.get("abs") or "")
                    for a in (artifacts or []) if isinstance(a, dict)}
     out: List[Dict] = []

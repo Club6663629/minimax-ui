@@ -214,12 +214,14 @@ function ViewStrip({
   onDraw,
   onUpload,
   onPreview,
+  onConfirm,
 }: {
   asset: HibtvAsset;
   busy: boolean;
   onDraw: (viewId: string) => void;
   onUpload: (viewId: string, file: File) => void;
   onPreview: (viewId: string) => void;
+  onConfirm: (viewId: string) => void;
 }) {
   const defs = asset.viewDefs || [];
   if (defs.length <= 1) return null;
@@ -286,6 +288,10 @@ function ViewStrip({
               {locked && <span className="viewflag lock">🔒</span>}
             </div>
             <div className="viewacts">
+              {st.url && !isAnchor && !st.stale && !asset.views?.[def.id]?.confirmed && (
+                <button className="btn xxs" disabled={busy || locked}
+                  onClick={() => onConfirm(def.id)}>确认</button>
+              )}
               <button
                 className="btn xxs"
                 disabled={busy || locked}
@@ -369,6 +375,20 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
     try {
       await hibtvApi.uploadAsset(project.id, asset.id, file);
       toast(`已替换主图：${asset.name}`);
+      onChanged();
+    } catch (err) {
+      toast(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmView = async (viewId: string) => {
+    if (!project) return;
+    setBusy(true);
+    try {
+      await hibtvApi.assetImage(project.id, asset.id, { action: "confirm", view: viewId });
+      toast(`已确认：${asset.name} · ${viewId}`);
       onChanged();
     } catch (err) {
       toast(errText(err));
@@ -571,15 +591,11 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             </span>
           </div>
           <div className="cast-desc">{asset.data?.oneLiner || ""}</div>
-          <div className="tiny dim">出图提示词（image.prompt 原文）</div>
+          <div className="tiny dim">主图生产提示词（网关 front-full 任务原文）</div>
           <div className="promptbox">
-            <InlineEdit
-              multiline
-              value={prompt}
-              placeholder="（skill 没给提示词；双击补一句）"
-              onSave={(v) => void patch({ data: { image: { ...image, prompt: v } } })}
-            />
+            {prompt || "尚未导出角色参考任务，请先运行角色参考阶段"}
           </div>
+          <div className="tiny dim">修改形象请编辑角色文档，再重新运行角色参考阶段。</div>
           <CopyRow label="反向词" value={asset.negative} />
           <div className="inline" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {status}
@@ -595,6 +611,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             onDraw={onDrawCell}
             onUpload={(vid, file) => void uploadView(vid, file)}
             onPreview={bigView}
+            onConfirm={(vid) => void confirmView(vid)}
           />
           <div className="cast-voice">
             <span className="up">◍ 音色参考</span>
@@ -665,6 +682,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
           onDraw={onDrawCell}
           onUpload={(vid, file) => void uploadView(vid, file)}
           onPreview={bigView}
+          onConfirm={(vid) => void confirmView(vid)}
         />
         <div className="art-foot">
           {status}

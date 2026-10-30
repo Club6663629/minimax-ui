@@ -51,6 +51,7 @@ export interface HibtvProject {
   episodes: number;
   minutesMin: number;
   minutesMax: number;
+  targetSeconds?: number;
   aspectRatio: "9:16" | "16:9" | string;
   novelName: string;
   hasNovel: boolean;
@@ -187,6 +188,7 @@ export interface HibtvAsset {
 /** 关键帧：f1..fN，与 manifest.pictures / prompt.md 的 Picture 序号一一对应 */
 export interface HibtvFrame {
   id: number;
+  ready?: boolean;
   ep: number;
   segId: string;
   cutIndex: number;
@@ -254,6 +256,7 @@ export interface Segment {
   manifestSeconds: number;
   /** 段长超过 13s：拦出片 + 提示重跑本集 storyboard */
   oversize: boolean;
+  timingMismatch?: boolean;
   // 段详情才带：图位条与出片请求值
   frames?: HibtvFrame[];
   missingFrames?: number[];

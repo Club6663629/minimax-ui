@@ -105,7 +105,7 @@ export default function OverviewPage() {
           label: "原著",
           status: project.hasNovel ? "完成" : "缺正文",
           detail: project.hasNovel
-            ? `${project.novelName || "正文已落盘"} · source.txt · ${eps.length} 集 × ${project.minutesMin}–${project.minutesMax} 分钟`
+            ? `${project.novelName || "正文已落盘"} · source.txt · ${eps.length} 集 × ${project.targetSeconds ? `${project.targetSeconds} 秒` : `${project.minutesMin}–${project.minutesMax} 分钟`}`
             : "还没有小说正文：outline 的 input 只给绝对路径，必须先落盘",
           to: "/hibtv/home",
           pct: project.hasNovel ? 100 : 0,
@@ -251,7 +251,7 @@ export default function OverviewPage() {
         <div className="stat">
           <span className="k">集数 / 单集</span>
           <span className="v">
-            {eps.length} <small>集 · {project.minutesMin}–{project.minutesMax} 分钟 · 段 ≤ {status?.segMaxSeconds || 13}s</small>
+            {eps.length} <small>集 · {project.targetSeconds ? `${project.targetSeconds} 秒` : `${project.minutesMin}–${project.minutesMax} 分钟`} · 段 ≤ {status?.segMaxSeconds || 13}s</small>
           </span>
         </div>
         <div className="stat">

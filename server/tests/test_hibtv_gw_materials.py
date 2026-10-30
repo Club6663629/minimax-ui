@@ -44,7 +44,7 @@ class GatewayMaterialsTest(unittest.TestCase):
 
         task = hibtv.task_for(None, project, "outline", 0)
 
-        expected = str(hibtv.gateway_source_path(37))
+        expected = hibtv.publish_material(37, "source.txt", "最后一班地铁\n".encode())
         self.assertIn(f"小说正文：{expected}", task)
         self.assertNotIn(project.novel_path, task)
 

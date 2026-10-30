@@ -18,12 +18,12 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from . import h3_time
+from .hibtv_contracts import (digest, file_hash, document_inputs, project_input, frame_plan, asset_input)
 from ..models import HibtvFrame, HibtvProject, HibtvSegment
 
 logger = logging.getLogger(__name__)
 
-# 段长硬上限：H3 只出 5+17n 帧（24fps），13s = 311 帧 = 12.9583s
-MAX_SEGMENT_SECONDS = 13.0
 # 段秒 vs Σ切秒的对账容差（skill 侧 tolerance 默认 0.15，这里取更严的绝对值）
 SECONDS_TOLERANCE = 0.05
 
@@ -115,6 +115,13 @@ def apply(db: Session, project: HibtvProject, kind: str, ep: int,
     if handler is None:
         raise StageError(f"未知文本阶段 {kind}")
 
+    # 校验失败的产物不得先更新资产或帧表。
+    validation = _validation(files, kind)
+    if not validation:
+        from . import hibtv_gates
+        validation = hibtv_gates.from_artifacts(files)
+    if validation.get("status") == "fail":
+        raise StageError("网关校验未通过：" + "；".join(validation.get("problems") or []))
     summary = handler(db, project, ep, files)
     doc_kind = summary.get("doc_kind") or kind
     doc_ep = int(summary.get("ep", 0 if kind in ("outline", "cast", "art") else ep))
@@ -122,9 +129,26 @@ def apply(db: Session, project: HibtvProject, kind: str, ep: int,
     if data is not None:
         gates = summary.pop("gates", {"status": "skipped", "problems": [],
                                       "notes": ["产物里没有结构化门结果"], })
+        if gates.get("status") == "fail":
+            raise StageError("技能质量门未通过：" + "；".join(gates.get("problems") or []))
         meta = dict(base_meta)
+        meta["contentHash"] = digest(data)
+        meta["inputs"] = document_inputs(db, project, kind, ep)
+        meta["projectInput"] = project_input(project)
+        if kind == "staging":
+            from .hibtv_codex import scene_image_materials
+            meta["sceneImagesHash"] = digest(scene_image_materials(db, project, publish=False))
         meta["mainSha8"] = sha8(jdumps(data))
         meta.update(summary.pop("meta", {}) or {})
+        if kind == "refs":
+            from .hibtv_jobs import get_doc, jloads
+            previous = get_doc(db, project.id, "cast", 0)
+            cast_meta = jloads(previous.meta, {}) if previous else {}
+            cast_meta["references"] = meta
+            cast_meta["contentHash"] = digest(data)
+            # refs 补充资产生产任务，不伪造角色扫描阶段的新校验结果。
+            meta = cast_meta
+            gates = jloads(previous.gates, {}) if previous else gates
         save_doc(db, project.id, doc_kind, doc_ep, data, gates=gates, meta=meta)
     else:
         summary.pop("gates", None)
@@ -258,9 +282,9 @@ def _apply_refs(db, project, ep, files) -> Dict:
             if not isinstance(payload, dict) or not payload.get("layers"):
                 continue
             who = str(payload.get("name") or "").strip()
-            code = name_to_code.get(who) or _code_from_name(name) or ""
-            if not code:
-                code = f"C{len(refs) + 1:02d}"
+            code = name_to_code.get(who) or str(payload.get("code") or "")
+            if code not in set(name_to_code.values()):
+                raise StageError(f"参考底稿无法匹配角色：{who or name}")
             refs[code] = payload
         elif name.startswith("refs-prompts") and name.endswith(".md"):
             prompts[name] = read_text(Path(files[rel]))
@@ -274,7 +298,15 @@ def _apply_refs(db, project, ep, files) -> Dict:
         data = cast
         data["refs"] = refs
         data["refsPrompts"] = prompts
-    _merge_assets(db, project, refs)
+    if set(refs) != set(name_to_code.values()):
+        raise StageError("参考底稿必须逐一覆盖当前角色，不允许自动补号或漏掉角色")
+    tasks = _reference_tasks(files, name_to_code)
+    for code in name_to_code.values():
+        required = {"front-full", "face-front", "side-full", "back-full"}
+        if not required.issubset(tasks.get(code, {})):
+            raise StageError(f"{code} 缺完整参考图生产提示词，请在网关重跑参考图阶段")
+    data["imageTasks"] = tasks
+    _merge_assets(db, project, refs, tasks)
     return {
         "doc_kind": "cast", "ep": 0, "data": data,
         "gates": _gates_from(files, "refs-report.html", skipped="参考图阶段没有结构化门结果"),
@@ -283,13 +315,41 @@ def _apply_refs(db, project, ep, files) -> Dict:
     }
 
 
-def _code_from_name(name: str) -> str:
-    """`林晚_asset.json` → 从 cast 里匹配不到时留空（由调用方补号）。"""
-    stem = name[: -len("_asset.json")] if name.endswith("_asset.json") else ""
-    return "" if stem in ("", "asset") else ""
+def _reference_tasks(files, name_to_code):
+    """读取网关的机器清单；兼容技能已导出的逐视图 Markdown，不创造提示词。"""
+    tasks = {}
+    hit = pick(files, suffix="refs-prompts.json")
+    rows = (read_json(hit[1]).get("tasks") or []) if hit else []
+    if not hit:
+        for rel, path in files.items():
+            if not Path(rel).name.startswith("refs-prompts") or not rel.endswith(".md"):
+                continue
+            text = read_text(path)
+            for match in re.finditer(r"(?ms)^## ([^\n]+?) / `([^`]+)`\s*\n(.*?)(?=^## |\Z)", text):
+                who, view, body = match.groups()
+                blocks = re.findall(r"```(?:text)?\s*\n(.*?)```", body, re.S)
+                ratio = re.search(r"比例：`([^`]+)`", body)
+                rows.append({"code": name_to_code.get(who.strip()), "view": view,
+                             "prompt": blocks[0].strip() if blocks else "",
+                             "negative": blocks[1].strip() if len(blocks) > 1 else "",
+                             "ratio": ratio.group(1) if ratio else "",
+                             "refs": [] if view == "front-full" else ["front-full"]})
+    for row in rows:
+        code, view = str(row.get("code") or ""), str(row.get("view") or "")
+        if code not in name_to_code.values() or view not in ("front-full", "face-front", "side-full", "back-full"):
+            raise StageError(f"参考图任务包含未知角色或视图：{code}/{view}")
+        if not row.get("prompt") or not row.get("negative") or row.get("ratio") != ("4:5" if view == "face-front" else "2:3"):
+            raise StageError(f"{code}/{view} 的正负提示词或画幅不完整")
+        refs = row.get("refs")
+        if not isinstance(refs, list) or (view == "front-full" and refs) or (view != "front-full" and refs != ["front-full"]):
+            raise StageError(f"{code}/{view} 必须从同一根锚点生成")
+        if view in tasks.setdefault(code, {}):
+            raise StageError(f"重复的参考图任务：{code}/{view}")
+        tasks[code][view] = row
+    return tasks
 
 
-def _merge_assets(db, project, refs: Dict[str, Dict]) -> None:
+def _merge_assets(db, project, refs: Dict[str, Dict], tasks=None) -> None:
     """把分层底稿挂到对应资产卡上（`data.refs`），角色页的「分层」抽屉直接读它。"""
     from ..models import HibtvAsset
     from .hibtv_jobs import jdumps, jloads, now
@@ -302,7 +362,14 @@ def _merge_assets(db, project, refs: Dict[str, Dict]) -> None:
         if asset is None:
             continue
         data = jloads(asset.data, {})
+        old_hash = asset_input(data)
         data["refs"] = payload
+        data["imageTasks"] = (tasks or {}).get(code, {})
+        if asset_input(data) != old_hash:
+            from . import hibtv_assets
+            data["imageConfirmed"] = False
+            data.pop("confirmedHash", None)
+            hibtv_assets.mark_stale(asset, "__anchor")
         asset.data = jdumps(data)
         asset.updated_at = now()
     db.flush()
@@ -355,6 +422,8 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         raise StageError("找不到 `*-storyboard.json` 主产物")
     data = read_json(hit[1])
     row = episode_of(data.get("episodes"), ep)
+    if data.get("aspectRatio") != project.aspect_ratio:
+        raise StageError("分镜画幅与当前项目不一致，请重新生成")
     segments = row.get("segments") or []
     if not segments:
         raise StageError(f"分镜产物里没有第 {ep} 集的段")
@@ -381,22 +450,25 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         if pmd and picture_n != len(cuts):
             raise StageError(
                 f"{seg_id} 切数 {len(cuts)} ≠ prompt.md 的 Picture 数 {picture_n}")
-        # ② 出片提示词：prompt.md 原文优先（它就是「切点↔图」的契约）
-        h3 = (pmd.strip() or str(seg.get("h3Prompt") or "").strip())
+        # ② 只消费 JSON 内的 H3 正文，Markdown 仅参与图片槽位核对。
+        h3 = str(seg.get("h3Prompt") or "").strip()
         if not h3:
             raise StageError(f"{seg_id} 缺 h3Prompt / prompt.md（段出片没有入参）")
-        cast_doc = get_doc(db, project.id, "cast")
-        cast_rows = (jloads(cast_doc.data, {}).get("characters") or []) if cast_doc else []
-        line_speakers = _script_line_speakers(db, project, ep)
-        h3 = _bind_h3_prompt(h3, seg, cast_rows, line_speakers)
+        if "[[hibtv_identity_speaker_lock_v1]]" in h3:
+            raise StageError(f"{seg_id} 含旧版平台身份注入，请让网关重新导出原始 h3Prompt")
+        _validate_video_prompt(h3, seg, data.get("promptLang") or "en")
         secs = cut_seconds(seg)
         manifest_secs = float(item.get("seconds") or 0)
         if manifest_secs and abs(manifest_secs - secs) > SECONDS_TOLERANCE * max(1, len(cuts)):
             checked.append({"seg": seg_id, "note": f"manifest {manifest_secs}s ≠ Σ切 {secs}s"})
-        oversize = max(secs, manifest_secs) > MAX_SEGMENT_SECONDS + 1e-6
+        cap = h3_time.frames_for(settings.hibtv_seg_max_seconds) / 24
+        oversize = max(secs, manifest_secs) > cap + 0.001
+        frames = seg.get("generationFrames")
+        timing_bad = (not isinstance(frames, int) or isinstance(frames, bool) or frames < 5
+                      or (frames - 5) % 17 != 0 or abs(frames / 24 - secs) > 0.001)
+        seg["timingMismatch"] = timing_bad
         seg["h3Prompt"] = h3
-        seg["promptSource"] = (("prompt.md" if pmd else "storyboard.h3Prompt")
-                               + "+identity-binding")
+        seg["promptSource"] = "storyboard.h3Prompt"
         seg["promptSha8"] = sha8(h3)
         seg["frameCount"] = len(cuts)
         seg["pictureCount"] = len(pictures) or len(cuts)
@@ -405,7 +477,7 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
         if oversize:
             checked.append({"seg": seg_id,
                             "note": f"段长 {max(secs, manifest_secs):.1f}s 超过 "
-                                    f"{MAX_SEGMENT_SECONDS:g}s 上限，需重跑本集 storyboard"})
+                                    f"{cap:g}s 上限，需重跑本集 storyboard"})
 
     sync_segments(db, project, ep, data)
     frames = sync_frames(db, project, ep, manifest, segments)
@@ -422,145 +494,19 @@ def _apply_storyboard(db, project, ep, files) -> Dict:
     }
 
 
-_H3_LOCK_MARK = "[[hibtv_identity_speaker_lock_v1]]"
-_DIALOGUE_RE = re.compile(r"<d>(.*?)</d>", re.IGNORECASE | re.DOTALL)
-_SPEAKER_RE = re.compile(r"\(S(\d+)\)", re.IGNORECASE)
-
-
-def _dialogue_key(text: str) -> str:
-    text = re.sub(r"<[^>]+>", "", text or "")
-    text = re.sub(r"^\s*\[[^\]]+\]", "", text)
-    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE).casefold()
-
-
-def _script_line_speakers(db: Session, project: HibtvProject, ep: int) -> Dict[str, str]:
-    """台词原文 → 角色 ID；用于给没有 (S#) 的 <d> 补回明确归属。"""
-    from .hibtv_jobs import get_doc, jloads
-
-    doc = get_doc(db, project.id, "script", ep)
-    row = episode_of(jloads(doc.data, {}).get("episodes") if doc else [], ep)
-    found: Dict[str, set] = {}
-    for scene in row.get("scenes") or []:
-        for beat in scene.get("flow") or []:
-            line = _dialogue_key(str(beat.get("line") or ""))
-            speaker = str(beat.get("speaker") or "").strip()
-            if line and speaker:
-                found.setdefault(line, set()).add(speaker)
-    return {key: next(iter(codes)) for key, codes in found.items() if len(codes) == 1}
-
-
-def _bind_h3_prompt(h3: str, seg: Dict, cast_rows: List[Dict],
-                    line_speakers: Optional[Dict[str, str]] = None) -> str:
-    """把孤立 S# 展开为角色身份，并为每个 Shot 写入人数/口型/台词归属锁。"""
-    if not h3 or _H3_LOCK_MARK in h3:
-        return h3
-    cast = [row for row in (cast_rows or []) if str(row.get("id") or "").strip()]
-    code_to_speaker = {str(row["id"]): f"S{i + 1}" for i, row in enumerate(cast)}
-    by_code = {str(row["id"]): row for row in cast}
-    line_speakers = line_speakers or {}
+def _validate_video_prompt(h3, seg, lang):
+    """装配合同检查，不推断台词归属，不改变网关已校验的正文。"""
     cuts = seg.get("cuts") or []
-
-    legend = []
-    for row in cast:
-        code = str(row["id"])
-        persona = row.get("persona") or {}
-        legend.append(
-            f"{code_to_speaker[code]} = {code} {row.get('name') or code}"
-            f"（{persona.get('gender') or '性别见角色卡'}；"
-            f"{persona.get('identity') or '身份见角色卡'}；"
-            "位置按对应 Shot 的角色顺序确定）")
-
-    shot_locks: Dict[int, str] = {}
-    for match in re.finditer(r"(?m)^\[Shot\s+(\d+)\]", h3):
-        shot_no = int(match.group(1))
-        if shot_no > len(cuts):
-            raise StageError(f"{seg.get('id') or '分镜段'} Shot {shot_no} 没有对应 cut")
-        cut = cuts[shot_no - 1] or {}
-        chars = list(dict.fromkeys(
-            str(code) for code in (cut.get("characters") or []) if str(code)))
-        unknown = [code for code in chars if code not in by_code]
-        if unknown:
-            raise StageError(
-                f"{seg.get('id') or '分镜段'} Shot {shot_no} 引用未知角色 {unknown}")
-        try:
-            declared_max = int(cut.get("maxOnScreen") or 0)
-        except (TypeError, ValueError):
-            declared_max = 0
-        # 画面人数 = 去重具名角色数与导演声明上限取大者：具名角色必须全部出场；
-        # 正数 maxOnScreen 可能含未具名群演，需保留；负数按 0 处理避免非法人数。
-        max_on_screen = max(len(chars), max(0, declared_max))
-
-        next_shot = re.search(r"(?m)^\[Shot\s+\d+\]", h3[match.end():])
-        end = match.end() + next_shot.start() if next_shot else len(h3)
-        soundscape = re.search(r"(?m)^overall_soundscape:", h3[match.end():end])
-        if soundscape:
-            end = match.end() + soundscape.start()
-        body = h3[match.start():end]
-
-        speakers: List[str] = []
-        for dialogue in _DIALOGUE_RE.finditer(body):
-            code = line_speakers.get(_dialogue_key(dialogue.group(1)), "")
-            if not code:
-                prior = body[:dialogue.start()]
-                labels = _SPEAKER_RE.findall(prior)
-                if labels:
-                    label = f"S{labels[-1]}"
-                    code = next((cid for cid, sid in code_to_speaker.items()
-                                 if sid == label), "")
-            if not code and len(chars) == 1:
-                code = chars[0]
-            if not code:
-                raise StageError(
-                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 台词无法绑定角色："
-                    f"{dialogue.group(1)[:80]}")
-            if code not in chars:
-                raise StageError(
-                    f"{seg.get('id') or '分镜段'} Shot {shot_no} 说话人 {code} "
-                    f"不在 cut.characters {chars} 中")
-            if code not in speakers:
-                speakers.append(code)
-
-        people = "、".join(
-            f"{code} {by_code[code].get('name') or code}（第 {i + 1} 位）"
-            for i, code in enumerate(chars)) or "无完整人物"
-        if speakers:
-            speaker_text = " and ".join(
-                f"{code_to_speaker[code]} ({code} {by_code[code].get('name') or code})"
-                for code in speakers)
-            speech = (f"Only {speaker_text} speaks; all other characters keep "
-                      "their mouths closed.")
-        else:
-            speech = "No character speaks; all characters keep their mouths closed."
-        shot_locks[shot_no] = (
-            f"Character/speaker lock: maxOnScreen={max_on_screen}; "
-            f"exactly {max_on_screen} different people in frame ({people}); "
-            "the same character must never appear twice; no clones, twins, duplicate "
-            f"faces, extra people, character sheet or multi-view grid. {speech}")
-
-    if not shot_locks:
-        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 没有 [Shot N] 结构")
-
-    def add_lock(match):
-        no = int(match.group(2))
-        body = match.group(0).rstrip()
-        return f"{body} {shot_locks[no]}\n"
-
-    bound = re.sub(
-        r"(?ms)^(\[Shot\s+(\d+)\].*?)(?=^\[Shot\s+\d+\]|\noverall_soundscape:|\Z)",
-        add_lock, h3)
-    block = "\n".join([
-        _H3_LOCK_MARK,
-        "Character and speaker binding (authoritative):",
-        *legend,
-        "Every S# is permanently bound to the listed character ID and name. "
-        "Never transfer a line to another character.",
-        "",
-        "",
-    ])
-    marker = "integrated_multimodal_description:"
-    if marker not in bound:
-        raise StageError(f"{seg.get('id') or '分镜段'} 的 h3Prompt 缺 {marker}")
-    return bound.replace(marker, block + marker, 1)
+    labels = re.findall(r"(?m)^\[(?:Shot|镜头)\s+(\d+)\]", h3)
+    if [int(n) for n in labels] != list(range(1, len(cuts) + 1)):
+        raise StageError(f"{seg['id']} 镜头编号与 cuts 不一致")
+    if lang == "en" and not h3.startswith("How the reference pictures align"):
+        raise StageError(f"{seg['id']} 缺 H3 图片对齐首行")
+    if lang == "zh" and not h3.startswith("参考图与目标视频的对齐"):
+        raise StageError(f"{seg['id']} 缺中文 H3 图片对齐首行")
+    refs = [int(n) for n in re.findall(r"<Picture (\d+)>", h3)]
+    if any(n < 1 or n > len(cuts) for n in refs):
+        raise StageError(f"{seg['id']} 引用了不存在的分镜图片")
 
 
 def _load_manifest(files: Dict[str, Path]) -> Dict[str, Dict]:
@@ -622,36 +568,71 @@ def sync_frames(db: Session, project: HibtvProject, ep: int,
                                  cut_index=i, status="empty", refs="[]")
                 db.add(row)
             meta = jloads(row.meta, {})
-            meta.update({
-                "beats": cut.get("beats"),
-                "size": cut.get("size") or "",
-                "camera": cut.get("camera") or "",
-                "characters": cut.get("characters") or [],
-                "maxOnScreen": cut.get("maxOnScreen"),
-                "props": cut.get("props") or [],
-                "startsAt": (item.get("cutStarts") or [])[i - 1] if i - 1 < len(item.get("cutStarts") or []) else None,
-                "expected": pictures[i - 1] if i - 1 < len(pictures) else "",
-            })
+            lighting = cut.get("sceneState") or cut.get("lighting") or ""
+            source = frame_plan(seg, cut, project.aspect_ratio, lighting)
+            plan_hash = digest(source)
+            changed = meta.get("planHash") != plan_hash
+            meta.update(source)
+            meta.update({"beats": cut.get("beats"), "characters": cut.get("characters") or [],
+                         "props": cut.get("props") or [], "size": cut.get("size") or "",
+                         "camera": cut.get("camera") or "", "planHash": plan_hash, "active": True,
+                         "startsAt": round(sum(float(c.get("seconds") or 0) for c in cuts[:i-1]), 6),
+                         "expected": pictures[i-1] if i <= len(pictures) else f"f{i}.png"})
+            if changed:
+                meta["stale"] = bool(row.path)
+                row.status = "stale" if row.path else "empty"
+                meta.pop("overridePrompt", None)
             row.meta = jdumps(meta)
-            if str(cut.get("frame") or "").strip():
-                row.prompt = str(cut["frame"]).strip()
+            row.prompt = str(cut.get("frame") or "").strip()
             row.updated_at = now()
             count += 1
     # 段没了（重跑后重编号）的帧行：从未出图就删，出过图保留
     keep = {(seg_id, i) for seg_id in by_id for i in range(1, len(by_id[seg_id].get("cuts") or []) + 1)}
     for key, row in existing.items():
-        if key in keep or row.path:
+        if key in keep:
             continue
-        db.delete(row)
+        meta = jloads(row.meta, {})
+        meta["active"] = False
+        row.meta = jdumps(meta)
+        row.status = "archived"
     db.flush()
     return count
 
 
 # ------------------------------------------------------------------ 门 / 附带产物
+def _validation(files, kind=""):
+    hit = pick(files, suffix="validation.json")
+    if hit is None:
+        return {}
+    result = read_json(hit[1])
+    if result.get("status") not in ("ok", "fail"):
+        raise StageError("validation.json 缺有效校验状态")
+    hashes = result.get("checkedFiles") or {}
+    if result.get("checkedSha256"):
+        hashes = {"primary": result["checkedSha256"], **hashes}
+    actual = {rel: file_hash(path) for rel, path in files.items()
+              if rel != hit[0] and rel.endswith(".json")}
+    if not hashes or any(value not in actual.values() for value in hashes.values()):
+        raise StageError("validation.json 未绑定本次 JSON 产物")
+    if kind:
+        suffix = {"outline": "-outline.json", "cast": "-cast.json", "art": "art.json",
+                  "script": "-script.json", "staging": "staging.json", "storyboard": "-storyboard.json"}.get(kind)
+        required = [sha for rel, sha in actual.items() if
+                    (suffix and Path(rel).name.endswith(suffix)) or
+                    (kind == "refs" and (Path(rel).name.endswith("_asset.json")
+                                         or Path(rel).name in ("asset.json", "refs-prompts.json")))]
+        if not required or any(sha not in hashes.values() for sha in required):
+            raise StageError("validation.json 未覆盖本阶段主产物")
+    return result
+
+
 def _gates_from(files: Dict[str, Path], doc_name: str, *, skipped: str = "") -> Dict:
     """门结果去 `hibtv_gates` 里读（那边只认产物，不跑脚本）。"""
     from . import hibtv_gates
 
+    explicit = _validation(files)
+    if explicit:
+        return explicit
     return hibtv_gates.from_artifacts(files, doc_name, skipped=skipped)
 
 

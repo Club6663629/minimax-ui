@@ -31,12 +31,11 @@ class AssetViewDefsTest(unittest.TestCase):
         self.assertEqual(hibtv_assets.size_for("scene", "front"), hibtv_assets.size_for("scene"))
 
     def test_derive_prompt_cast_locks_identity(self):
-        face = hibtv_assets.derive_prompt("cast", "face-front", {})
-        self.assertIn("same person", face.lower())
-        self.assertIn("identical face", face.lower())
-        self.assertIn("Close-up", face)
-        self.assertIn("side profile", hibtv_assets.derive_prompt("cast", "side-full", {}).lower())
-        self.assertIn("back view", hibtv_assets.derive_prompt("cast", "back-full", {}).lower())
+        task = {"prompt": "Skill-exported exact identity and close-up framing."}
+        data = {"imageTasks": {"face-front": task}}
+        self.assertEqual(hibtv_assets.derive_prompt("cast", "face-front", data), task["prompt"])
+        with self.assertRaisesRegex(RuntimeError, "character-refs"):
+            hibtv_assets.derive_prompt("cast", "side-full", data)
 
     def test_derive_prompt_scene_variant(self):
         p = hibtv_assets.derive_prompt("scene", "top", {})
@@ -116,13 +115,13 @@ class PromptForTest(unittest.TestCase):
         self.assertIn("大头照", p)
         self.assertIn("道具 P01", p)
         self.assertIn("人物位置状态", p)
-        self.assertIn("maxOnScreen", p)
+        self.assertIn("每个角色只出现一次", p)
         self.assertTrue(p.endswith("TAIL"))
 
     def test_prompt_without_character_forbids_people(self):
-        p = hibtv_frames.prompt_for(self._frame({}), "", characters=[], refs=[], tail="TAIL")
-        self.assertIn("maxOnScreen=0", p)
-        self.assertIn("不得出现完整人物", p)
+        p = hibtv_frames.prompt_for(self._frame({"extras": 0}), "", characters=[], refs=[], tail="TAIL")
+        self.assertIn("本镜为空景", p)
+        self.assertIn("不添加人物", p)
         self.assertTrue(p.endswith("TAIL"))
 
     def test_ref_without_path_is_dropped(self):

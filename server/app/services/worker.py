@@ -976,8 +976,12 @@ async def _generate_768p(task_id: int, node: WorkerNode) -> Path:
         for rid in ref_ids:
             up = db.get(Upload, rid)
             if not up:
+                if task.scene == "drama" and int(task.frames or 0):
+                    raise RuntimeError(f"短剧参考图片 Upload {rid} 缺失，禁止改变 Picture 顺序")
                 continue
             p = Path(up.path)
+            if task.scene == "drama" and int(task.frames or 0) and not p.is_file():
+                raise RuntimeError(f"短剧参考图片 Upload {rid} 文件缺失")
             suffix = p.suffix.lower()
             if suffix in (".mp4", ".mov", ".webm", ".mkv"):
                 video_paths.append(p)

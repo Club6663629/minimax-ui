@@ -30,6 +30,7 @@ from ..models import (HibtvAsset, HibtvChange, HibtvDoc, HibtvFrame, HibtvJob, H
                       HibtvRender, HibtvSegment, Task, Upload, User)
 from . import h3_time, hibtv_assets, hibtv_compose, hibtv_codex, hibtv_frames, hibtv_image
 from .billing import add_credits
+from .hibtv_contracts import (digest, design, segment_input, current_segments, require_document, asset_input, file_hash)
 
 logger = logging.getLogger(__name__)
 
@@ -230,14 +231,22 @@ def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Di
         else:
             old = jloads(asset.data, {})
             merged = dict(row)
-            for key in ("imageConfirmed", "hints", "refs", "refsPrompts"):
+            for key in ("imageConfirmed", "confirmedHash", "hints", "refs", "refsPrompts", "imageTasks"):
                 if key in old and key not in merged:
                     merged[key] = old[key]
             old_prompt = str((old.get("image") or {}).get("prompt") or "")
             new_prompt = str((row.get("image") or {}).get("prompt") or "")
             asset.name = name
             asset.data = jdumps(merged)
-            if old_prompt and new_prompt and old_prompt != new_prompt:
+            if {k:v for k,v in design(old).items() if k not in ("refs", "imageTasks")} != {k:v for k,v in design(merged).items() if k not in ("refs", "imageTasks")}:
+                merged["imageConfirmed"] = False
+                merged.pop("confirmedHash", None)
+                asset.data = jdumps(merged)
+                if kind == "cast":
+                    # 角色描述变动后，旧 character-refs 提示词同样失效。
+                    for key in ("refs", "refsPrompts", "imageTasks"):
+                        merged.pop(key, None)
+                    asset.data = jdumps(merged)
                 # 锚点描述变了 → 全部派生视图过期（只标不删）
                 hibtv_assets.mark_stale(asset, "__anchor")
         asset.sort = i
@@ -277,7 +286,7 @@ def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
     aid = hibtv_assets.anchor_id(asset.kind)
     views: Dict[str, Dict] = {}
     legacy = []
-    for spec in hibtv_assets.view_defs(asset.kind):
+    for spec in hibtv_assets.view_defs(asset.kind, data):
         vid = spec["id"]
         if vid == aid:
             continue          # 锚点走 main，不重复列
@@ -311,9 +320,9 @@ def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
         "promptLocal": str(image.get("promptLocal") or ""),
         "size": size,
         "viewDefs": [{"id": s["id"], "label": s["label"], "anchor": bool(s.get("anchor"))}
-                     for s in hibtv_assets.view_defs(asset.kind)],
+                     for s in hibtv_assets.view_defs(asset.kind, data)],
         "anchorId": aid,
-        "imageConfirmed": bool(data.get("imageConfirmed")),
+        "imageConfirmed": hibtv_assets.main_current(type("Project", (), {"id": project_id})(), asset),
         "main": {
             "path": main_rel,
             "url": f"/files/hibtv/{project_id}/{main_rel}" if main_rel else "",
@@ -532,7 +541,12 @@ def sync_segments(db: Session, project: HibtvProject, ep: int, storyboard: Dict)
             obj = HibtvSegment(project_id=project.id, ep=int(ep), seg_id=seg_id, idx=i,
                                status="none", versions="[]")
             db.add(obj)
+        changed = digest(segment_input(jloads(obj.data, {}))) != digest(segment_input(seg))
+        seg["active"] = True
         obj.data = jdumps(seg)
+        if changed:
+            obj.current_version = 0
+            obj.status = "none"
         obj.idx = i
         obj.updated_at = now()
         count += 1
@@ -541,9 +555,10 @@ def sync_segments(db: Session, project: HibtvProject, ep: int, storyboard: Dict)
     for seg_id, obj in existing.items():
         if seg_id in keep:
             continue
-        if obj.status != "none" or (jloads(obj.versions, []) or []):
-            continue
-        db.delete(obj)
+        data = jloads(obj.data, {})
+        data["active"] = False
+        obj.data = jdumps(data)
+        obj.status = "archived"
     db.flush()
     return count
 
@@ -566,7 +581,7 @@ def _asset_query(db: Session, project: HibtvProject, payload: Dict):
     kind = str(payload.get("kind") or "")
     codes = payload.get("codes") or ([payload.get("code")] if payload.get("code") else [])
     asset_id = payload.get("asset_id")
-    query = db.query(HibtvAsset).filter(HibtvAsset.project_id == project.id)
+    query = db.query(HibtvAsset).filter(HibtvAsset.project_id == project.id, HibtvAsset.hidden.is_(False))
     if kind:
         query = query.filter(HibtvAsset.kind == kind)
     if asset_id:
@@ -577,7 +592,7 @@ def _asset_query(db: Session, project: HibtvProject, payload: Dict):
 
 
 def _frame_query(db: Session, project: HibtvProject, payload: Dict):
-    query = db.query(HibtvFrame).filter(HibtvFrame.project_id == project.id)
+    query = db.query(HibtvFrame).filter(HibtvFrame.project_id == project.id, HibtvFrame.status != "archived")
     ids = payload.get("frame_ids") or []
     if ids:
         query = query.filter(HibtvFrame.id.in_([int(x) for x in ids]))
@@ -674,12 +689,20 @@ def snap_duration(seconds: float) -> float:
 async def _job_compose(db: Session, project: HibtvProject, job: HibtvJob) -> None:
     payload = jloads(job.payload, {})
     ep = int(payload.get("ep") or job.ep or 1)
-    segs = (db.query(HibtvSegment)
-            .filter(HibtvSegment.project_id == project.id, HibtvSegment.ep == ep)
-            .order_by(HibtvSegment.idx).all())
+    expected = current_segments(db, project, ep, checked=True)
+    by_id = {row.seg_id: row for row in db.query(HibtvSegment).filter(
+        HibtvSegment.project_id == project.id, HibtvSegment.ep == ep).all()}
+    segs = []
+    for row in expected:
+        seg = by_id.get(row["id"])
+        if seg is None or digest(segment_input(row)) != digest(segment_input(jloads(seg.data, {}))):
+            raise RuntimeError(f"{row['id']} 当前分镜与段表不一致，请重新导入")
+        segs.append(seg)
     paths: List[str] = []
     planned: List[float] = []
     for seg in segs:
+        if jloads(seg.data, {}).get("active") is False:
+            continue
         versions = jloads(seg.versions, [])
         cur = None
         for v in versions:
@@ -690,6 +713,11 @@ async def _job_compose(db: Session, project: HibtvProject, job: HibtvJob) -> Non
             cur = versions[-1]
         if not cur or not cur.get("path"):
             raise RuntimeError(f"{seg.seg_id} 还没有成片段，先出片再拼接")
+        if cur.get("inputHash") != hibtv_frames.video_input_hash(db, project, seg):
+            raise RuntimeError(f"{seg.seg_id} 所选视频依赖旧输入，请重新生成或选择当前版本")
+        video_path = Path(cur["path"]) if Path(cur["path"]).is_absolute() else abs_path(project.id, cur["path"])
+        if not video_path.is_file() or cur.get("sha256") != file_hash(video_path):
+            raise RuntimeError(f"{seg.seg_id} 视频文件缺失或与登记版本不符，请重新生成")
         paths.append(cur["path"] if Path(cur["path"]).is_absolute()
                      else str(abs_path(project.id, cur["path"])))
         data = jloads(seg.data, {})
@@ -747,6 +775,7 @@ def segment_payload(project_id: int, seg: HibtvSegment) -> Dict:
         "pictureCount": int(data.get("pictureCount") or len(cuts)),
         "manifestSeconds": float(data.get("manifestSeconds") or 0),
         "oversize": bool(data.get("oversize")),
+        "timingMismatch": bool(data.get("timingMismatch")),
     }
 
 
@@ -781,12 +810,14 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
                     changed = True
                     continue
                 v["path"] = rel
-                v["seconds"] = round(float(task.duration or 0), 2)
+                v["sha256"] = file_hash(abs_path(project.id, rel))
+                v["seconds"] = round(float(task.frames or 0) / 24 if task.frames else float(task.duration or 0), 6)
                 v["at"] = now().strftime("%Y-%m-%d %H:%M")
                 v.pop("failed", None)
                 v.pop("error", None)
                 seg.status = "done"
-                if not int(seg.current_version or 0):
+                if (not int(seg.current_version or 0) and
+                        v.get("segmentHash") == digest(segment_input(jloads(seg.data, {})))):
                     seg.current_version = int(v.get("v") or 0)
                 changed = True
             elif task.status in TASK_DEAD:
@@ -796,10 +827,20 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
                 changed = True
             else:
                 running = True
-        if not any(v.get("path") for v in versions):
-            seg.status = "running" if running else ("failed" if dead else "none")
-        else:
+        previous_state = (seg.status, seg.current_version)
+        try:
+            active_hash = hibtv_frames.video_input_hash(db, project, seg)
+        except RuntimeError:
+            active_hash = ""
+        current = [v for v in versions if v.get("path") and active_hash and v.get("inputHash") == active_hash]
+        if current:
+            if not any(int(v.get("v") or 0) == int(seg.current_version or 0) for v in current):
+                seg.current_version = int(current[-1]["v"])
             seg.status = "running" if running else "done"
+        else:
+            seg.current_version = 0
+            seg.status = "running" if running else ("stale" if any(v.get("path") for v in versions) else ("failed" if dead else "none"))
+        changed = changed or previous_state != (seg.status, seg.current_version)
         if changed:
             seg.versions = jdumps(versions)
             seg.updated_at = now()
@@ -813,7 +854,7 @@ def segment_ref_plan(db: Session, project: HibtvProject, seg: HibtvSegment) -> L
 
 
 def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[int]:
-    """段出片的参考图 id：每切都有分镜图走路 A（f1..fN），否则走路 B（锚点兜底）。"""
+    """段出片的参考图 id：只允许完整且当前有效的 f1..fN，不更换图片语义。"""
     ids, _source = hibtv_frames.segment_video_refs(db, project, seg)
     return ids
 

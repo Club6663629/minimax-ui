@@ -72,9 +72,10 @@ export default function VideoPage() {
   const readiness = (seg: Segment) => {
     const rows = frames.filter((f) => f.segId === seg.id);
     const cuts = (seg.cuts || []).length;
-    const missing = rows.filter((f) => !f.url).map((f) => f.cutIndex);
+    const missing = rows.filter((f) => !f.ready).map((f) => f.cutIndex);
     const done = rows.length - missing.length;
     const total = rows.length || cuts;
+    if (seg.timingMismatch) return { ok: false, done, total, why: "时长未对齐 H3 帧预算：请重跑本集分镜" };
     if (seg.oversize)
       return { ok: false, done, total, why: `段长 ${seg.planSeconds.toFixed(1)}s 超过 ${cap}s：需重跑本集 storyboard` };
     if (!rows.length) return { ok: false, done, total, why: "还没有图位：先跑本集分镜" };
