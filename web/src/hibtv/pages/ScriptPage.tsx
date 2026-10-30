@@ -86,13 +86,16 @@ export default function ScriptPage() {
   }, [outline.scenes]);
 
   const staging = (stagingData || {}) as StagingData;
+  // sceneId 不保证唯一（同集可多次出现同一场景，如两场都标 S02），
+  // 故以「场次序号」为主键，sceneId 仅作兜底，避免同 id 互相覆盖。
   const stagingByScene = useMemo(() => {
-    const map = new Map<string, StagingScene>();
+    const byPos = new Map<string, StagingScene>();
+    const byId = new Map<string, StagingScene>();
     for (const s of staging.scenes || []) {
-      const key = s.sceneId || (s.scene != null ? `#${s.scene}` : "");
-      if (key) map.set(key, s);
+      if (s.scene != null) byPos.set(`#${s.scene}`, s);
+      if (s.sceneId && !byId.has(s.sceneId)) byId.set(s.sceneId, s);
     }
-    return map;
+    return { byPos, byId };
   }, [staging.scenes]);
   const stagingReport = stagingDoc?.meta?.report || "";
   const stagingJobId = String(stagingDoc?.meta?.codex_job_id || "");
@@ -317,7 +320,8 @@ export default function ScriptPage() {
 
       {scenes.map((sc, si) => {
         const sceneTotal = (sc.flow || []).reduce((a, b) => a + beatSeconds(b), 0);
-        const stg = stagingByScene.get(sc.sceneId) || stagingByScene.get(`#${si + 1}`);
+        const stg =
+          stagingByScene.byPos.get(`#${si + 1}`) || stagingByScene.byId.get(sc.sceneId);
         return (
           <div className="sec" key={`${sc.sceneId}-${si}`}>
             <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>

@@ -172,8 +172,10 @@ export default function CastPage() {
             </div>
           ))}
           <div className="tiny dim" style={{ marginTop: 16, lineHeight: 1.9 }}>
-            一角色一张图：提示词直接用 skill 的 <span className="mono">image.prompt</span>
-            （反向词 <span className="mono">negativePrompt</span>），改提示词后点「重出这一张」。
+            每个角色 = 锚点（正面全身）+ 派生视图（大头 / 侧面 / 背面）。锚点提示词直接用 skill 的{" "}
+            <span className="mono">image.prompt</span>（反向词 <span className="mono">negativePrompt</span>），
+            改后点「重出这一张」；派生视图挂锚点 + 一句改图指令生成，确认锚点后才能出，
+            锚点重出会把派生视图标「过期」（只标不删）。派生视图只供审阅与出分镜图参考，不进视频模型。
             <br />
             出图按张扣积分（{status?.cost?.image ?? 0} 积分 / 张），系统失败全额退。
           </div>

@@ -126,7 +126,7 @@ export default function OverviewPage() {
           key: "cast",
           label: "角色",
           status: docDone("cast#0") ? "完成" : "待生成",
-          detail: `${counts.cast} 张角色卡 · 单图 ${counts.castMain}/${counts.cast}`,
+          detail: `${counts.cast} 张角色卡 · 锚点 ${counts.castMain}/${counts.cast}`,
           to: "/hibtv/cast",
           pct: pctOf(counts.castMain, counts.cast),
         },
@@ -134,7 +134,7 @@ export default function OverviewPage() {
           key: "art",
           label: "美术",
           status: docDone("art#0") ? "完成" : "待生成",
-          detail: `${counts.scene} 场景 + ${counts.prop} 道具 · 单图 ${counts.sceneMain + counts.propMain}/${
+          detail: `${counts.scene} 场景 + ${counts.prop} 道具 · 锚点 ${counts.sceneMain + counts.propMain}/${
             counts.scene + counts.prop
           }`,
           to: "/hibtv/art",
