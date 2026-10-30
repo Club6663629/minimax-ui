@@ -391,10 +391,11 @@ class HibtvAssetPatch(BaseModel):
 
 
 class HibtvImageIn(BaseModel):
-    """资产图动作（一资产一张单图，没有视图维度）：
-    draw=首次出图 / regen=重出这一张 / confirm=人工过目写底账。"""
-    action: Literal["draw", "regen", "confirm"] = "draw"
+    """资产图动作：draw=出锚点 / regen=重出锚点(派生全过期) / confirm=确认锚点 /
+    draw_view=出指定派生视图（需带 view，且锚点已确认）。"""
+    action: Literal["draw", "regen", "confirm", "draw_view"] = "draw"
     hint: str = ""
+    view: str = ""
 
 
 class HibtvFrameImageIn(BaseModel):

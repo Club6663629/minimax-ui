@@ -82,7 +82,7 @@ export default function ArtPage() {
           <CodexLight />
           <GateChips gates={doc?.gates} none="美术设定没有结构化门结果（skill 的门只写在产物里）" />
           <button className="btn" onClick={() => void drawAll()}>
-            出全部单图
+            出全部锚点
           </button>
           <button className="btn gold" onClick={rerun} disabled={!gate.ok} title={gate.why}>
             {art.scenes?.length || art.props?.length ? "重新生成美术" : "生成场景与道具"}

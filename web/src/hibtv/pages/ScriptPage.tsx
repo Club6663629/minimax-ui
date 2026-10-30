@@ -4,9 +4,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { hibtvApi } from "../api";
 import { Stage } from "../HibtvLayout";
 import { CodexLight, useCodexGate } from "../components/CodexLight";
+import { ReportFrame } from "../components/StageArtifacts";
 import { Empty, GateChips, GateList, GenBar, InlineEdit, Loading, PageHead } from "../components/ui";
 import { useDoc, useHibtv, useJob, usePatch } from "../state";
-import type { OutlineData, ScriptEpisode } from "../types";
+import type { OutlineData, ScriptEpisode, StagingData, StagingScene } from "../types";
 
 interface Params {
   charsPerSecond?: number;
@@ -15,13 +16,53 @@ interface Params {
   tolerance?: number;
 }
 
+/** 每场次下的站位 bar：有报告就点开可拖动版报告，没排过就去排一版。 */
+function StagingBar({
+  scene,
+  fallbackCast,
+  hasReport,
+  onOpen,
+  onRestage,
+}: {
+  scene?: StagingScene;
+  fallbackCast: number;
+  hasReport: boolean;
+  onOpen: () => void;
+  onRestage: () => void;
+}) {
+  const ready = Boolean(scene) || hasReport;
+  const n = scene?.cast?.length || fallbackCast;
+  if (!ready) {
+    return (
+      <div className="genbar" style={{ marginBottom: 10 }}>
+        <span className="chip ghost">尚未排位</span>
+        <span className="tiny dim">这一场还没排站位；站位是分镜 blocking 的上游，先排好点位分镜才拍得顺。</span>
+        <span className="sp" style={{ marginLeft: "auto" }} />
+        <button className="btn xs gold" onClick={onRestage}>去排一版</button>
+      </div>
+    );
+  }
+  return (
+    <div className="genbar" style={{ marginBottom: 10, cursor: "pointer" }} onClick={onOpen}>
+      <span className="chip green">站位 已排好{n ? ` · ${n} 人同框` : ""}</span>
+      <span className="tiny dim">
+        {scene?.why || "点位 / 朝向 / 群演已排定；换机位不会重排。点开看可拖动版报告。"}
+      </span>
+      <span className="sp" style={{ marginLeft: "auto" }} />
+      <button className="btn xs" onClick={(e) => { e.stopPropagation(); onOpen(); }}>↗ 打开可拖动版</button>
+      <button className="btn xs" onClick={(e) => { e.stopPropagation(); onRestage(); }}>重新排一版</button>
+    </div>
+  );
+}
+
 export default function ScriptPage() {
   const { ep: epParam = "1" } = useParams();
   const ep = Math.max(1, Number(epParam) || 1);
   const navigate = useNavigate();
-  const { project, runJob, toast } = useHibtv();
+  const { project, runJob, toast, openLayer, closeLayer } = useHibtv();
   const { data, doc, patch, loading } = usePatch("script", ep);
   const { data: outlineData } = useDoc("outline");
+  const { data: stagingData, doc: stagingDoc } = useDoc("staging", ep);
   const job = useJob("script", ep);
   const gate = useCodexGate();
 
@@ -43,6 +84,59 @@ export default function ScriptPage() {
     for (const s of outline.scenes || []) map.set(s.id, s.name);
     return map;
   }, [outline.scenes]);
+
+  const staging = (stagingData || {}) as StagingData;
+  const stagingByScene = useMemo(() => {
+    const map = new Map<string, StagingScene>();
+    for (const s of staging.scenes || []) {
+      const key = s.sceneId || (s.scene != null ? `#${s.scene}` : "");
+      if (key) map.set(key, s);
+    }
+    return map;
+  }, [staging.scenes]);
+  const stagingReport = stagingDoc?.meta?.report || "";
+  const stagingJobId = String(stagingDoc?.meta?.codex_job_id || "");
+  const hasStagingReport = Boolean(stagingReport && stagingJobId);
+
+  // 点击 bar → 弹层里内嵌可拖动版站位报告（复用 StagingPage 的 ReportFrame）
+  const openStagingReport = () => {
+    if (!project) return;
+    if (!hasStagingReport) {
+      navigate(`/hibtv/staging/${ep}`);
+      return;
+    }
+    openLayer(
+      <div className="drawer wide">
+        <div className="drawer-hd">
+          <div>
+            <div className="tiny dim">站位 · 第 {ep} 集</div>
+            <div className="t">可拖动版站位报告</div>
+          </div>
+          <span className="x" onClick={closeLayer}>✕</span>
+        </div>
+        <div className="drawer-bd">
+          <div className="tiny dim" style={{ marginBottom: 8 }}>
+            拖动结果不回写；要固化站位，改 docs/staging 后重跑分镜（分镜 blocking 读的就是它）。
+          </div>
+          <ReportFrame projectId={project.id} jobId={stagingJobId} rel={stagingReport} height={560} />
+        </div>
+        <div className="drawer-ft">
+          <span className="tiny dim">staging-report.html · 可拖动版工具</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn ghost" onClick={() => { closeLayer(); navigate(`/hibtv/staging/${ep}`); }}>去完整页</button>
+          <button className="btn" onClick={closeLayer}>关闭</button>
+        </div>
+      </div>,
+    );
+  };
+
+  const restage = () => {
+    if (!gate.ok) {
+      toast(gate.why);
+      return;
+    }
+    void runJob("staging", ep);
+  };
 
   const beatSeconds = (beat: { line?: string; action?: string }) =>
     beat.line ? Math.max(1, Math.round((beat.line.replace(/\s/g, "").length / cps) * 10) / 10) : actionSec;
@@ -223,6 +317,7 @@ export default function ScriptPage() {
 
       {scenes.map((sc, si) => {
         const sceneTotal = (sc.flow || []).reduce((a, b) => a + beatSeconds(b), 0);
+        const stg = stagingByScene.get(sc.sceneId) || stagingByScene.get(`#${si + 1}`);
         return (
           <div className="sec" key={`${sc.sceneId}-${si}`}>
             <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
@@ -241,6 +336,13 @@ export default function ScriptPage() {
               <span className="sp" style={{ marginLeft: "auto" }} />
               <span className="tiny dim">场次合计 {sceneTotal.toFixed(1)}s</span>
             </div>
+            <StagingBar
+              scene={stg}
+              fallbackCast={(sc.characters || []).length}
+              hasReport={hasStagingReport}
+              onOpen={openStagingReport}
+              onRestage={restage}
+            />
             <div className="beats">
               <div className="beat-hd">
                 <span>#</span>

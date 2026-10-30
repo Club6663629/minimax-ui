@@ -1,7 +1,7 @@
-/** 角色：每人一张卡（一图 + 提示词 / 音色 / 分层），出图与重出都在卡上。
+/** 角色：每人一张卡（锚点图 + 派生多视图 + 提示词 / 音色 / 分层），出图与重出都在卡上。
  *
  * 文本来自 codex 的 `novel-characters`（cast.json），像素由平台按 `image.prompt`
- * 出一张 896×1152 竖版单图；**没有多视图 / 锚点 / 派生**。
+ * 先出锚点（896×1152 竖版），确认锚点后再派生大头/侧面/背面（只供审阅与出分镜图参考）。
  */
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
@@ -57,13 +57,13 @@ export default function CastPage() {
     if (!project) return;
     const pending = assets.filter((a) => !a.main?.path);
     if (!pending.length) {
-      toast("全部角色都已有单图；要换某一人的图，点他卡片上的「重出这一张」");
+      toast("全部角色都已有锚点图；要换某人的图，点他卡片上的「重出这一张」，确认后再出派生视图");
       return;
     }
     try {
-      // 一次作业出全部缺图（一资产一张，尺寸按类型固定）
+      // 一次作业出全部缺锚点（派生视图需在卡片上确认锚点后逐张出）
       await hibtvApi.createJob(project.id, { kind: "images", payload: { mode: "assets", kind: "cast" } });
-      toast(`已排入出图队列：${pending.length} 张角色单图（896×1152）`);
+      toast(`已排入出图队列：${pending.length} 张角色锚点图（896×1152）`);
       reload();
     } catch {
       toast("排队失败，请稍后重试");
@@ -87,7 +87,7 @@ export default function CastPage() {
           <CodexLight />
           <GateChips gates={doc?.gates} none="角色表没有结构化门结果（skill 的门只写在产物里）" />
           <button className="btn ghost" onClick={() => void drawAll()} disabled={!missing}>
-            {missing ? `出单图（缺 ${missing} 人）` : "单图已齐"}
+            {missing ? `出锚点（缺 ${missing} 人）` : "锚点已齐"}
           </button>
           <button className="btn gold" onClick={rerun} disabled={!gate.ok} title={gate.why}>
             {characters.length ? "重新生成角色表" : "基于大纲生成全部"}

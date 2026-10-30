@@ -616,9 +616,8 @@ def patch_asset(project_id: int, asset_id: int, body: HibtvAssetPatch,
              status_code=status.HTTP_202_ACCEPTED)
 def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
                 user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """资产图：`draw`（首次出图）/ `regen`（重出这一张）/ `confirm`（人工过目写底账）。
-
-    一资产一张单图；重出只会换这一张，**永不产生派生视图**。
+    """资产图：`draw`（出锚点）/ `regen`（重出锚点，派生全过期）/ `confirm`（确认锚点）
+    / `draw_view`（出指定派生视图，需先确认锚点）。
     """
     project = _project(db, project_id, user)
     asset = db.get(HibtvAsset, asset_id)
@@ -634,14 +633,26 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
         db.commit()
         return hibtv_jobs.asset_payload(project.id, asset)
 
-    if body.hint.strip():
+    payload: Dict = {"mode": "assets", "asset_id": asset.id, "kind": asset.kind}
+    if body.action == "draw_view":
+        view = body.view.strip()
+        if not view or hibtv_assets.view_spec(asset.kind, view) is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "派生视图 view 非法")
+        if hibtv_assets.anchor_id(asset.kind) == view:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "锚点请用 draw/regen 出图")
+        data = hibtv_jobs.jloads(asset.data, {})
+        if not data.get("imageConfirmed"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "先确认锚点，再出派生视图")
+        if not (asset.main_path or "").strip():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "锚点还没出图，不能派生视图")
+        payload["view"] = view
+    elif body.hint.strip():
         data = hibtv_jobs.jloads(asset.data, {})
         hints = data.get("hints") or {}
         hints["__main"] = body.hint.strip()[:400]
         data["hints"] = hints
         asset.data = hibtv_jobs.jdumps(data)
 
-    payload: Dict = {"mode": "assets", "asset_id": asset.id, "kind": asset.kind}
     steps = hibtv_jobs.image_steps(db, project, payload)
     if steps <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "没有需要出图的资产")
@@ -661,9 +672,10 @@ def asset_image(project_id: int, asset_id: int, body: HibtvImageIn,
 @router.post("/projects/{project_id}/assets/{asset_id}/upload")
 async def upload_asset(project_id: int, asset_id: int,
                        file: UploadFile = File(...),
+                       view: str = Form(""),
                        user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
-    """手工上传一张图顶掉主图（外部出图 / 人工修图，不产生视图）。"""
+    """手工上传一张图顶掉锚点主图（view 为空）或指定派生视图。"""
     project = _project(db, project_id, user)
     asset = db.get(HibtvAsset, asset_id)
     if asset is None or asset.project_id != project.id:
@@ -675,12 +687,18 @@ async def upload_asset(project_id: int, asset_id: int,
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "图片不能超过 20MB")
 
-    rel = f"assets/{asset.kind}/{asset.code or asset.id}/main{suffix}"
+    view = (view or "").strip()
+    is_anchor = not view or view == hibtv_assets.anchor_id(asset.kind)
+    fname = "main" if is_anchor else view
+    rel = f"assets/{asset.kind}/{asset.code or asset.id}/{fname}{suffix}"
     path = hibtv_jobs.project_dir(project.id) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
-    _log_change(db, project.id, f"asset:{asset.id}", "main", asset.main_path, rel)
-    hibtv_assets.import_image(db, project, asset, path, rel)
+    _log_change(db, project.id, f"asset:{asset.id}",
+                "main" if is_anchor else f"view:{view}",
+                asset.main_path if is_anchor else "", rel)
+    hibtv_assets.import_image(db, project, asset, path, rel,
+                              view="" if is_anchor else view)
     db.commit()
     return hibtv_jobs.asset_payload(project.id, asset)
 
@@ -861,14 +879,9 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
             f"本段计划 {plan:.1f}s，超过单次生成上限 {cap:g}s：“先拆镜头再出片”，"
             f"超限请重跑本集 storyboard（平台不拆段、不改提示词）")
 
-    try:
-        frames = hibtv_frames.ensure_ready(db, project, seg.seg_id, ep=seg.ep)
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    if len(frames) != len(cuts):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"{seg.seg_id} 切数 {len(cuts)} ≠ 关键帧数 {len(frames)}，先重跑分镜")
-    ref_ids = [int(f["uploadId"]) for f in frames]
+    # 分镜图可选：每切都有分镜图走路 A（f1..fN 干净单帧），缺帧走路 B
+    # （挂场景/角色/道具锚点兜底）；两者都空则回落 t2v。视频绝不吃多视图网格。
+    ref_ids, ref_source = hibtv_frames.segment_video_refs(db, project, seg)
 
     frames_n = h3_time.frames_for(plan or cap)
     seconds = round(frames_n / 24.0, 4)
@@ -906,6 +919,7 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
     return {
         "ok": True, "taskId": task.id, "v": version, "cost": cost,
         "seconds": seconds, "frames": frames_n, "refs": len(ref_ids),
+        "refSource": ref_source,
         "planSeconds": plan,
     }
 

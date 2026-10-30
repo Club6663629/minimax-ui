@@ -1,9 +1,10 @@
-/** 角色卡 / 场景卡 / 道具卡：**一资产一张单图** + 提示词面板。
+/** 角色卡 / 场景卡 / 道具卡：**锚点主图 + N 张派生视图**（按原型 VIEW_DEFS）+ 提示词面板。
  *
- * 口径（别再退回多视图）：
- * - 提示词直接用 skill 产出的 `image.prompt`（反向词 `image.negativePrompt`），平台不追加约束；
- * - 尺寸按类型固定：cast 896×1152 / scene 1280×720 / prop 1024×1024（后端可配）；
- * - 「重出」只换这一张，永不产生派生视图 / 裁格 / 锚点。
+ * 口径（skills 官方规则）：
+ * - 锚点直接用 skill 产出的 `image.prompt`（反向词 `image.negativePrompt`）；
+ * - 派生视图 = 挂锚点(cast 额外挂大头照) + 一句改图指令；锚点未确认前不出派生；
+ * - 锚点重出 → 派生视图全过期（红框，只标不删）；
+ * - 多视图只服务人审阅与出分镜图参考，**绝不进视频**。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { hibtvApi, mediaUrl } from "../api";
@@ -206,6 +207,112 @@ function LayersDrawer({ asset, onClose }: { asset: HibtvAsset; onClose: () => vo
   );
 }
 
+/* ------------------------------------------------------------------ 多视图条 */
+function ViewStrip({
+  asset,
+  busy,
+  onDraw,
+  onUpload,
+  onPreview,
+}: {
+  asset: HibtvAsset;
+  busy: boolean;
+  onDraw: (viewId: string) => void;
+  onUpload: (viewId: string, file: File) => void;
+  onPreview: (viewId: string) => void;
+}) {
+  const defs = asset.viewDefs || [];
+  if (defs.length <= 1) return null;
+  const anchorId = asset.anchorId;
+  const confirmed = asset.imageConfirmed;
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [pending, setPending] = useState("");
+  const plateKind = PLATE_KIND[asset.kind] || "person";
+
+  const pick = (viewId: string) => {
+    if (viewId === anchorId) {
+      return {
+        url: asset.main?.url || "",
+        version: asset.version || 0,
+        stale: false,
+        label: defs.find((d) => d.id === viewId)?.label || "锚点",
+      };
+    }
+    const v = asset.views?.[viewId];
+    return {
+      url: v?.url || "",
+      version: v?.version || 0,
+      stale: !!v?.stale,
+      label: v?.label || defs.find((d) => d.id === viewId)?.label || viewId,
+    };
+  };
+
+  return (
+    <div className="viewstrip">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".png,.jpg,.jpeg,.webp"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file && pending) onUpload(pending, file);
+          setPending("");
+        }}
+      />
+      {defs.map((def) => {
+        const st = pick(def.id);
+        const isAnchor = def.id === anchorId;
+        const locked = !isAnchor && !confirmed;
+        return (
+          <div
+            key={def.id}
+            className={`viewcell${st.stale ? " stale" : ""}${isAnchor ? " anchor" : ""}`}
+          >
+            <div
+              className="viewthumb"
+              onClick={() => st.url && onPreview(def.id)}
+              title={st.url ? `点击看大图 · ${st.label}` : st.label}
+            >
+              <Plate
+                kind={plateKind}
+                label={st.label}
+                view={isAnchor ? "锚点" : st.url ? `v${st.version}` : ""}
+                src={st.url}
+                ratio={ratioOf(asset.size)}
+              />
+              {st.stale && <span className="viewflag">过期</span>}
+              {locked && <span className="viewflag lock">🔒</span>}
+            </div>
+            <div className="viewacts">
+              <button
+                className="btn xxs"
+                disabled={busy || locked}
+                title={locked ? "先确认锚点再出派生视图" : st.url ? "重出这一张" : "出图"}
+                onClick={() => onDraw(def.id)}
+              >
+                {st.url ? "↻" : "＋"}
+              </button>
+              <button
+                className="btn xxs"
+                disabled={busy || locked}
+                title="上传顶掉这一张"
+                onClick={() => {
+                  setPending(def.id);
+                  fileRef.current?.click();
+                }}
+              >
+                ↑
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ 卡片 */
 export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: () => void }) {
   const { project, toast, openLayer, closeLayer } = useHibtv();
@@ -270,6 +377,45 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
     }
   };
 
+  const drawView = async (viewId: string) => {
+    if (!project) return;
+    setBusy(true);
+    try {
+      const res = await hibtvApi.assetImage(project.id, asset.id, {
+        action: "draw_view",
+        view: viewId,
+      });
+      if ("kind" in res && res.kind === "images") {
+        toast(`已排队出派生视图：${asset.name} · ${viewId}`);
+      }
+      onChanged();
+    } catch (err) {
+      toast(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadView = async (viewId: string, file: File) => {
+    if (!project) return;
+    setBusy(true);
+    try {
+      await hibtvApi.uploadAsset(project.id, asset.id, file,
+        viewId === asset.anchorId ? "" : viewId);
+      toast(`已替换：${asset.name} · ${viewId}`);
+      onChanged();
+    } catch (err) {
+      toast(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDrawCell = (viewId: string) => {
+    if (viewId === asset.anchorId) void draw(mainSrc ? "regen" : "draw");
+    else void drawView(viewId);
+  };
+
   const bigView = () => {
     openLayer(
       <div className="modal" style={{ width: "min(980px,96vw)", background: "#0d0b09" }}>
@@ -282,7 +428,9 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
               {asset.name}
             </div>
             <div className="tiny mut" style={{ marginTop: 4 }}>
-              {mainSrc ? "一资产一张图；要换就重出这一张或上传。" : "还没有图，点「出图」生成这一张。"}
+              {mainSrc
+                ? "锚点主图 + 派生视图（多视图只用于审阅与出分镜图参考，不进视频）。"
+                : "还没有图，点「出图」先生成锚点。"}
             </div>
           </div>
           <span className="x" onClick={closeLayer}>
@@ -290,17 +438,28 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
           </span>
         </div>
         <div className="modal-bd">
-          {mainSrc ? (
-            <img
-              src={mediaUrl(mainSrc)}
-              alt={asset.name}
-              style={{ width: "100%", borderRadius: 6, border: "1px solid var(--line-3)" }}
-            />
-          ) : (
-            <div className="tiny dim" style={{ padding: "32px 0", textAlign: "center" }}>
-              这张还没有图。
-            </div>
-          )}
+          <div className="viewgrid">
+            {(asset.viewDefs || []).map((def) => {
+              const isAnchor = def.id === asset.anchorId;
+              const v = isAnchor ? undefined : asset.views?.[def.id];
+              const url = isAnchor ? mainSrc : v?.url || "";
+              const stale = !isAnchor && !!v?.stale;
+              return (
+                <figure key={def.id} className={`viewfig${stale ? " stale" : ""}`}>
+                  {url ? (
+                    <img src={mediaUrl(url)} alt={def.label} />
+                  ) : (
+                    <div className="viewempty">{isAnchor ? "未出锚点" : "未出图"}</div>
+                  )}
+                  <figcaption>
+                    {def.label}
+                    {isAnchor ? " · 锚点" : ""}
+                    {stale ? " · 过期" : ""}
+                  </figcaption>
+                </figure>
+              );
+            })}
+          </div>
           <CopyRow label="出图提示词" value={prompt} />
           <CopyRow label="反向词" value={asset.negative} />
         </div>
@@ -425,6 +584,18 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
           <div className="inline" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {status}
           </div>
+          {mainSrc && !asset.imageConfirmed && (
+            <div className="tiny dim" style={{ marginTop: 6 }}>
+              先点「接受 v{asset.version}」确认锚点，才能出大头/侧面/背面等派生视图。
+            </div>
+          )}
+          <ViewStrip
+            asset={asset}
+            busy={busy}
+            onDraw={onDrawCell}
+            onUpload={(vid, file) => void uploadView(vid, file)}
+            onPreview={bigView}
+          />
           <div className="cast-voice">
             <span className="up">◍ 音色参考</span>
             <span className="ref">{asset.data?.voice?.timbre || asset.data?.voice?.gender || "未设"}</span>
@@ -483,6 +654,18 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             onSave={(v) => void patch({ data: { image: { ...image, prompt: v } } })}
           />
         </div>
+        {mainSrc && !asset.imageConfirmed && (
+          <div className="tiny dim" style={{ marginTop: 6 }}>
+            先点「接受 v{asset.version}」确认锚点，才能出俯视/背面/侧面等派生视图。
+          </div>
+        )}
+        <ViewStrip
+          asset={asset}
+          busy={busy}
+          onDraw={onDrawCell}
+          onUpload={(vid, file) => void uploadView(vid, file)}
+          onPreview={bigView}
+        />
         <div className="art-foot">
           {status}
           <span className="link" onClick={() => void draw(mainSrc ? "regen" : "draw")}>

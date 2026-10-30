@@ -207,8 +207,9 @@ def get_json_path(obj, path: str):
 def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Dict]) -> int:
     """把文档里的角色 / 场景 / 道具同步成资产卡（按 code 更新或新建）。
 
-    资产卡只存 skill 给的那份 JSON：提示词从 `data.image.prompt` 读，主图走
-    `main_path`；**不写视图、不派生、不裁格**（多视图方案已永久下线）。
+    资产卡存 skill 给的那份 JSON：锚点提示词从 `data.image.prompt` 读，锚点主图走
+    `main_path`，派生视图走 `views`（同步不覆盖）。用户拥有的字段
+    （`imageConfirmed` / `hints` / `refs`）跨同步保留；image.prompt 变了就把派生视图全标过期。
     """
     existing = {a.code: a for a in db.query(HibtvAsset).filter(
         HibtvAsset.project_id == project.id, HibtvAsset.kind == kind).all()}
@@ -227,8 +228,18 @@ def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Di
                                data=jdumps(row), views="{}", status="empty")
             db.add(asset)
         else:
+            old = jloads(asset.data, {})
+            merged = dict(row)
+            for key in ("imageConfirmed", "hints", "refs", "refsPrompts"):
+                if key in old and key not in merged:
+                    merged[key] = old[key]
+            old_prompt = str((old.get("image") or {}).get("prompt") or "")
+            new_prompt = str((row.get("image") or {}).get("prompt") or "")
             asset.name = name
-            asset.data = jdumps(row)
+            asset.data = jdumps(merged)
+            if old_prompt and new_prompt and old_prompt != new_prompt:
+                # 锚点描述变了 → 全部派生视图过期（只标不删）
+                hibtv_assets.mark_stale(asset, "__anchor")
         asset.sort = i
         asset.updated_at = now()
         count += 1
@@ -253,20 +264,42 @@ def asset_status(asset: HibtvAsset) -> str:
 
 
 def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
-    """资产卡对外视图：一图 + 提示词面板（没有视图维度）。"""
+    """资产卡对外视图：锚点主图 + 派生视图（按 VIEW_DEFS 顺序）+ 提示词面板。"""
     data = jloads(asset.data, {})
     main_rel = (asset.main_path or "").strip()
     meta = jloads(asset.main_meta, {})
     image = data.get("image") or {}
     size = list(meta.get("size") or hibtv_assets.size_for(asset.kind))
-    # 历史项目：旧的 `views` 只读兼容，取第一张当「旧版多视图」展示，绝不写回
+    raw_views = jloads(asset.views, {}) or {}
+    aid = hibtv_assets.anchor_id(asset.kind)
+    views: Dict[str, Dict] = {}
     legacy = []
-    for view, item in (jloads(asset.views, {}) or {}).items():
-        rel = (item or {}).get("path") or ""
-        if rel and view != "__sheet":
+    for spec in hibtv_assets.view_defs(asset.kind):
+        vid = spec["id"]
+        if vid == aid:
+            continue          # 锚点走 main，不重复列
+        item = raw_views.get(vid) or {}
+        rel = str(item.get("path") or "").strip()
+        views[vid] = {
+            "label": spec["label"], "anchor": False,
+            "url": f"/files/hibtv/{project_id}/{rel}" if rel else "",
+            "path": rel,
+            "uploadId": int(item.get("uploadId") or 0),
+            "version": int(item.get("version") or 0),
+            "status": item.get("status") or ("review" if rel else "empty"),
+            "stale": bool(item.get("stale")),
+            "confirmed": bool(item.get("confirmed")),
+            "at": str(item.get("at") or ""),
+        }
+    # 历史项目的旧格式视图（只 path/version）：只读展示，不写回
+    for view, item in raw_views.items():
+        if view in views or view == aid or view == "__sheet":
+            continue
+        rel = (item or {}).get("path") or "" if isinstance(item, dict) else ""
+        if rel:
             legacy.append({"view": view,
                            "url": f"/files/hibtv/{project_id}/{rel}",
-                           "version": item.get("version") or 0})
+                           "version": (item or {}).get("version") or 0})
     return {
         "id": asset.id, "kind": asset.kind, "code": asset.code, "name": asset.name,
         "data": data,
@@ -274,6 +307,10 @@ def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
         "negative": hibtv_assets.negative_of(data),
         "promptLocal": str(image.get("promptLocal") or ""),
         "size": size,
+        "viewDefs": [{"id": s["id"], "label": s["label"], "anchor": bool(s.get("anchor"))}
+                     for s in hibtv_assets.view_defs(asset.kind)],
+        "anchorId": aid,
+        "imageConfirmed": bool(data.get("imageConfirmed")),
         "main": {
             "path": main_rel,
             "url": f"/files/hibtv/{project_id}/{main_rel}" if main_rel else "",
@@ -282,6 +319,7 @@ def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
             "meta": meta,
             "at": str(meta.get("at") or ""),
         },
+        "views": views,
         "legacyViews": legacy,
         "status": asset.status or asset_status(asset),
         "version": int(asset.version or 0),
@@ -572,12 +610,17 @@ async def _draw_assets(db: Session, project: HibtvProject, job: HibtvJob,
     assets = _asset_query(db, project, payload).all()
     if not assets:
         raise RuntimeError("没有可出图的资产")
+    view = str(payload.get("view") or "").strip()
     total = max(1, len(assets))
     for i, asset in enumerate(assets, start=1):
         asset.status = "drawing"
         db.commit()
-        _progress(db, job, int(5 + 90 * i / total), f"{asset.code} {asset.name} · 资产图")
-        await hibtv_assets.draw(db, project, asset)
+        label = f"{view} 视图" if view else "锚点图"
+        _progress(db, job, int(5 + 90 * i / total), f"{asset.code} {asset.name} · {label}")
+        if view:
+            await hibtv_assets.draw_view(db, project, asset, view)
+        else:
+            await hibtv_assets.draw(db, project, asset)
         asset.status = asset_status(asset)
         asset.updated_at = now()
         db.commit()
@@ -767,8 +810,9 @@ def segment_ref_plan(db: Session, project: HibtvProject, seg: HibtvSegment) -> L
 
 
 def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[int]:
-    """段的参考图 id 列表（顺序即图 1、图 2 …）。"""
-    return [ref["uploadId"] for ref in segment_ref_plan(db, project, seg) if ref.get("uploadId")]
+    """段出片的参考图 id：每切都有分镜图走路 A（f1..fN），否则走路 B（锚点兜底）。"""
+    ids, _source = hibtv_frames.segment_video_refs(db, project, seg)
+    return ids
 
 
 def video_prompt(prompt: str, _plan: Optional[List[dict]] = None) -> str:

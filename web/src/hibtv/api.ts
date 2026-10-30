@@ -146,15 +146,20 @@ export const hibtvApi = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  /** draw=首次出图 / regen=重出这一张 / confirm=人工过目 */
-  assetImage: (id: number, assetId: number, body: { action: "draw" | "regen" | "confirm"; hint?: string }) =>
+  /** draw=出锚点 / regen=重出锚点 / confirm=确认锚点 / draw_view=出指定派生视图（需带 view） */
+  assetImage: (
+    id: number,
+    assetId: number,
+    body: { action: "draw" | "regen" | "confirm" | "draw_view"; hint?: string; view?: string },
+  ) =>
     request<HibtvJob | HibtvAsset>(`${base}/projects/${id}/assets/${assetId}/image`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  uploadAsset: (id: number, assetId: number, file: File) => {
+  uploadAsset: (id: number, assetId: number, file: File, view = "") => {
     const form = new FormData();
     form.append("file", file);
+    if (view) form.append("view", view);
     return request<HibtvAsset>(`${base}/projects/${id}/assets/${assetId}/upload`, {
       method: "POST",
       body: form,
@@ -192,6 +197,7 @@ export const hibtvApi = {
       seconds: number;
       frames: number;
       refs: number;
+      refSource: string;
       planSeconds: number;
     }>(`${base}/projects/${id}/segments/${segId}/generate`, {
       method: "POST",

@@ -1,11 +1,13 @@
-"""关键帧出图：**每切一张，f1..fN**（ref2v 唯一的图源）。
+"""关键帧出图：**每切一张，f1..fN**（ref2v 首选的图源，路 A）。
 
-口径：
-- 提示词 = `cut.frame`（分镜给的关键帧描述）+ 该场 `lighting` + 一句竖屏构图/禁文字水印；
-- 参考图 = 该场场景主图 + 该切出场角色主图（最多 3 张，模型自己补看不到的角度）；
+口径（skills frame.md 官方挂图合同）：
+- 提示词 = `cut.frame`（分镜给的关键帧描述）+ 该场 `lighting` + 每张参考图用途声明
+  + 人物此刻位置状态 + 按画幅的末尾固定句；
+- 参考图 = 场景锚点 + 每个在场角色的锚点(front-full)+大头照(face-front) + 在场道具锚点；
+  都是**干净单视图**，绝不挂拼格 sheet / 多视图网格；
 - 画布按**输出网格**出：9:16 → 768×1344，16:9 → 1344×768（`comfyui.SOURCE_SIZES`）；
 - 落 `frames/{seg}/f{n}.png` 并登记 Upload（出片时按 `picture` 序号挂给 H3）；
-- 缺一张就拦出片：ref2v 少一张图，切点之后会整段切到空白。
+- 缺帧不拦出片：无分镜图时出片走路 B 兜底（`fallback_refs`：挂场景/角色/道具锚点）。
 """
 import json
 import logging
@@ -15,19 +17,27 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from ..models import HibtvAsset, HibtvFrame, HibtvProject, HibtvSegment
-from . import comfyui, hibtv_image
+from . import comfyui, hibtv_assets, hibtv_image
 
 logger = logging.getLogger(__name__)
 
-# 场景 1 + 全部出场角色；短剧单场最多 3 人，所以上限是 4。
-# 多图模型会把多张角色卡误当成同一人物多视图，prompt_for() 必须逐槽声明身份。
-MAX_REFS = 4
-# 画面硬约束：竖屏构图 + 禁屏内文字（平台唯一允许追加的两句，属像素约束不是内容）
-FRAME_TAIL = "竖屏构图，画面里不出现字幕、水印或任何叠加文字"
+# 场景 1 + 每个在场角色（锚点+大头照）2 + 道具；短剧单场人数有限，上限放到 6。
+# 多图模型会把多张角色卡误当成同一人物多视图，prompt_for() 必须逐槽声明身份与用途。
+MAX_REFS = 6
+# 画面硬约束：禁屏内文字（像素约束，不是内容）。末尾固定句照 frame.md。
+FRAME_TAIL = "画面里不出现字幕、水印或任何叠加文字"
+CLEAN_TAIL = "No text, no watermark, no borders — a single clean full-bleed frame."
 NEGATIVE = ("text, subtitle, watermark, logo, signature, caption, border, frame, "
             "multiple panels, split screen, contact sheet, collage, "
             "duplicate person, cloned face, identical twins, two identical men, "
             "extra person, character sheet, multi-view grid")
+
+
+def frame_tail(project: HibtvProject) -> str:
+    """按项目画幅生成末尾固定句（16:9 横屏 / 9:16 竖屏），叠加 frame.md 官方英文固定句。"""
+    ratio = (project.aspect_ratio or "9:16").strip()
+    orient = "横屏构图（16:9）" if ratio.startswith("16") else "竖屏构图（9:16）"
+    return f"{orient}，{FRAME_TAIL}。{CLEAN_TAIL}"
 
 
 def _loads(raw) -> Dict:
@@ -66,14 +76,16 @@ def lighting_of(db: Session, project: HibtvProject, ep: int, scene_index: int) -
 
 def prompt_for(frame: HibtvFrame, lighting: str = "", *,
                characters: Optional[List[Dict]] = None,
-               refs: Optional[List[Dict]] = None) -> str:
-    """生成关键帧 prompt，并把每个参考图槽位绑定到唯一角色身份。
+               refs: Optional[List[Dict]] = None,
+               tail: str = "") -> str:
+    """生成关键帧 prompt，并把每个参考图槽位绑定到唯一身份与用途。
 
     `characters` 按 frame.meta.characters 的顺序传入；`refs` 的每个条目含
-    kind/code/name/path。多角色时必须明确“不同的人”和“不得复制”，否则 i2i
-    模型会把角色卡当成同一主体的多视图并复制其中一张脸。
+    kind/code/name/path/role。多角色时必须明确“不同的人”和“不得复制”，否则 i2i
+    模型会把角色卡当成同一主体的多视图并复制其中一张脸。末尾固定句按画幅（tail）。
     """
     base = (frame.prompt or "").strip()
+    tail = (tail or FRAME_TAIL).strip()
     parts: List[str] = []
 
     def add(text: str) -> None:
@@ -83,7 +95,6 @@ def prompt_for(frame: HibtvFrame, lighting: str = "", *,
 
     add(base)
     add(lighting)
-    add(FRAME_TAIL)
     _seen_codes = set()
     rows = []
     for row in (characters or []):
@@ -93,15 +104,26 @@ def prompt_for(frame: HibtvFrame, lighting: str = "", *,
             rows.append(row)
     ref_rows = [row for row in (refs or []) if row.get("path")]
     if ref_rows:
-        mapping = ["参考图身份锁：每张角色卡只代表一个角色，不是同一人物的多视图"]
+        mapping = ["参考图用途声明：每张图只代表一个用途，不是同一人物的多视图"]
         for idx, ref in enumerate(ref_rows, start=1):
-            if ref.get("kind") == "scene":
+            role = str(ref.get("role") or ref.get("kind") or "")
+            code = ref.get("code", "")
+            name = ref.get("name", "")
+            if role == "scene":
                 mapping.append(
-                    f"Picture {idx} = 场景 {ref.get('code')} {ref.get('name', '')}"
-                    "（环境/空间一致性锚点，本身不含额外人物）")
+                    f"Picture {idx} = 场景 {code} {name}"
+                    "（which is the environment：环境/材质/光的唯一标准，本身不含额外人物）")
+            elif role == "cast-face":
+                mapping.append(
+                    f"Picture {idx} = {code} {name} 的大头照"
+                    "（whose face to match：这张只用来对齐脸，与同角色的全身图是同一个人）")
+            elif role == "prop":
+                mapping.append(
+                    f"Picture {idx} = 道具 {code} {name}"
+                    "（which prop to match：形状/材质/颜色按这张）")
             else:
                 mapping.append(
-                    f"Picture {idx} = {ref.get('code')} {ref.get('name', '')}"
+                    f"Picture {idx} = {code} {name}"
                     f"（{ref.get('gender') or '性别按角色卡'}，"
                     f"{ref.get('identity') or '身份按角色卡'}）")
         add("；".join(mapping) + "。")
@@ -139,7 +161,12 @@ def prompt_for(frame: HibtvFrame, lighting: str = "", *,
     else:
         add("画面人数硬约束：maxOnScreen=0；画面中不得出现完整人物或可辨认人脸，"
             "禁止凭空添加人物、额外人物、克隆或分身。")
-    return "；".join(parts) if parts else FRAME_TAIL
+    if named:
+        # frame.md L22：切镜时人物位置是连续的剧情状态，只写构图不写状态会把人画回上一状态
+        add("人物位置状态必须与本镜剧情连续（如已上船 / 在舱内 / 站在桥头），"
+            "不要把已进入新位置的人物画回之前的状态。")
+    add(tail)
+    return "；".join(parts) if parts else tail
 
 
 def _asset_main(db: Session, project: HibtvProject, kind: str, code: str) -> Optional[Path]:
@@ -168,7 +195,7 @@ def _asset_row(db: Session, project: HibtvProject, kind: str,
 
 
 def _ref_from_asset(db: Session, project: HibtvProject,
-                    asset: Optional[HibtvAsset]) -> Optional[Dict]:
+                    asset: Optional[HibtvAsset], role: str = "") -> Optional[Dict]:
     from .hibtv_jobs import abs_path
 
     if asset is None or not (asset.main_path or "").strip():
@@ -176,7 +203,28 @@ def _ref_from_asset(db: Session, project: HibtvProject,
     path = abs_path(project.id, asset.main_path)
     if not path.exists():
         return None
-    return {"kind": asset.kind, "code": asset.code, "name": asset.name, "path": path}
+    default_role = {"scene": "scene", "prop": "prop",
+                    "cast": "cast-anchor"}.get(asset.kind, asset.kind)
+    return {"kind": asset.kind, "code": asset.code, "name": asset.name, "path": path,
+            "role": role or default_role, "uploadId": int(asset.main_upload_id or 0)}
+
+
+def _view_ref(db: Session, project: HibtvProject, asset: Optional[HibtvAsset],
+              view_id: str, role: str) -> Optional[Dict]:
+    """把派生视图当参考（如角色大头照 face-front）：只取干净单视图，绝不取拼格。"""
+    from .hibtv_jobs import abs_path
+
+    if asset is None:
+        return None
+    item = (_loads(asset.views) or {}).get(view_id) or {}
+    rel = str((item or {}).get("path") or "").strip()
+    if not rel:
+        return None
+    path = abs_path(project.id, rel)
+    if not path.exists():
+        return None
+    return {"kind": asset.kind, "code": asset.code, "name": asset.name, "path": path,
+            "role": role, "uploadId": int((item or {}).get("uploadId") or 0)}
 
 
 def character_specs_for(db: Session, project: HibtvProject,
@@ -203,25 +251,46 @@ def character_specs_for(db: Session, project: HibtvProject,
 
 def ref_specs_for(db: Session, project: HibtvProject, frame: HibtvFrame,
                   seg: Optional[HibtvSegment]) -> List[Dict]:
-    """返回与 generate_image(image_names) 完全同序的场景/角色参考图说明。"""
+    """该切的参考图（与 generate_image(image_names) 完全同序）：
+
+    场景锚点 → 每个在场角色的锚点(front-full)+大头照(face-front) → 在场道具锚点。
+    都是干净单视图；越需精准越靠前，总数受 MAX_REFS 约束（超出按顺序裁尾）。
+    """
     out: List[Dict] = []
     scene = _asset_row(db, project, "scene", _scene_code(db, project, int(frame.ep), seg))
-    scene_ref = _ref_from_asset(db, project, scene)
+    scene_ref = _ref_from_asset(db, project, scene, role="scene")
     if scene_ref:
         out.append(scene_ref)
-    for raw in _loads(frame.meta).get("characters") or []:
+    meta = _loads(frame.meta)
+    for raw in meta.get("characters") or []:
         code = str(raw or "").strip()
         if not code or any(row.get("code") == code and row.get("kind") == "cast"
                            for row in out):
             continue
         asset = _asset_row(db, project, "cast", code)
-        ref = _ref_from_asset(db, project, asset)
-        if ref:
+        anchor = _ref_from_asset(db, project, asset, role="cast-anchor")
+        if anchor:
             data = _loads(asset.data)
             persona = data.get("persona") or {}
-            ref["gender"] = str(persona.get("gender") or "")
-            ref["identity"] = str(persona.get("identity") or "")
-            out.append(ref)
+            anchor["gender"] = str(persona.get("gender") or "")
+            anchor["identity"] = str(persona.get("identity") or "")
+            out.append(anchor)
+            # 大头照：只给全身锚点脸会走样，加一张大头照脸最接近（character-refs SKILL.md）
+            face = _view_ref(db, project, asset, "face-front", role="cast-face")
+            if face:
+                face["gender"] = anchor["gender"]
+                face["identity"] = anchor["identity"]
+                out.append(face)
+    # 道具：cut.props 里每个道具的锚点（此前完全被忽略 → 每帧发明新道具）
+    for raw in meta.get("props") or []:
+        code = str(raw or "").strip()
+        if not code or any(row.get("code") == code and row.get("kind") == "prop"
+                           for row in out):
+            continue
+        prop = _asset_row(db, project, "prop", code)
+        pref = _ref_from_asset(db, project, prop, role="prop")
+        if pref:
+            out.append(pref)
     return out[:MAX_REFS]
 
 
@@ -296,7 +365,8 @@ async def draw(db: Session, project: HibtvProject, frame: HibtvFrame) -> Dict:
         raise RuntimeError(
             f"{frame.seg_id} f{int(frame.cut_index)} 角色 {missing} 缺少可用角色主图或超出"
             f"单帧参考图上限 {MAX_REFS} 张（含场景）：先补角色主图或拆分镜头后再出关键帧")
-    prompt = prompt_for(frame, str(lighting or ""), characters=characters, refs=ref_specs)
+    prompt = prompt_for(frame, str(lighting or ""), characters=characters, refs=ref_specs,
+                        tail=frame_tail(project))
     width, height = canvas(project)
     rel = rel_for(frame)
     out_abs = project_dir(project.id) / rel
@@ -365,3 +435,68 @@ def ensure_ready(db: Session, project: HibtvProject, seg_id: str,
     if len(rows) > 9:
         raise RuntimeError(f"{seg_id} 有 {len(rows)} 切，超过 H3 参考图上限 9 张，需要先拆段")
     return rows
+
+
+# 视频参考图上限：seedance-prompt.md 建议 4–5 个、不要用满（多了模型分不清优先级）。
+VIDEO_MAX_REFS = 5
+
+
+def fallback_refs(db: Session, project: HibtvProject,
+                  seg: HibtvSegment) -> List[Dict]:
+    """路 B 兜底：无分镜图时，段的参考图 = 场景/角色/道具的**干净锚点**。
+
+    顺序 场景 → 人物(锚点+大头照) → 道具（seedance-prompt.md）；视频绝不吃多视图网格。
+    """
+    frames = (db.query(HibtvFrame)
+              .filter(HibtvFrame.project_id == project.id, HibtvFrame.seg_id == seg.seg_id)
+              .order_by(HibtvFrame.cut_index).all())
+    char_codes: List[str] = []
+    prop_codes: List[str] = []
+    for fr in frames:
+        meta = _loads(fr.meta)
+        for c in meta.get("characters") or []:
+            c = str(c or "").strip()
+            if c and c not in char_codes:
+                char_codes.append(c)
+        for p in meta.get("props") or []:
+            p = str(p or "").strip()
+            if p and p not in prop_codes:
+                prop_codes.append(p)
+    out: List[Dict] = []
+    scene = _asset_row(db, project, "scene", _scene_code(db, project, int(seg.ep), seg))
+    sr = _ref_from_asset(db, project, scene, role="scene")
+    if sr and sr.get("uploadId"):
+        out.append(sr)
+    for code in char_codes:
+        asset = _asset_row(db, project, "cast", code)
+        anchor = _ref_from_asset(db, project, asset, role="cast-anchor")
+        if anchor and anchor.get("uploadId"):
+            out.append(anchor)
+        face = _view_ref(db, project, asset, "face-front", role="cast-face")
+        if face and face.get("uploadId"):
+            out.append(face)
+    for code in prop_codes:
+        prop = _asset_row(db, project, "prop", code)
+        pr = _ref_from_asset(db, project, prop, role="prop")
+        if pr and pr.get("uploadId"):
+            out.append(pr)
+    return out[:VIDEO_MAX_REFS]
+
+
+def segment_video_refs(db: Session, project: HibtvProject,
+                       seg: HibtvSegment) -> Tuple[List[int], str]:
+    """出片参考图 id：每切都有分镜图走路 A（f1..fN），否则走路 B（锚点兜底）。
+
+    返回 (ref_ids, source)，source ∈ {"frames", "assets", "none"}。两者都空时回落 t2v。
+    """
+    frames = plan(db, project, seg.seg_id, ep=seg.ep)
+    if frames and all(f["path"] and f["uploadId"] for f in frames):
+        if len(frames) <= 9:
+            return [int(f["uploadId"]) for f in frames], "frames"
+    fb = fallback_refs(db, project, seg)
+    if fb:
+        return [int(r["uploadId"]) for r in fb], "assets"
+    ready = [int(f["uploadId"]) for f in frames if f["path"] and f["uploadId"]]
+    if ready:
+        return ready[:9], "frames"
+    return [], "none"

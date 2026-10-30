@@ -1,7 +1,7 @@
 /** 短剧工作台（HiBTV）接口类型：与 server/app/routers/hibtv.py 的响应一一对应。
  *
- * 口径：文本 7 段由 codex 网关产出（平台只搬字段），像素阶段是「一资产一张单图」+
- * 「每切一张关键帧」+ ref2v 段出片；多视图设定稿 / 4 格裁格已永久下线。
+ * 口径：文本 7 段由 codex 网关产出（平台只搬字段），像素阶段是「锚点主图 + N 张派生视图」+
+ * 「每切一张关键帧」+ ref2v 段出片；多视图（按原型 VIEW_DEFS）只服务人审阅与出分镜图参考，绝不进视频。
  */
 
 export type DocKind = "outline" | "cast" | "art" | "refs" | "staging" | "script" | "storyboard";
@@ -123,7 +123,7 @@ export interface HibtvJob {
   finished_at: string;
 }
 
-/** 资产主图（一资产一张，没有视图维度） */
+/** 资产锚点主图（每类第 1 个视图，走文生图） */
 export interface AssetMain {
   path: string;
   url: string;
@@ -131,6 +131,27 @@ export interface AssetMain {
   version: number;
   meta: Record<string, unknown>;
   at: string;
+}
+
+/** 资产派生视图（挂锚点 + 一句改图指令出的干净单视图） */
+export interface AssetView {
+  label: string;
+  anchor: boolean;
+  url: string;
+  path: string;
+  uploadId: number;
+  version: number;
+  status: string;
+  stale: boolean;
+  confirmed: boolean;
+  at: string;
+}
+
+/** 视图定义（顺序即展示顺序，第 1 个是锚点） */
+export interface ViewDef {
+  id: string;
+  label: string;
+  anchor: boolean;
 }
 
 export interface HibtvAsset {
@@ -144,9 +165,17 @@ export interface HibtvAsset {
   prompt: string;
   negative: string;
   promptLocal: string;
-  /** [宽, 高]：cast 896×1152 / scene 1280×720 / prop 1024×1024 */
+  /** [宽, 高]：锚点尺寸 cast 896×1152 / scene 1280×720 / prop 1024×1024 */
   size: number[];
+  /** 视图定义（按 VIEW_DEFS 顺序） */
+  viewDefs: ViewDef[];
+  /** 锚点视图 id（cast=front-full / scene=front / prop=front） */
+  anchorId: string;
+  /** 锚点是否已人工确认（未确认前不出派生视图） */
+  imageConfirmed: boolean;
   main: AssetMain;
+  /** 派生视图（键为 view_id，不含锚点） */
+  views: Record<string, AssetView>;
   /** 旧版多视图（只读兼容，历史项目才有） */
   legacyViews: { view: string; url: string; version: number }[];
   status: "empty" | "drawing" | "review" | "done" | string;

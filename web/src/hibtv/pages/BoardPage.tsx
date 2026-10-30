@@ -128,10 +128,12 @@ function FrameStrip({
   projectId,
   seg,
   onChanged,
+  ratio = "9 / 16",
 }: {
   projectId: number;
   seg: Segment;
   onChanged: () => void;
+  ratio?: string;
 }) {
   const { toast } = useHibtv();
   const [busy, setBusy] = useState(0);
@@ -222,7 +224,7 @@ function FrameStrip({
                 href={f.url ? mediaUrl(f.url) : undefined}
                 target="_blank"
                 rel="noreferrer"
-                style={{ display: "block", position: "relative", aspectRatio: "9 / 16", background: "#0f0e0c" }}
+                style={{ display: "block", position: "relative", aspectRatio: ratio, background: "#0f0e0c" }}
                 title={f.prompt}
               >
                 {f.url ? (
@@ -550,7 +552,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
           </span>
         </>
       }
-      lede="整集成片按段拼；每段 ≤ 13 秒、每切 2–5 秒一个镜头。出片只有一条路：ref2v + 每切一张关键帧。"
+      lede="整集成片按段拼；每段 ≤ 13 秒、每切 2–5 秒一个镜头。没有分镜图也能出片：有帧走路 A（每切一张干净关键帧），缺帧走路 B（拿角色/场景/道具锚点兜底）。"
       right={
         <>
           <CodexLight />
@@ -712,7 +714,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
       <div className="tiny dim" style={{ marginTop: 12, lineHeight: 1.9 }}>
         段长上限 {cap}s（H3 只出 5+17n 帧，13s 会吸附成 13.67s，所以请求 311 帧 = 12.9583s）。
         <br />
-        图位数字是「已出关键帧 / 需出张数」；缺图时段出片会被后端拦下。
+        图位数字是「已出关键帧 / 需出张数」；分镜图可选，缺图时出片会走后端路 B（锚点兜底），不再拦下。
         <span className="link" style={{ marginLeft: 8 }} onClick={() => void reloadFrames()}>
           刷新图位
         </span>
@@ -805,15 +807,19 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
       toast(`本段 ${seg.planSeconds.toFixed(1)}s 超过 ${cap}s：平台不拆段，请带提示重跑本集 storyboard`);
       return;
     }
-    if (seg.framesReady === false) {
-      toast(`缺关键帧 f${(seg.missingFrames || []).join(" / f") || "?"}：ref2v 少一张图就会切到空白`);
-      return;
-    }
     setBusy(true);
     try {
       const res = await hibtvApi.generateSegment(project.id, segId, {});
+      const route =
+        res.refSource === "frames"
+          ? `路 A · ${res.refs} 张关键帧`
+          : res.refSource === "assets"
+            ? `路 B · ${res.refs} 张锚点参考（本段缺分镜图，拿场景/角色/道具锚点兜底）`
+            : res.refs
+              ? `${res.refs} 张参考图`
+              : "文生视频（无分镜图也无锚点资产）";
       toast(
-        `已排队出片：${segId} v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.cost} 积分 · ${res.refs} 张关键帧`,
+        `已排队出片：${segId} v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.cost} 积分 · ${route}`,
       );
       await load();
       void reload();
@@ -821,6 +827,22 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
       toast(errText(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /** 补齐全部：一次出齐本段所有缺帧（分镜图可选，不出也能走路 B 出片）。 */
+  const fillAllFrames = async () => {
+    if (!project || !seg) return;
+    try {
+      await hibtvApi.createJob(project.id, {
+        kind: "images",
+        payload: { mode: "frames", ep: seg.ep, seg_id: seg.id },
+      });
+      const miss = (seg.missingFrames || []).length;
+      toast(miss ? `已排入关键帧队列：补齐本段缺的 ${miss} 张` : "本段关键帧已齐，将重出全部帧");
+      window.setTimeout(() => void load(), 800);
+    } catch (err) {
+      toast(errText(err));
     }
   };
 
@@ -940,13 +962,13 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           <span style={{ marginLeft: "auto" }} />
           <button
             className="btn sm gold"
-            disabled={busy || generating || seg.oversize || seg.framesReady === false}
+            disabled={busy || generating || seg.oversize}
             title={
               seg.oversize
                 ? "段长超限：先重跑本集 storyboard"
                 : seg.framesReady === false
-                  ? `缺关键帧 f${missing.join(" / f")}`
-                  : "ref2v + 关键帧原样直出"
+                  ? `缺关键帧 f${missing.join(" / f")}：走后端路 B，拿场景/角色/道具锚点兜底出片`
+                  : "路 A：ref2v + 每切关键帧原样直出"
             }
             onClick={() => void generate()}
           >
@@ -975,16 +997,18 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
       <div className="panel-sec">
         <div className="panel-title">
-          出片入参 <span className="r">ref2v · {cuts.length} 张参考图</span>
+          出片入参 <span className="r">{seg.framesReady === false ? "ref2v · 路 B 锚点兜底" : `ref2v · 路 A ${cuts.length} 帧`}</span>
         </div>
         <div className="tiny dim" style={{ lineHeight: 1.9 }}>
           提示词 = prompt.md 原文（Picture N 钉切点），平台不裁剪、不改写；
-          参考图 = f1..fN 按序号挂，`ref_image_size=match` 负责归一。
+          {seg.framesReady === false
+            ? "本段分镜图不齐→走路 B：拿场景/角色（锚点+大头照）/道具锚点当参考（视频绝不吃多视图网格）。"
+            : "参考图 = f1..fN 干净单帧按序号挂，`ref_image_size=match` 负责归一。"}
           {seg.promptSha8 ? ` 当前提示词 sha256 前 8 位：${seg.promptSha8}` : ""}
         </div>
         {missing.length ? (
-          <div className="tiny red" style={{ marginTop: 6 }}>
-            缺关键帧 f{missing.join(" / f")}：ref2v 少一张图就会「切到空白」，补齐后才能出片。
+          <div className="tiny" style={{ marginTop: 6, color: "var(--gold-2)" }}>
+            缺关键帧 f{missing.join(" / f")}：不拦出片，现在会走路 B（锚点兜底）。想先定构图就点“补齐全部”把分镜图出齐，再走路 A。
           </div>
         ) : null}
       </div>
@@ -1065,6 +1089,33 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         <Loading text="读取这一段…" />
       ) : (
         <>
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="card-hd">
+              <span className="t">分镜图</span>
+              <span className="chip">可选</span>
+              <span style={{ marginLeft: "auto" }} />
+              <span className="tiny dim">不出也能出片</span>
+            </div>
+            <div className="card-bd">
+              <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+                <span className="lab tiny">画幅</span>
+                <span className="chip gold">{project.aspectRatio}</span>
+                <span className={`chip tiny ${seg.framesReady === false ? "gold" : "green"}`}>
+                  图位 {(seg.frames || []).filter((f) => f.url).length}/{seg.pictureCount || cuts.length}
+                </span>
+                <span style={{ marginLeft: "auto" }} />
+                <button className="btn xs" disabled={busy || generating} onClick={() => void fillAllFrames()}>
+                  补齐全部
+                </button>
+              </div>
+              <div className="tiny dim" style={{ lineHeight: 1.9 }}>
+                没有分镜图也能出片——直接拿角色与场景（含大头照）、道具的锚点图当参考出视频（后端路 B 兜底）。
+                想先定构图，或者某一镜出片总不对，再给它出分镜图；出齐后走路 A（每切一张干净关键帧 f1..fN）。
+                多视图网格 / 派生拼格绝不进视频模型（会被识别成多主体 → ID 漂移 / 双胞胎）。
+              </div>
+            </div>
+          </div>
+
           <div className="card" style={{ background: "rgba(255,255,255,.014)" }}>
             <div className="card-bd">
               <div className="tiny dim" style={{ marginBottom: 6 }}>
@@ -1100,10 +1151,10 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           </div>
           <div className="card">
             <div className="card-bd">
-              <FrameStrip projectId={project.id} seg={seg} onChanged={() => void load()} />
+              <FrameStrip projectId={project.id} seg={seg} onChanged={() => void load()} ratio={project.aspectRatio === "16:9" ? "16 / 9" : "9 / 16"} />
               <div className="tiny dim" style={{ marginTop: 8 }}>
-                出图提示词 = 本切 <span className="mono">frame</span> + 该场 lighting + 竖屏构图；
-                尺寸按 {project.aspectRatio} 的原生画布（9:16 → 768×1344），不缩放变形。
+                出图提示词 = 本切 <span className="mono">frame</span> + 该场 lighting + {project.aspectRatio === "16:9" ? "横屏构图" : "竖屏构图"}（末尾固定句：No text, no watermark, no borders）；
+                尺寸按 {project.aspectRatio} 的原生画布，不缩放变形。
               </div>
             </div>
           </div>
@@ -1115,10 +1166,15 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
             <span className="chip">
               切 {cuts.length} · 图 {seg.pictureCount || 0}
             </span>
+            <span className="tiny dim">分镜图可选，不出也能出片</span>
             <span className="sp" style={{ marginLeft: "auto" }} />
+            <button className="btn xs" disabled={busy || generating} onClick={() => void fillAllFrames()}>
+              补齐全部缺帧
+            </button>
             <button
               className="btn xs"
-              disabled={busy || generating || seg.oversize || seg.framesReady === false}
+              disabled={busy || generating || seg.oversize}
+              title={seg.framesReady === false ? "缺帧也出片：走后端路 B（锚点兜底）" : "路 A：ref2v + 每切关键帧"}
               onClick={() => void generate()}
             >
               用当前提示词出片
@@ -1126,10 +1182,11 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           </div>
 
           <div className="card" style={{ overflowX: "auto" }}>
-            <table className="tbl" style={{ minWidth: 1180 }}>
+            <table className="tbl" style={{ minWidth: 1240 }}>
               <thead>
                 <tr>
                   <th>#</th>
+                  <th>分镜图</th>
                   <th>区间</th>
                   <th>秒</th>
                   <th>节拍</th>
@@ -1151,9 +1208,43 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                 {cuts.map((cut, i) => {
                   const from = starts[i] ?? 0;
                   const to = Math.round((from + Number(cut.seconds || 0)) * 10) / 10;
+                  const fr = (seg.frames || []).find((f) => f.cutIndex === i + 1);
                   return (
                     <tr key={i}>
                       <td className="mono">{i + 1}</td>
+                      <td>
+                        {fr ? (
+                          <a
+                            href={fr.url ? mediaUrl(fr.url) : undefined}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={fr.url ? `f${fr.cutIndex} 关键帧（点开看大图）` : `f${fr.cutIndex} 缺图`}
+                            style={{
+                              display: "block",
+                              width: 52,
+                              aspectRatio: project.aspectRatio === "16:9" ? "16 / 9" : "9 / 16",
+                              border: `1px solid ${fr.url ? "var(--line-3)" : "rgba(224,120,90,.5)"}`,
+                              borderRadius: 4,
+                              overflow: "hidden",
+                              background: "#0f0e0c",
+                              position: "relative",
+                            }}
+                          >
+                            {fr.url ? (
+                              <img
+                                src={mediaUrl(fr.url)}
+                                alt={`f${fr.cutIndex}`}
+                                loading="lazy"
+                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              />
+                            ) : (
+                              <span className="tiny dim" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>缺</span>
+                            )}
+                          </a>
+                        ) : (
+                          <span className="tiny dim">—</span>
+                        )}
+                      </td>
                       <td className="mono">
                         {from}–{to}s
                       </td>
@@ -1229,7 +1320,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               <span style={{ marginLeft: "auto" }} />
               <button
                 className="btn xs"
-                disabled={busy || generating || seg.oversize || seg.framesReady === false}
+                disabled={busy || generating || seg.oversize}
+                title={seg.framesReady === false ? "缺帧也出片：走后端路 B（锚点兜底）" : "路 A：ref2v + 每切关键帧"}
                 onClick={() => void generate()}
               >
                 重新生成视频

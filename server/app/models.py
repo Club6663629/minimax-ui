@@ -203,9 +203,12 @@ class HibtvDoc(Base):
 
 
 class HibtvAsset(Base):
-    """角色 / 场景 / 道具卡：一条资产 = **一张主图**（完全按 skill 的 image.prompt）。
+    """角色 / 场景 / 道具卡：**锚点主图 + N 张派生视图**（多视图按原型恢复）。
 
-    多视图设定稿 / 4 格裁格 / 派生视图 / 锚点锁定已永久下线；`views` 列只读兼容老项目。
+    - 锚点（每类第 1 个视图）走文生图，用 skill 的 `image.prompt`，存 `main_path`；
+    - 派生视图 = 挂锚点（cast 额外挂大头照）+ 一句改图指令，存 `views` 列；
+    - 多视图只服务「人审阅」与「出分镜图时当参考」，**绝不进视频模型**；
+    - 锚点重出 → 全部派生视图标过期（只标不删，见 hibtv_assets.mark_stale）。
     """
 
     __tablename__ = "hibtv_assets"
@@ -222,7 +225,7 @@ class HibtvAsset(Base):
     main_upload_id: Mapped[Optional[int]] = mapped_column(Integer)
     # {width,height,prompt,negative,seed,seconds,at,uploaded}
     main_meta: Mapped[str] = mapped_column(Text, default="{}")
-    # 旧版多视图表（只读兼容：历史项目只展示首张，标「旧版多视图」）
+    # 派生视图表：{view_id: {path,uploadId,version,status,stale,confirmed,prompt,refs,at}}
     views: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(16), default="empty")  # empty|drawing|review|done
     version: Mapped[int] = mapped_column(Integer, default=0)
