@@ -259,8 +259,11 @@ def sync_assets(db: Session, project: HibtvProject, kind: str, rows: Sequence[Di
 
 
 def asset_status(asset: HibtvAsset) -> str:
-    """资产状态只看主图：有图 = 待评审（review），没图 = 空。"""
-    return "review" if (asset.main_path or "").strip() else "empty"
+    """资产状态只看锚点主图：没图 = 空（empty）；有图未确认 = 待评审（review）；
+    有图已确认 = 完成（done）。派生视图出图不会把已确认的锚点打回 review。"""
+    if not (asset.main_path or "").strip():
+        return "empty"
+    return "done" if jloads(asset.data, {}).get("imageConfirmed") else "review"
 
 
 def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:

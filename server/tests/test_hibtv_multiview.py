@@ -7,7 +7,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from app.services import hibtv_assets, hibtv_frames
+from app.services import hibtv_assets, hibtv_frames, hibtv_jobs
 
 
 class AssetViewDefsTest(unittest.TestCase):
@@ -129,6 +129,23 @@ class PromptForTest(unittest.TestCase):
         refs = [{"path": "", "role": "scene", "code": "S01", "name": "宴会厅"}]
         p = hibtv_frames.prompt_for(self._frame({}), "", characters=[], refs=refs, tail="TAIL")
         self.assertNotIn("场景 S01", p)
+
+
+class AssetStatusTest(unittest.TestCase):
+    """锁住 fix：派生出图不再把已确认锚点打回 review（chip 不回跳）。"""
+
+    def _asset(self, main_path, confirmed):
+        data = {"imageConfirmed": True} if confirmed else {}
+        return SimpleNamespace(main_path=main_path, data=json.dumps(data))
+
+    def test_no_main_is_empty(self):
+        self.assertEqual(hibtv_jobs.asset_status(self._asset("", False)), "empty")
+
+    def test_main_unconfirmed_is_review(self):
+        self.assertEqual(hibtv_jobs.asset_status(self._asset("assets/cast/C01/main.png", False)), "review")
+
+    def test_main_confirmed_is_done(self):
+        self.assertEqual(hibtv_jobs.asset_status(self._asset("assets/cast/C01/main.png", True)), "done")
 
 
 if __name__ == "__main__":

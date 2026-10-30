@@ -165,6 +165,9 @@ async def draw(db: Session, project: HibtvProject, asset: HibtvAsset) -> Dict:
         "at": now().strftime("%Y-%m-%d %H:%M"),
     })
     asset.version = version
+    # 锚点（重）出 → 新版本需重新确认；未确认前派生视图锁定（锚点门）
+    data["imageConfirmed"] = False
+    asset.data = jdumps(data)
     asset.status = asset_status(asset)
     asset.updated_at = now()
     # 锚点重出 → 全部派生视图过期（只标不删）
@@ -340,6 +343,10 @@ def import_image(db: Session, project: HibtvProject, asset: HibtvAsset,
         "at": now().strftime("%Y-%m-%d %H:%M"),
     })
     asset.version = version
+    # 上传新锚点 → 同样需重新确认；未确认前派生视图锁定
+    data = _loads(asset.data)
+    data["imageConfirmed"] = False
+    asset.data = jdumps(data)
     asset.status = asset_status(asset)
     asset.updated_at = now()
     # 上传新锚点同样让全部派生视图过期
