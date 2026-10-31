@@ -102,13 +102,11 @@ export default function OverviewPage() {
     ? [
         {
           key: "novel",
-          label: "原著",
-          status: project.hasNovel ? "完成" : "缺正文",
-          detail: project.hasNovel
-            ? `${project.novelName || "正文已落盘"} · source.txt · ${eps.length} 集 × ${project.targetSeconds ? `${project.targetSeconds} 秒` : `${project.minutesMin}–${project.minutesMax} 分钟`}`
-            : "还没有小说正文：outline 的 input 只给绝对路径，必须先落盘",
-          to: "/hibtv/home",
-          pct: project.hasNovel ? 100 : 0,
+          label: "导入资料",
+          status: project.hasSources ? "完成" : "缺少双资料",
+          detail: project.hasSources ? `${project.scriptName} + ${project.artName}` : "请在项目设置补传定稿剧本与美术设定",
+          to: "/hibtv/settings",
+          pct: project.hasSources ? 100 : 0,
         },
         {
           key: "outline",
@@ -118,7 +116,7 @@ export default function OverviewPage() {
             ? `${eps.length} 集 · ${project.docs?.["outline#0"]?.meta?.stage || "novel-outline"} · 门 ${
                 project.docs?.["outline#0"]?.gates?.status || "未运行"
               }`
-            : "novel-outline：改编方案 + 分集梗概 + 爽点时间轴",
+            : "剧本与美术设定解析：内核、资产清单、分集与对齐检查",
           to: "/hibtv/outline/inner",
           pct: docDone("outline#0") ? (gaps.length ? 92 : 100) : 0,
         },
@@ -206,7 +204,7 @@ export default function OverviewPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>

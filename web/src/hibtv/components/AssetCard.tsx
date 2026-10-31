@@ -12,6 +12,30 @@ import { errText, useHibtv } from "../state";
 import type { HibtvAsset, RefLayerDoc } from "../types";
 import { InlineEdit, MediaActs, Plate } from "./ui";
 
+function PromptDrawer({value,onSave,onClose}:{value:string;onSave:(v:string)=>Promise<void>;onClose:()=>void}) {
+  const [text,setText]=useState(value), [busy,setBusy]=useState(false), [error,setError]=useState("");
+  return <div className="drawer"><div className="drawer-hd"><span className="h2">修改出图提示词</span><button className="btn xs" onClick={onClose}>关闭</button></div>
+    <div className="drawer-bd"><textarea className="textarea" style={{minHeight:260}} value={text} onChange={e=>setText(e.target.value)}/>
+      <div className="note">保存后图像需要重新生成和确认，已有派生视图会标记过期。</div>{error&&<div className="tiny red">{error}</div>}</div>
+    <div className="drawer-ft"><button className="btn gold" disabled={busy||!text.trim()} onClick={async()=>{setBusy(true);try{await onSave(text);}catch(e){setError(errText(e));}finally{setBusy(false);}}}>保存提示词</button></div></div>;
+}
+
+export function AddAssetButton({kind,onChanged}:{kind:"cast"|"scene"|"prop";onChanged:()=>void}) {
+  const {project,openLayer,closeLayer,toast}=useHibtv();
+  const label=kind==="cast"?"角色":kind==="scene"?"场景":"道具";
+  return <button className="btn" onClick={()=>openLayer(<AddAssetForm kind={kind} label={label} onSave={async(name,prompt)=>{
+    if(!project)return;await hibtvApi.addAsset(project.id,kind,name,prompt);closeLayer();onChanged();toast(`已添加${label}，请补全资料并重新校验`);
+  }} onClose={closeLayer}/>)}>＋ 添加{label}</button>;
+}
+function AddAssetForm({kind,label,onSave,onClose}:{kind:string;label:string;onSave:(name:string,prompt:string)=>Promise<void>;onClose:()=>void}) {
+  const [name,setName]=useState(""),[prompt,setPrompt]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  return <div className="drawer"><div className="drawer-hd"><span className="h2">添加{label}</span><button className="btn xs" onClick={onClose}>关闭</button></div>
+    <div className="drawer-bd"><label className="field"><span className="label">名称</span><input className="input" value={name} onChange={e=>setName(e.target.value)}/></label>
+      <label className="field"><span className="label">美术描述 / 提示词</span><textarea className="textarea" value={prompt} onChange={e=>setPrompt(e.target.value)}/></label>
+      <div className="note">{kind==="cast"?"补全角色卡后，运行参考图阶段导出四视图任务。":"补全来源与设计后重新校验美术设定。"}</div>{error&&<div className="tiny red">{error}</div>}</div>
+    <div className="drawer-ft"><button className="btn gold" disabled={busy||!name.trim()||!prompt.trim()} onClick={async()=>{setBusy(true);try{await onSave(name,prompt);}catch(e){setError(errText(e));}finally{setBusy(false);}}}>添加{label}</button></div></div>;
+}
+
 /** 取某一类资产；作业一结束（revision 变化）自动重取。 */
 export function useAssets(kind = "") {
   const { project, revision, toast } = useHibtv();
@@ -223,8 +247,7 @@ function ViewStrip({
   onPreview: (viewId: string) => void;
   onConfirm: (viewId: string) => void;
 }) {
-  const defs = asset.viewDefs || [];
-  if (defs.length <= 1) return null;
+  const defs = (asset.viewDefs || []).filter(d => d.id !== asset.anchorId);
   const anchorId = asset.anchorId;
   const confirmed = asset.imageConfirmed;
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -250,7 +273,7 @@ function ViewStrip({
   };
 
   return (
-    <div className="viewstrip">
+    <div className={asset.kind === "cast" ? "cast-viewcol" : "art-thumbs"}>
       <input
         ref={fileRef}
         type="file"
@@ -274,7 +297,7 @@ function ViewStrip({
           >
             <div
               className="viewthumb"
-              onClick={() => st.url && onPreview(def.id)}
+              onClick={() => onPreview(def.id)}
               title={st.url ? `点击看大图 · ${st.label}` : st.label}
             >
               <Plate
@@ -282,7 +305,7 @@ function ViewStrip({
                 label={st.label}
                 view={isAnchor ? "锚点" : st.url ? `v${st.version}` : ""}
                 src={st.url}
-                ratio={ratioOf(asset.size)}
+                ratio={asset.kind === "cast" ? "2 / 3" : "16 / 9"}
               />
               {st.stale && <span className="viewflag">过期</span>}
               {locked && <span className="viewflag lock">🔒</span>}
@@ -495,6 +518,13 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
   };
 
   const onAct = (act: string) => {
+    if (act === "prompt") openLayer(<PromptDrawer value={prompt} onClose={closeLayer} onSave={async value => {
+      if (!value.trim()) { toast("提示词不能为空"); return; }
+      if (!project) return;
+      await hibtvApi.patchAsset(project.id,asset.id,{data: asset.kind === "cast" ? {mainPrompt:value} : {image:{...image,prompt:value}}});
+      onChanged();
+      closeLayer();
+    }} />);
     if (act === "regen") void draw(mainSrc ? "regen" : "draw");
     if (act === "upload") fileRef.current?.click();
     if (act === "reroll") {
@@ -524,7 +554,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
 
   const status = drawing ? (
     <span className="chip gold">出图中…</span>
-  ) : review ? (
+  ) : asset.status === "stale" ? <span className="chip gold">提示词或参考图已改 · 图未重出</span> : review ? (
     <>
       <span className="chip red">v{asset.version} 待确认</span>
       <button className="btn xs" disabled={busy} onClick={() => void draw("confirm")}>
@@ -574,6 +604,8 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             {fileInput}
             <MediaActs onAct={onAct} />
           </div>
+          <ViewStrip asset={asset} busy={busy} onDraw={onDrawCell}
+            onUpload={(vid,file)=>void uploadView(vid,file)} onPreview={bigView} onConfirm={vid=>void confirmView(vid)} />
         </div>
         <div className="cast-body">
           <div className="cast-name">
@@ -591,28 +623,18 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             </span>
           </div>
           <div className="cast-desc">{asset.data?.oneLiner || ""}</div>
-          <div className="tiny dim">主图生产提示词（网关 front-full 任务原文）</div>
+          <div className="tiny dim">角色提示词 <button className="link" onClick={()=>onAct("prompt")}>修改</button></div>
           <div className="promptbox">
             {prompt || "尚未导出角色参考任务，请先运行角色参考阶段"}
           </div>
-          <div className="tiny dim">修改形象请编辑角色文档，再重新运行角色参考阶段。</div>
-          <CopyRow label="反向词" value={asset.negative} />
           <div className="inline" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {status}
           </div>
-          {mainSrc && !asset.imageConfirmed && (
+          {mainSrc && !asset.imageConfirmed && asset.status !== "stale" && (
             <div className="tiny dim" style={{ marginTop: 6 }}>
               先点「接受 v{asset.version}」确认锚点，才能出大头/侧面/背面等派生视图。
             </div>
           )}
-          <ViewStrip
-            asset={asset}
-            busy={busy}
-            onDraw={onDrawCell}
-            onUpload={(vid, file) => void uploadView(vid, file)}
-            onPreview={bigView}
-            onConfirm={(vid) => void confirmView(vid)}
-          />
           <div className="cast-voice">
             <span className="up">◍ 音色参考</span>
             <span className="ref">{asset.data?.voice?.timbre || asset.data?.voice?.gender || "未设"}</span>
@@ -652,6 +674,8 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
         {fileInput}
         <MediaActs onAct={onAct} />
       </div>
+      <ViewStrip asset={asset} busy={busy} onDraw={onDrawCell}
+        onUpload={(vid,file)=>void uploadView(vid,file)} onPreview={bigView} onConfirm={vid=>void confirmView(vid)} />
       <div className="art-body">
         <div className="cast-name">
           <span className="mid">{asset.code}</span>
@@ -662,7 +686,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
           </span>
         </div>
         <div className="cast-desc">{asset.data?.summary || asset.data?.function || ""}</div>
-        <div className="tiny dim">出图提示词</div>
+        <div className="tiny dim">出图提示词 <button className="link" onClick={()=>onAct("prompt")}>修改</button></div>
         <div className="promptbox">
           <InlineEdit
             multiline
@@ -671,19 +695,11 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             onSave={(v) => void patch({ data: { image: { ...image, prompt: v } } })}
           />
         </div>
-        {mainSrc && !asset.imageConfirmed && (
+        {mainSrc && !asset.imageConfirmed && asset.status !== "stale" && (
           <div className="tiny dim" style={{ marginTop: 6 }}>
             先点「接受 v{asset.version}」确认锚点，才能出俯视/背面/侧面等派生视图。
           </div>
         )}
-        <ViewStrip
-          asset={asset}
-          busy={busy}
-          onDraw={onDrawCell}
-          onUpload={(vid, file) => void uploadView(vid, file)}
-          onPreview={bigView}
-          onConfirm={(vid) => void confirmView(vid)}
-        />
         <div className="art-foot">
           {status}
           <span className="link" onClick={() => void draw(mainSrc ? "regen" : "draw")}>

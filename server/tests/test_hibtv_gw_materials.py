@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services import hibtv_codex as hibtv
 
@@ -42,10 +43,12 @@ class GatewayMaterialsTest(unittest.TestCase):
             keeps="",
         )
 
-        task = hibtv.task_for(None, project, "outline", 0)
+        with patch("app.services.hibtv_sources.get_sources", return_value={
+                "script":{"text":"最后一班地铁\n"}, "art":{"text":"蓝色站台"}}):
+            task = hibtv.task_for(None, project, "outline", 0)
 
-        expected = hibtv.publish_material(37, "source.txt", "最后一班地铁\n".encode())
-        self.assertIn(f"小说正文：{expected}", task)
+        expected = hibtv.publish_material(37, "input-script.txt", "最后一班地铁\n".encode())
+        self.assertIn(f"定稿剧本原文：{expected}", task)
         self.assertNotIn(project.novel_path, task)
 
     def test_publish_failure_is_loud(self):

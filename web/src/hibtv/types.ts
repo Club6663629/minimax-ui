@@ -54,6 +54,9 @@ export interface HibtvProject {
   targetSeconds?: number;
   aspectRatio: "9:16" | "16:9" | string;
   novelName: string;
+  scriptName?: string;
+  artName?: string;
+  hasSources?: boolean;
   hasNovel: boolean;
   keeps: string;
   detected: Detected;

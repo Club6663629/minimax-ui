@@ -72,9 +72,9 @@ export function maskHost(raw?: string): string {
 }
 
 export interface CreateProjectForm {
-  novel?: File | null;
+  script?: File | null;
+  art?: File | null;
   name?: string;
-  text?: string;
   genre?: string;
   episodes?: number;
   minutesMin?: number;
@@ -91,9 +91,9 @@ export const hibtvApi = {
   getProject: (id: number) => request<HibtvProject>(`${base}/projects/${id}`),
   createProject: (form: CreateProjectForm) => {
     const body = new FormData();
-    if (form.novel) body.append("novel", form.novel);
+    if (form.script) body.append("script", form.script);
+    if (form.art) body.append("art", form.art);
     body.append("name", form.name || "");
-    body.append("text", form.text || "");
     body.append("genre", form.genre || "");
     body.append("episodes", String(form.episodes || 0));
     body.append("minutes_min", String(form.minutesMin ?? 2));
@@ -107,6 +107,14 @@ export const hibtvApi = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+  replaceSources: (id: number, script: File, art: File) => {
+    const body = new FormData();
+    body.append("script", script);
+    body.append("art", art);
+    return request<HibtvProject>(`${base}/projects/${id}/sources`, { method: "PUT", body });
+  },
+  addAsset: (id:number, kind:string, name:string, prompt:string) => request<HibtvAsset>(`${base}/projects/${id}/assets?kind=${kind}`,
+    {method:"POST",body:JSON.stringify({name,data:{image:{prompt}}})}),
   deleteProject: (id: number) => request<void>(`${base}/projects/${id}`, { method: "DELETE" }),
 
   getDoc: (id: number, kind: DocFileKind, ep = 0) =>

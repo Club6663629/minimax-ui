@@ -138,6 +138,9 @@ def _project_payload(db: Session, project: HibtvProject) -> Dict:
         "aspectRatio": project.aspect_ratio or "9:16",
         "novelName": project.novel_name or "",
         "hasNovel": bool((project.novel_text or "").strip() or (project.novel_path or "").strip()),
+        "scriptName": hibtv_jobs.jloads(project.detected, {}).get("sources", {}).get("script", {}).get("name", ""),
+        "artName": hibtv_jobs.jloads(project.detected, {}).get("sources", {}).get("art", {}).get("name", ""),
+        "hasSources": hibtv_jobs.jloads(project.detected, {}).get("inputMode") == "script-art",
         "keeps": project.keeps or "",
         "detected": hibtv_jobs.jloads(project.detected, {}),
         "status": project.status,
@@ -171,11 +174,25 @@ def _read_text(file: Optional[UploadFile], label: str) -> tuple:
         return "", ""
     name = file.filename or ""
     suffix = Path(name).suffix.lower()
-    if suffix not in TEXT_EXTS:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}仅支持 .md / .txt 文本文件")
+    if suffix not in TEXT_EXTS and suffix != ".docx":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}支持 .md / .txt / .docx 文件")
     content = file.file.read() if hasattr(file.file, "read") else b""
     if len(content) > MAX_TEXT_BYTES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}不能超过 8MB")
+    if suffix == ".docx":
+        import io
+        import zipfile
+        import xml.etree.ElementTree as ET
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                info = archive.getinfo("word/document.xml")
+                if info.file_size > MAX_TEXT_BYTES:
+                    raise ValueError("解压后正文过大")
+                root = ET.fromstring(archive.read(info))
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            return name, "\n".join("".join(p.itertext()) for p in root.findall(".//w:p", ns))
+        except (zipfile.BadZipFile, KeyError, ET.ParseError, ValueError) as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label}不是有效的 Word 文档") from exc
     for encoding in ("utf-8-sig", "utf-8", "gb18030"):
         try:
             return name, content.decode(encoding)
@@ -285,9 +302,9 @@ def list_projects(user: User = Depends(get_current_user), db: Session = Depends(
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED)
 def create_project(
-    novel: Optional[UploadFile] = File(default=None),
+    script: Optional[UploadFile] = File(default=None),
+    art: Optional[UploadFile] = File(default=None),
     name: str = Form(default=""),
-    text: str = Form(default=""),
     genre: str = Form(default=""),
     episodes: int = Form(default=0),
     minutes_min: int = Form(default=2),
@@ -297,16 +314,13 @@ def create_project(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """新建项目：小说正文（上传或粘贴）+ 体量参数。文本阶段全部交给 codex。"""
+    """新建项目：定稿剧本与美术设定均为必填，不接受小说建项。"""
     if not settings.hibtv_enabled:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "短剧工作台未启用")
-    novel_name, novel_text = _read_text(novel, "小说正文")
-    body = (text or "").strip()
-    if body and len(body) > MAX_TEXT_BYTES:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "小说正文不能超过 8MB")
-    novel_text = body or novel_text
-    if not novel_text.strip():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请粘贴或上传小说正文")
+    script_name, script_text = _read_text(script, "定稿剧本")
+    art_name, art_text = _read_text(art, "美术设定")
+    if not script_text.strip() or not art_text.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请同时上传定稿剧本和美术设定")
 
     project = HibtvProject(
         user_id=user.id,
@@ -316,8 +330,8 @@ def create_project(
         minutes_min=max(1, int(minutes_min or 2)),
         minutes_max=max(int(minutes_min or 2), int(minutes_max or 5)),
         aspect_ratio="16:9" if str(ratio).startswith("16") else "9:16",
-        novel_name=(novel_name or f"{name.strip() or 'novel'}.txt")[:255],
-        novel_text=novel_text,
+        novel_name=script_name[:255],
+        novel_text=script_text,
         keeps=keeps.strip()[:2000],
         status="draft",
     )
@@ -325,9 +339,25 @@ def create_project(
     db.flush()
 
     # 正文落盘：outline 的 input 里给**绝对路径**，绝不把几十万字内联进 prompt
-    project.novel_path = hibtv_codex.write_source(project.id, novel_text)
+    from ..services.hibtv_sources import save_sources
+    save_sources(db, project, script_name, script_text, art_name, art_text)
     db.commit()
     db.refresh(project)
+    return _project_payload(db, project)
+
+
+@router.put("/projects/{project_id}/sources")
+def replace_sources(project_id: int, script: UploadFile = File(...), art: UploadFile = File(...),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    project = _project(db, project_id, user)
+    sn, st = _read_text(script, "定稿剧本")
+    an, at = _read_text(art, "美术设定")
+    if not st.strip() or not at.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "剧本与美术设定不能为空")
+    from ..services.hibtv_sources import save_sources
+    save_sources(db, project, sn, st, an, at)
+    project.updated_at = hibtv_jobs.now()
+    db.commit()
     return _project_payload(db, project)
 
 
@@ -341,6 +371,8 @@ def get_project(project_id: int, user: User = Depends(get_current_user),
 def patch_project(project_id: int, body: HibtvProjectPatch,
                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     project = _project(db, project_id, user)
+    if body.novel_text is not None or body.novel_name is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请通过双文件上传替换定稿剧本和美术设定")
     fields = {
         "name": (body.name, str), "genre": (body.genre, str),
         "episodes": (body.episodes, int), "minutes_min": (body.minutes_min, int),
@@ -435,6 +467,11 @@ def create_job(project_id: int, body: HibtvJobIn,
     project = _project(db, project_id, user)
     kind = body.kind
     ep = int(body.ep or 0)
+    if kind in hibtv_jobs.TEXT_KINDS:
+        from ..services.hibtv_sources import get_sources
+        sources = get_sources(db, project)
+        if not all((sources.get(key) or {}).get("text", "").strip() for key in ("script", "art")):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先补传定稿剧本与美术设定")
 
     active = (db.query(HibtvJob)
               .filter(HibtvJob.project_id == project.id, HibtvJob.kind == kind,
@@ -582,6 +619,33 @@ def _artifact_job(db: Session, project: HibtvProject, job_id: int) -> HibtvJob:
 
 
 # ------------------------------------------------------------------ 资产卡
+@router.post("/projects/{project_id}/assets", status_code=status.HTTP_201_CREATED)
+def add_asset(project_id: int, body: HibtvAssetPatch, kind: str = Query(...),
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    project = _project(db, project_id, user)
+    if kind not in ("cast", "scene", "prop") or not (body.name or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请选择资产类型并填写名称")
+    doc_kind, key, prefix = {"cast": ("cast", "characters", "C"),
+                             "scene": ("art", "scenes", "S"), "prop": ("art", "props", "P")}[kind]
+    doc = hibtv_jobs.get_doc(db, project.id, doc_kind, 0)
+    data = hibtv_jobs.jloads(doc.data, {}) if doc else {}
+    rows = data.setdefault(key, [])
+    occupied = {a.code for a in db.query(HibtvAsset).filter_by(project_id=project.id, kind=kind)}
+    occupied.update(r.get("id") for r in rows)
+    n = 1
+    while f"{prefix}{n:02d}" in occupied:
+        n += 1
+    code = f"{prefix}{n:02d}"
+    rows.append({**(body.data or {}), "id": code, "name": body.name.strip()[:120]})
+    doc = hibtv_jobs.save_doc(db, project.id, doc_kind, 0, data)
+    _mark_stale(db, doc, "手动补建资产后需要重新校验")
+    _resync(db, project, doc_kind)
+    _log_change(db, project.id, _doc_key(doc), key, None, rows[-1])
+    db.commit()
+    asset = db.query(HibtvAsset).filter_by(project_id=project.id, kind=kind, code=code).one()
+    return hibtv_jobs.asset_payload(project.id, asset)
+
+
 @router.get("/projects/{project_id}/assets")
 def list_assets(project_id: int, kind: str = Query(default=""),
                 include_hidden: bool = Query(default=False),
@@ -606,10 +670,19 @@ def patch_asset(project_id: int, asset_id: int, body: HibtvAssetPatch,
     if asset.kind == "cast" and body.data:
         from ..services.hibtv_contracts import design
         current = hibtv_jobs.jloads(asset.data, {})
-        edited = {**current, **body.data}
+        changes = dict(body.data)
+        main_prompt = changes.pop("mainPrompt", None)
+        if main_prompt is not None:
+            tasks = hibtv_jobs.jloads(hibtv_jobs.jdumps(current.get("imageTasks") or {}), {})
+            if not tasks.get("front-full") or not str(main_prompt).strip():
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先导出角色参考任务，提示词不能为空")
+            tasks["front-full"]["prompt"] = str(main_prompt).strip()
+        edited = {**current, **changes}
         if design(edited) != design(current):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "角色生产提示词由网关导出，请修改角色文档后重新运行角色参考阶段")
+        if main_prompt is not None:
+            body.data = {**changes, "imageTasks": tasks}
     if body.name is not None and body.name != asset.name:
         _log_change(db, project.id, f"asset:{asset.id}", "name", asset.name, body.name)
         asset.name = body.name[:120]

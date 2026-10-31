@@ -199,7 +199,7 @@ export default function ScriptPage() {
   if (!project) {
     return (
       <Stage side={side}>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>
@@ -230,7 +230,7 @@ export default function ScriptPage() {
             看分镜
           </button>
           <button className="btn gold" onClick={runScript} disabled={!gate.ok} title={gate.why}>
-            {episode ? "重新生成本集剧本" : "生成本集剧本"}
+            {episode ? "重新解析本集剧本" : "解析本集剧本"}
           </button>
         </>
       }
@@ -261,7 +261,7 @@ export default function ScriptPage() {
           }
         >
           <button className="btn gold" onClick={runScript} disabled={!gate.ok} title={gate.why}>
-            生成第 {ep} 集剧本
+            解析第 {ep} 集剧本
           </button>
         </Empty>
         <GateList gates={doc?.gates} />

@@ -23,7 +23,7 @@ const TABS: { k: Tab; label: string }[] = [
 
 const ASSET_KINDS = ["cast", "scene", "prop"] as const;
 const KIND_LABEL: Record<string, string> = {
-  cast: "角色 · 896×1152",
+  cast: "角色 · 832×1248",
   scene: "场景 · 1280×720",
   prop: "道具 · 1024×1024",
 };
@@ -77,7 +77,7 @@ export default function AssetsPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <Link className="btn gold" to="/hibtv/home">
             去建项目
           </Link>
@@ -193,7 +193,7 @@ export default function AssetsPage() {
             <Empty
               glyph="库"
               title="还没有资产主图"
-              sub="角色 / 场景 / 道具每个条目只出一张图：角色 896×1152、场景 1280×720、道具 1024×1024。"
+              sub="角色 / 场景 / 道具每个条目只出一张图：角色 832×1248、场景 1280×720、道具 1024×1024。"
             >
               <Link className="btn gold" to="/hibtv/cast">
                 去角色页出图

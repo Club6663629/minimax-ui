@@ -130,7 +130,7 @@ export default function StagingPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>

@@ -188,9 +188,21 @@
 .hibtv-root .genbar .t{font-size:12px;color:var(--gold-2)}
 .hibtv-root .genbar .m{font:10.5px var(--mono);color:#8f877b}
 .hibtv-root .cast-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
-.hibtv-root .cast-card{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
+.hibtv-root .cast-card{display:grid;grid-template-columns:196px 50px minmax(0,1fr);gap:10px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--panel)}
 .hibtv-root .cast-card:hover{border-color:rgba(224,179,106,.22)}
 .hibtv-root .cast-media{display:contents}
+.hibtv-root .cast-viewcol{display:grid;gap:5px;min-width:0}
+.hibtv-root .cast-viewcol .viewcell{width:100%;position:relative}
+.hibtv-root .cast-viewcol .viewthumb .plate{aspect-ratio:2/3}
+.hibtv-root .cast-viewcol .viewacts{position:absolute;left:0;right:0;bottom:0;flex-wrap:wrap;opacity:0;background:#100e0c;z-index:5}
+.hibtv-root .cast-viewcol .viewcell:hover .viewacts,.hibtv-root .cast-viewcol .viewcell:focus-within .viewacts{opacity:1}
+.hibtv-root .art-thumbs{display:grid;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
+.hibtv-root .art-thumbs .viewcell{width:100%;position:relative}
+.hibtv-root .art-thumbs .plate{aspect-ratio:16/9}
+.hibtv-root .art-thumbs .viewacts{flex-wrap:wrap}
+.hibtv-root .promptbox .link,.hibtv-root button.link{background:none;border:0;padding:0;font:inherit}
+.hibtv-root .cast-body .promptbox{max-height:90px;overflow:auto}
+.hibtv-root .art-anchor .plate{aspect-ratio:16/9!important}
 .hibtv-root .cast-anchor{position:relative;min-width:0}
 .hibtv-root .cast-anchor .plate{aspect-ratio:3/4.55;cursor:zoom-in}
 /* 设定稿是 16:9 整张图：直接平铺展示，不再切分格缩略图 */

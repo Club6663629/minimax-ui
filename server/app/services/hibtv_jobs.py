@@ -333,7 +333,9 @@ def asset_payload(project_id: int, asset: HibtvAsset) -> Dict:
         },
         "views": views,
         "legacyViews": legacy,
-        "status": asset.status or asset_status(asset),
+        "status": ("stale" if main_rel and asset.status != "drawing" and not
+                   hibtv_assets.main_current(type("Project", (), {"id": project_id})(), asset, confirmed=False)
+                   else asset.status or asset_status(asset)),
         "version": int(asset.version or 0),
         "hidden": bool(asset.hidden), "sort": asset.sort,
     }

@@ -187,7 +187,7 @@ def _apply_outline(db, project, ep, files) -> Dict:
     project.status = "ready"
     project.updated_at = hibtv_jobs.now()
     # ② 解析汇总改为由大纲回填（不再正则解析定稿剧本）
-    project.detected = hibtv_jobs.jdumps({
+    project.detected = hibtv_jobs.jdumps({**hibtv_jobs.jloads(project.detected, {}),
         "episodes": project.episodes,
         "minutesPerEpisode": minutes or 0,
         "scenes": len(data.get("scenes") or []),
@@ -386,6 +386,14 @@ def _apply_script(db, project, ep, files) -> Dict:
         raise StageError(f"剧本产物里没有第 {ep} 集")
     if not row.get("scenes"):
         raise StageError(f"第 {ep} 集剧本没有场次（scenes[] 为空）")
+    from .hibtv_sources import get_sources
+    source = get_sources(db, project).get("script", {}).get("text", "")
+    source_compact = re.sub(r"\s+", "", source)
+    for scene in row["scenes"]:
+        for beat in scene.get("flow") or []:
+            line = beat.get("line")
+            if isinstance(line, str) and line.strip() and re.sub(r"\s+", "", line) not in source_compact:
+                raise StageError(f"第 {ep} 集存在原剧本未包含的台词，禁止改写：{line[:60]}")
     return {
         "doc_kind": "script", "ep": ep, "data": data,
         "gates": _gates_from(files, "script.json"),

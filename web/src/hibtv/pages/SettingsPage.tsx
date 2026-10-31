@@ -41,6 +41,7 @@ export default function SettingsPage() {
     novelText: "",
   });
   const [busy, setBusy] = useState(false);
+  const [sourceFiles,setSourceFiles] = useState<{script:File|null;art:File|null}>({script:null,art:null});
 
   useEffect(() => {
     if (!project) return;
@@ -60,7 +61,7 @@ export default function SettingsPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <Link className="btn gold" to="/hibtv/home">
             去建项目
           </Link>
@@ -80,10 +81,8 @@ export default function SettingsPage() {
         minutes_max: Number(form.minutesMax) || project.minutesMax,
         aspect_ratio: form.ratio,
         keeps: form.keeps,
-        novel_name: form.novelName,
       };
       // 只有真的粘了新正文才提交：novel_text 一变更后端会重写 source.txt
-      if (form.novelText.trim()) body.novel_text = form.novelText;
       await hibtvApi.patchProject(project.id, body);
       await refreshProject();
       await refreshProjects();
@@ -266,37 +265,21 @@ export default function SettingsPage() {
 
           <div className="card" style={{ marginTop: 14 }}>
             <div className="card-hd">
-              <span className="t">小说正文</span>
-              <span className="chip">{project.novelName || "未命名"}</span>
-              <span className={`chip ${project.hasNovel ? "green" : "red"}`}>
-                {project.hasNovel ? "已落盘 source.txt" : "缺正文"}
+              <span className="t">剧本与美术设定</span>
+              <span className="chip">{project.scriptName || "尚未上传剧本"}</span>
+              <span className={`chip ${project.hasSources ? "green" : "red"}`}>
+                {project.hasSources ? "两份资料已保存" : "请补传双资料"}
               </span>
             </div>
             <div className="card-bd">
-              <div className="field">
-                <div className="label">文件名</div>
-                <input
-                  className="input"
-                  value={form.novelName}
-                  onChange={(e) => setForm({ ...form, novelName: e.target.value })}
-                />
-              </div>
-              <div className="field">
-                <div className="label">
-                  替换正文 <span className="dim">留空 = 不改；粘贴新正文会重写 source.txt</span>
-                </div>
-                <textarea
-                  className="textarea"
-                  style={{ minHeight: 110 }}
-                  value={form.novelText}
-                  placeholder="（不想改就别填。换了正文，大纲/角色/美术/剧本/分镜都要重跑）"
-                  onChange={(e) => setForm({ ...form, novelText: e.target.value })}
-                />
-              </div>
-              <div className="tiny dim">
-                正文只落盘到 <span className="mono">DATA_DIR/hibtv/{project.id}/source.txt</span>，
-                input 里给绝对路径 —— 绝不把几十万字内联进 prompt。
-              </div>
+              <div className="tiny dim">美术设定：{project.artName || "尚未上传"}</div>
+              {(["script","art"] as const).map(key=><label key={key} className="field"><span className="label">{key==="script"?"替换剧本":"替换美术设定"}</span>
+                <input type="file" accept=".md,.txt,.markdown,.docx" onChange={e=>setSourceFiles({...sourceFiles,[key]:e.target.files?.[0]||null})}/></label>)}
+              <button className="btn" disabled={busy||!sourceFiles.script||!sourceFiles.art} onClick={async()=>{
+                if(!sourceFiles.script||!sourceFiles.art)return;setBusy(true);
+                try{await hibtvApi.replaceSources(project.id,sourceFiles.script,sourceFiles.art);await refreshProject();await refreshProjects();toast("双资料已更新，请重新解析大纲及下游");}
+                catch(e){toast(errText(e));}finally{setBusy(false);}
+              }}>替换两份资料</button>
             </div>
           </div>
         </div>
@@ -514,10 +497,9 @@ export default function SettingsPage() {
       </div>
 
       <div className="tiny dim" style={{ marginTop: 14, lineHeight: 1.9 }}>
-        源文件：小说 <em>{project.novelName || "未上传"}</em>。输入是小说/梗概，改编由 codex 出方案；
-        平台不拼提示词、不写骨架、不跑 node 门。
+        源文件：剧本 <em>{project.scriptName || "未上传"}</em>，美术设定 <em>{project.artName || "未上传"}</em>。
         <br />
-        要换正文：在上面「替换正文」里贴新内容并保存（会重写 source.txt），然后重跑大纲 → 下游。
+        更换资料后重新解析大纲及下游，原剧本的台词与场次保持不变。
       </div>
     </Stage>
   );

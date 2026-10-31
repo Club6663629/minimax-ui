@@ -48,10 +48,12 @@ def document_inputs(db, project, kind, ep):
 
 
 def project_input(project):
+    import json
     return {"episodes": project.episodes, "minutesMin": project.minutes_min,
             "minutesMax": project.minutes_max, "aspectRatio": project.aspect_ratio,
             "genre": getattr(project, "genre", ""), "keeps": project.keeps,
-            "source": digest(getattr(project, "novel_text", "") or "")}
+            "source": digest(getattr(project, "novel_text", "") or ""),
+            "sources": json.loads(project.detected or "{}").get("sources", {})}
 
 
 def require_document(db, project, kind, ep=0, *, checked=False):

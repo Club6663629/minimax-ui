@@ -40,8 +40,8 @@ export function Plate({
 const ACTS = [
   {
     key: "regen",
-    tip: "重出：",
-    desc: "同一套提示词再出这一张，旧图不留",
+    tip: "重新生成：",
+    desc: "同一套提示词再出一版，保留历史文件",
     path: "M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10",
   },
   {
@@ -58,7 +58,7 @@ const ACTS = [
   },
   {
     key: "del",
-    tip: "隐藏：",
+    tip: "删除：",
     desc: "从素材库隐藏，可撤销",
     path: "M4 7h16M10 4h4M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7",
   },
@@ -272,7 +272,7 @@ export function PageHead({
     <>
       <div className="eyebrow">{eyebrow}</div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 240 }}>
+        <div style={{ minWidth: 240, flex: "1 1 420px" }}>
           <div className="h1">{title}</div>
           {lede ? <p className="lede">{lede}</p> : null}
         </div>

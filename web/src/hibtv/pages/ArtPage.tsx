@@ -5,12 +5,12 @@
  */
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { hibtvApi, maskHost } from "../api";
+import { hibtvApi } from "../api";
 import { Stage } from "../HibtvLayout";
-import { AssetCard, useAssets } from "../components/AssetCard";
-import { CodexLight, useCodexGate } from "../components/CodexLight";
+import { AddAssetButton, AssetCard, useAssets } from "../components/AssetCard";
+import { useCodexGate } from "../components/CodexLight";
 import { ArtifactsDrawer } from "../components/StageArtifacts";
-import { Empty, GateChips, GateList, GenBar, Loading, PageHead } from "../components/ui";
+import { Empty, GateList, GenBar, Loading, PageHead } from "../components/ui";
 import { useHibtv, useJob, usePatch } from "../state";
 import type { ArtData } from "../types";
 
@@ -69,6 +69,7 @@ export default function ArtPage() {
   const head = (
     <PageHead
       eyebrow="收敛层 · 在哪 + 拿什么 · ART"
+      lede="正面是锚点，俯视、背面、左侧、右侧照着它派生。鼠标移到图片上可重新生成、改图、上传和删除；点击图片查看全部视图。"
       title={
         <>
           美术设定{" "}
@@ -79,13 +80,10 @@ export default function ArtPage() {
       }
       right={
         <>
-          <CodexLight />
-          <GateChips gates={doc?.gates} none="美术设定没有结构化门结果（skill 的门只写在产物里）" />
-          <button className="btn" onClick={() => void drawAll()}>
+          <AddAssetButton kind={tab==="prop"?"prop":"scene"} onChanged={()=>void reload().then(()=>reloadDoc())}/>
+          {tab==="all"&&<AddAssetButton kind="prop" onChanged={()=>void reload().then(()=>reloadDoc())}/>}
+          <button className="btn gold" onClick={() => void drawAll()}>
             出全部锚点
-          </button>
-          <button className="btn gold" onClick={rerun} disabled={!gate.ok} title={gate.why}>
-            {art.scenes?.length || art.props?.length ? "重新生成美术" : "生成场景与道具"}
           </button>
         </>
       }
@@ -94,12 +92,14 @@ export default function ArtPage() {
 
   const toolbar = (
     <div className="toolbar">
-      <span className="lab">出图设置 · 本剧题目</span>
-      <span className="chip">出图节点 {maskHost(status?.image?.worker) || "qwen21"}</span>
+      <span className="lab">出图设置 · {project?.name || "当前项目"}</span>
+      <span className="chip">锚点模型 Qwen-Image</span>
+      <span className="chip">派生模型 同锚点模型</span>
       <span className="chip">场景 {(status?.assetSizes?.scene || [1280, 720]).join("×")}</span>
       <span className="chip">道具 {(status?.assetSizes?.prop || [1024, 1024]).join("×")}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
       <span className="sp" />
+      <button className="btn sm ghost" onClick={rerun} disabled={!gate.ok}>{art.scenes?.length||art.props?.length?"重新解析美术":"生成场景与道具"}</button>
       <button
         className="btn sm ghost"
         onClick={() =>
@@ -117,7 +117,7 @@ export default function ArtPage() {
   if (!project) {
     return (
       <Stage>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>

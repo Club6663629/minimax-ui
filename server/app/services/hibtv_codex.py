@@ -184,35 +184,35 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
     head = (f"用 skill `{stage}` 完成流水线这一段；当前工作目录即本段产物目录，所有产物写在这里。")
     lines: List[str] = [head]
 
-    if kind in ("outline", "cast", "art"):
-        local_source = source_path(project.id)
-        if not local_source.is_file():
-            # 兼容历史项目：旧数据可能只存了 project.novel_path，本地没有 source.txt。
-            legacy = str(project.novel_path or "").strip()
-            if legacy and Path(legacy).is_file():
-                try:
-                    local_source.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(legacy, local_source)
-                except OSError as exc:
-                    raise RuntimeError("历史小说正文复制失败，先补小说再跑大纲") from exc
-            else:
-                raise RuntimeError("项目没有小说正文，先补小说再跑大纲")
-        content = getattr(project, "novel_text", "")
-        src = publish_material(project.id, "source.txt", content.encode("utf-8") if content else local_source.read_bytes())
-        lines.append(f"小说正文：{src}")
+    from .hibtv_sources import get_sources
+    sources = get_sources(db, project)
+    if not all((sources.get(key) or {}).get("text", "").strip() for key in ("script", "art")):
+        raise RuntimeError("请在项目设置补传定稿剧本与美术设定；历史小说项目不能直接继续生产")
+    for key, label in (("script", "定稿剧本原文"), ("art", "美术设定原文")):
+        row = sources[key]
+        path = publish_material(project.id, f"input-{key}.txt", row["text"].encode("utf-8"))
+        lines.append(f"{label}：{path}")
+    lines.append("输入为已经定稿的剧本与美术设定。只解析和拆解，不做小说改编；"
+                 "保留原文逐字台词、场次顺序、人物关系、钩子与断点，不新增剧情、不删减或合并场次。"
+                 "美术设定为形象、服装、场景、道具与画风的依据。每项产物注明原剧本集/场来源；"
+                 "缺失设定列为 alignment 缺口，不擅自补写。")
+
     if kind == "outline":
         orient = "横屏" if ratio == "16:9" else "竖屏"
-        lines.append(f"把这部小说改编成 {int(project.episodes or 1)} 集{orient}短剧大纲，"
-                     f"每集约 {minutes:g} 分钟，画面 {ratio}。")
+        lines.append(f"解析定稿剧本与美术设定，提取 {int(project.episodes or 1)} 集{orient}剧本大纲，"
+                     f"单集目标 {minutes:g} 分钟，画面 {ratio}；实际集数、场次与时长按原剧本。"
+                     "输出内核、人物关系 relations、角色表、场景表、道具表、分集、原文卡点、"
+                     "alignment（kind/inScript/inArt/missing[]）对齐检查。禁止生成改编取舍；"
+                     "兼容 schema 所需的 adaptation 仅保留 core，keep/cut/merge 置空。")
         if project.keeps.strip():
             lines.append(f"必须保留：{project.keeps.strip()}")
     else:
         for label, path in upstream_refs(db, project, kind, ep).items():
             lines.append(f"{label}：{path}")
         if kind == "cast":
-            lines.append("从小说原文扫描角色事实与引文，按大纲名单生成角色表、形象与音色提示词。")
+            lines.append("从定稿剧本提取角色台词、动作与事实引文，结合美术设定生成角色卡、形象与音色提示词，不修改原句。")
         elif kind == "art":
-            lines.append(f"生成场景与道具设定、光照和状态提示词及母场景变体关系。画幅 {ratio}。")
+            lines.append(f"解析美术设定中的场景与道具，提取光照和状态提示词及母场景变体关系，不创造额外设计。画幅 {ratio}。")
         elif kind == "refs":
             lines.append(
                 "为每个角色生成 character-refs 分层底稿与参考图生产提示词，不调用出图服务。"
@@ -224,7 +224,7 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
                 "派生项 refs 填所依赖的视图 ID。保留技能完整的身份、服装、画风、取景约束，"
                 "不要用通用视角句替代技能提示词；角色 code 与输入一致。")
         elif kind == "script":
-            lines.append(f"生成第 {ep} 集逐场剧本、节拍和逐字台词，目标 {minutes * 60:g} 秒，画幅 {ratio}。")
+            lines.append(f"解析第 {ep} 集原剧本为逐场节拍表，逐字保留台词与舞台提示，目标 {minutes * 60:g} 秒，画幅 {ratio}。禁止重写剧本；时长偏差只报告，不为凑时长删改原句。")
         elif kind == "staging":
             images = scene_image_materials(db, project)
             if images:

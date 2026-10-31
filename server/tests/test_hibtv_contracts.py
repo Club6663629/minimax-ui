@@ -69,7 +69,8 @@ class PipelineTest(unittest.TestCase):
         self.db.add(self.project)
         self.db.flush()
         self.pid = self.project.id
-        gateway.write_source(self.pid, self.project.novel_text)
+        from app.services.hibtv_sources import save_sources
+        save_sources(self.db, self.project, "剧本.md", self.project.novel_text, "美术.md", "阿宁：蓝色外套；码头：木质栈桥。")
         self.save("outline", {"params": {"episodes": 1, "minutesPerEpisode": 1.5}})
         self.save("cast", {"characters": [{"id": "C01", "name": "阿宁", "image": {"prompt": "character sheet"}}]})
         self.save("art", {"scenes": [{"id": "S01", "name": "码头"}], "props": []})
@@ -164,7 +165,8 @@ class PipelineTest(unittest.TestCase):
                            upstream_key=gateway.upstream_key(self.db, self.project, "storyboard", 1)))
 
     def test_cast_receives_original_and_script_keeps_ninety_seconds(self):
-        self.assertIn("小说正文：", gateway.task_for(self.db, self.project, "cast", 0))
+        self.assertIn("定稿剧本原文：", gateway.task_for(self.db, self.project, "cast", 0))
+        self.assertIn("美术设定原文：", gateway.task_for(self.db, self.project, "cast", 0))
         self.assertIn("目标 90 秒", gateway.task_for(self.db, self.project, "script", 1))
 
     def test_voiceover_import_preserves_original_prompt(self):
@@ -561,6 +563,83 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("角色文档", ctx.exception.detail)
         self.assertEqual(cast.data, original)
+
+
+    def test_create_requires_both_production_documents(self):
+        args = dict(script=UploadFile(filename="剧本.md",file=io.BytesIO(b"script")), art=None,
+                    name="new",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",keeps="",
+                    user=self.user,db=self.db)
+        with self.assertRaises(HTTPException) as ctx:
+            api.create_project(**args)
+        self.assertEqual(ctx.exception.status_code,400)
+        self.assertEqual(self.db.query(HibtvProject).count(),1)
+
+    def test_create_persists_two_sources_and_gateway_consumes_them(self):
+        from app.services.hibtv_sources import get_sources
+        result=api.create_project(script=UploadFile(filename="剧本.md",file=io.BytesIO("第一集\n阿宁：等船。".encode())),
+            art=UploadFile(filename="美术.md",file=io.BytesIO("阿宁：红色外套".encode())),
+            name="新剧",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",keeps="",user=self.user,db=self.db)
+        project=self.db.get(HibtvProject,result["id"])
+        self.assertTrue(result["hasSources"])
+        self.assertEqual(result["artName"],"美术.md")
+        self.assertEqual(get_sources(self.db,project)["art"]["text"],"阿宁：红色外套")
+        text=gateway.task_for(self.db,project,"outline",0)
+        self.assertIn("不新增剧情",text)
+        self.assertIn("input-art.txt",text)
+        self.assertNotIn("把这部小说改编",text)
+
+    def test_art_only_source_replacement_invalidates_existing_production(self):
+        from app.services.hibtv_sources import get_sources,save_sources
+        from app.services.hibtv_contracts import project_input,require_document
+        doc=jobs.get_doc(self.db,self.pid,"storyboard",1)
+        meta=jobs.jloads(doc.meta,{})
+        meta["projectInput"]=project_input(self.project);doc.meta=dump(meta)
+        old=get_sources(self.db,self.project)
+        save_sources(self.db,self.project,old["script"]["name"],old["script"]["text"],"美术.md","新服装")
+        with self.assertRaisesRegex(RuntimeError,"原文已改变"):
+            require_document(self.db,self.project,"storyboard",1)
+
+    def test_prompt_editor_changes_consumed_cast_task_and_invalidates_images(self):
+        from app.schemas import HibtvAssetPatch
+        cast=self.asset("cast","C01")
+        data=jobs.jloads(cast.data,{})
+        data["imageTasks"]={"front-full":{"prompt":"old","negative":"bad","ratio":"2:3","refs":[]}}
+        cast.data=dump(data)
+        api.patch_asset(self.pid,cast.id,HibtvAssetPatch(data={"mainPrompt":"new blue coat"}),self.user,self.db)
+        data=jobs.jloads(cast.data,{})
+        self.assertEqual(assets.prompt_of(data),"new blue coat")
+        self.assertFalse(data["imageConfirmed"])
+
+    def test_manual_addition_updates_source_document_with_unique_code(self):
+        from app.schemas import HibtvAssetPatch
+        added=api.add_asset(self.pid,HibtvAssetPatch(name="银钥匙",data={"image":{"prompt":"silver key"}}),"prop",self.user,self.db)
+        self.assertEqual(added["code"],"P01")
+        doc=jobs.get_doc(self.db,self.pid,"art",0)
+        self.assertEqual(jobs.jloads(doc.data,{})["props"][0]["name"],"银钥匙")
+        self.assertEqual(jobs.jloads(doc.gates,{})["status"],"stale")
+
+    def test_word_input_extracts_paragraphs_and_table_order(self):
+        import zipfile
+        stream=io.BytesIO()
+        with zipfile.ZipFile(stream,"w") as z:
+            z.writestr("word/document.xml",'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>第一集</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>阿宁：等船。</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>')
+        stream.seek(0)
+        _,text=api._read_text(UploadFile(filename="剧本.docx",file=stream),"剧本")
+        self.assertEqual(text,"第一集\n阿宁：等船。")
+
+    def test_script_import_rejects_rewritten_dialogue(self):
+        doc={"episodes":[{"ep":1,"scenes":[{"sceneId":"S01","flow":[{"speaker":"C01","line":"凭空新增的台词"}]}]}]}
+        path=self.write_artifact("novel-script.json",doc)
+        with self.assertRaisesRegex(stages.StageError,"禁止改写"):
+            stages._apply_script(self.db,self.project,1,{path.name:path})
+        doc["episodes"][0]["scenes"][0]["flow"][0]["line"]=self.project.novel_text
+        path=self.write_artifact("novel-script.json",doc)
+        self.assertEqual(stages._apply_script(self.db,self.project,1,{path.name:path})["data"],doc)
+
+    def test_prompt_change_exposes_stale_asset_status(self):
+        a=self.asset("scene","S01")
+        data=jobs.jloads(a.data,{});data["image"]={"prompt":"changed sky"};a.data=dump(data)
+        self.assertEqual(jobs.asset_payload(self.pid,a)["status"],"stale")
 
 
 if __name__ == "__main__":

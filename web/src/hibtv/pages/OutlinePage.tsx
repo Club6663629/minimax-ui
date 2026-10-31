@@ -9,20 +9,21 @@ import { useNavigate, useParams } from "react-router-dom";
 import { hibtvApi } from "../api";
 import { Stage } from "../HibtvLayout";
 import { CodexLight, useCodexGate } from "../components/CodexLight";
+import { AddAssetButton } from "../components/AssetCard";
 import { ArtifactsDrawer, ReportFrame } from "../components/StageArtifacts";
 import { Empty, GateChips, GateList, GenBar, InlineEdit, Loading, PageHead } from "../components/ui";
 import { useDoc, useHibtv, useJob, usePatch } from "../state";
 import type { ArtData, CastData, OutlineData } from "../types";
 
 const TABS = [
-  { k: "inner", label: "改编方案" },
+  { k: "inner", label: "内核" },
+  { k: "rel", label: "人物关系" },
   { k: "cast", label: "角色表" },
-  { k: "scene", label: "场景" },
-  { k: "prop", label: "道具" },
-  { k: "beat", label: "爽点" },
+  { k: "scene", label: "场景表" },
+  { k: "prop", label: "道具表" },
+  { k: "beat", label: "卡点" },
   { k: "ep", label: "分集" },
-  { k: "report", label: "评审报告" },
-  { k: "align", label: "对账" },
+  { k: "align", label: "对齐检查" },
 ];
 
 const WEIGHT_ZH: Record<string, string> = {
@@ -113,7 +114,7 @@ export default function OutlinePage() {
   if (!project) {
     return (
       <Stage side={side}>
-        <Empty glyph="剧" title="还没有项目" sub="先在首页粘贴或上传小说正文。">
+        <Empty glyph="剧" title="还没有项目" sub="先在首页上传定稿剧本与美术设定。">
           <button className="btn gold" onClick={() => navigate("/hibtv/home")}>
             去建项目
           </button>
@@ -124,12 +125,12 @@ export default function OutlinePage() {
 
   const head = (
     <PageHead
-      eyebrow="收敛层 · 改成什么 · OUTLINE · 门 A"
-      title="大纲"
+      eyebrow="收敛层 · 剧本解析 · OUTLINE"
+      title="剧本大纲"
       lede={
         <>
-          来自 <em>{project.novelName || "小说正文"}</em>，由 <span className="mono">novel-outline</span>{" "}
-          跑 skill 产出。平台只搬字段：改一行写进变更底账，门随即标「改动后门未复跑」。
+          来自 <em>{project.scriptName || "定稿剧本"}</em> 与 <em>{project.artName || "美术设定"}</em>。
+          每一行追溯原剧本的集、场、拍；只归类，不改编。
         </>
       }
       right={
@@ -185,7 +186,7 @@ export default function OutlinePage() {
           规模 {outline.params?.episodes || project.episodes} 集 · 单集 {outline.params?.minutesPerEpisode || "—"} 分钟
         </span>
         <span className="chip">画面 {outline.params?.aspectRatio || project.aspectRatio}</span>
-        <span className="chip ghost">改编 {outline.params?.adaptMode || "skill 默认"}</span>
+        <span className="chip ghost">按定稿剧本原样解析</span>
       </div>
       <div className="card" style={{ marginBottom: 12 }}>
         <div className="card-bd">
@@ -250,7 +251,7 @@ export default function OutlinePage() {
             sub={
               job?.status === "failed"
                 ? `大纲生成失败：${job.error}${job.timeoutKind ? `（${job.timeoutKind}）` : ""}`
-                : "由 codex 跑 novel-outline：出集数/时长/比例、改编方案（保留·砍·合并·风险）、爽点表与分集梗概。"
+                : "解析剧本与美术设定，提取内核、人物关系、资产清单、分集、卡点与对齐检查。"
             }
           >
             <button className="btn gold" onClick={() => rerun()} disabled={!gate.ok} title={gate.why}>
@@ -274,6 +275,9 @@ export default function OutlinePage() {
       <GenBar job={job} onCancel={job ? () => void hibtvApi.cancelRemoteJob(project.id, job.id) : undefined} />
       <GateList gates={gates} />
       {tab === "inner" && <InnerTab outline={outline} patch={patch} />}
+      {tab === "rel" && <div className="sec"><div className="h2">人物关系</div><div className="card"><div className="card-bd">
+        {((outline as OutlineData & {relations?:unknown}).relations) ? <pre style={{whiteSpace:"pre-wrap"}}>{JSON.stringify((outline as OutlineData & {relations?:unknown}).relations,null,2)}</pre> : "当前产物未提供人物关系，请重新解析大纲。"}
+      </div></div></div>}
       {tab === "cast" && <CastTab outline={outline} patch={patch} />}
       {tab === "scene" && <SceneTab outline={outline} patch={patch} />}
       {tab === "prop" && <PropTab outline={outline} patch={patch} />}
@@ -298,7 +302,7 @@ function InnerTab({ outline, patch }: { outline: OutlineData; patch: Patch }) {
   const adaptation = outline.adaptation || {};
   return (
     <div className="sec">
-      <div className="h2">改编方案</div>
+      <div className="h2">内核</div>
       <div className="card">
         <div className="card-bd">
           <InlineEdit
@@ -306,7 +310,7 @@ function InnerTab({ outline, patch }: { outline: OutlineData; patch: Patch }) {
             multiline
             value={adaptation.core || ""}
             placeholder="（还没有内核；点「重跑大纲」或双击这里手写）"
-            onSave={(v) => void patch("adaptation.core", v, "改编内核")}
+            onSave={(v) => void patch("adaptation.core", v, "剧本内核")}
           />
           <div className="split3" style={{ marginTop: 14 }}>
             <div className="stat">
@@ -334,46 +338,6 @@ function InnerTab({ outline, patch }: { outline: OutlineData; patch: Patch }) {
         </div>
       </div>
 
-      {(
-        [
-          ["keep", "保留", "原文明写的核心情节，改编必须留"],
-          ["cut", "砍掉", "为了时长 / 合规砍掉的支线与人物"],
-          ["merge", "合并", "合并的人物或场景"],
-          ["risks", "风险", "合规 / 观感 / 制作风险"],
-        ] as [keyof typeof adaptation, string, string][]
-      ).map(([key, label, hint]) => {
-        const items = listOf(adaptation[key]);
-        return (
-          <div className="sec" key={String(key)}>
-            <div className="inline" style={{ marginBottom: 6 }}>
-              <span className="h2" style={{ margin: 0 }}>
-                {label}
-              </span>
-              <span className="chip">{items.length}</span>
-              <span className="tiny dim">{hint}</span>
-            </div>
-            <div className="card">
-              <div className="card-bd small mut" style={{ lineHeight: 1.9 }}>
-                <InlineEdit
-                  multiline
-                  value={items.length ? items.map((x) => `· ${x}`).join("\n") : ""}
-                  placeholder="（空）双击可写；一段一条，用换行分隔"
-                  onSave={(v) =>
-                    void patch(
-                      `adaptation.${String(key)}`,
-                      v
-                        .split("\n")
-                        .map((x) => x.replace(/^[·\-*]\s*/, "").trim())
-                        .filter(Boolean),
-                      `改编 · ${label}`,
-                    )
-                  }
-                />
-              </div>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -422,7 +386,7 @@ function CastTab({ outline, patch }: { outline: OutlineData; patch: Patch }) {
         </table>
       </div>
       <div className="tiny dim" style={{ marginTop: 10 }}>
-        这一张是「改编后的角色表」；形象提示词与音色在角色页（novel-characters 的产物）里。
+        角色表来自定稿剧本与美术设定；形象提示词与音色在角色页。
       </div>
     </div>
   );
@@ -713,7 +677,7 @@ function AlignTab({ outline }: { outline: OutlineData }) {
   const sceneNames = names(art.scenes);
   const propNames = names(art.props);
 
-  const rows = [
+  const downstreamRows = [
     {
       kind: "角色",
       want: (outline.characters || []).length,
@@ -735,25 +699,27 @@ function AlignTab({ outline }: { outline: OutlineData }) {
         .map((p) => String(p.name || p.id)),
     },
   ];
+  const coverage = (outline as OutlineData & {alignment?:{kind:string;inScript:number;inArt:number;missing:string[]}[]}).alignment;
+  const rows = (Array.isArray(coverage) ? coverage : []).map(r=>({kind:r.kind,want:r.inScript,have:r.inArt,miss:r.missing||[]}));
 
   return (
     <div className="sec">
       <div className="h2">
-        三方对账 <span className="chip gold">大纲 ↔ 角色表 ↔ 美术</span>
+        对齐检查 <span className="chip gold">剧本 ↔ 美术设定</span>
       </div>
       <div className="note" style={{ marginBottom: 10 }}>
-        大纲列出的资产，下游 stage 是否都产出了对应条目。缺的那一条会在出图时卡住 —— 这里只如实报，
-        **平台不再自己补条目、自己拼提示词**（那正是这次删掉的手搓）。
+        剧本中出现的人、场景、道具、特效是否都有美术条目。缺口需补建设定并重新校验后才可出图。
       </div>
       <div className="card">
         <table className="tbl">
           <thead>
             <tr>
               <th>类型</th>
-              <th>大纲要求</th>
-              <th>下游已产出</th>
+              <th>剧本出现</th>
+              <th>设定覆盖</th>
               <th>缺口</th>
               <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -768,13 +734,14 @@ function AlignTab({ outline }: { outline: OutlineData }) {
                 <td>
                   {a.miss.length ? <span className="chip red">待补</span> : <span className="chip green">已齐</span>}
                 </td>
+                <td>{a.miss.length>0&&["角色","cast","场景","scene","道具","prop"].includes(a.kind)&&<AddAssetButton kind={a.kind==="角色"||a.kind==="cast"?"cast":a.kind==="场景"||a.kind==="scene"?"scene":"prop"} onChanged={()=>{}}/>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
       <div className="tiny dim" style={{ marginTop: 12, lineHeight: 1.9 }}>
-        缺口的两条出路：① 改这里的大纲字段后重跑下游 stage；② 在大纲里删掉这个资产（确实不需要）。
+        {rows.length?"补建完成后重新解析对齐检查；不会自动标记缺口已解决。":"当前产物没有剧本与美术设定的覆盖检查结果，请重新解析大纲。下游资产数量不能代替输入资料覆盖率。"}
       </div>
     </div>
   );
