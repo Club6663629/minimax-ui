@@ -36,6 +36,7 @@ export default function SettingsPage() {
     minutesMin: "2",
     minutesMax: "5",
     ratio: "9:16",
+    style: "写实",
     keeps: "",
     novelName: "",
     novelText: "",
@@ -52,6 +53,7 @@ export default function SettingsPage() {
       minutesMin: String(project.minutesMin),
       minutesMax: String(project.minutesMax),
       ratio: project.aspectRatio,
+      style: project.style || "写实",
       keeps: project.keeps || "",
       novelName: project.novelName || "",
       novelText: "",
@@ -80,6 +82,7 @@ export default function SettingsPage() {
         minutes_min: Number(form.minutesMin) || project.minutesMin,
         minutes_max: Number(form.minutesMax) || project.minutesMax,
         aspect_ratio: form.ratio,
+        style: form.style.trim() || "写实",
         keeps: form.keeps,
       };
       // 只有真的粘了新正文才提交：novel_text 一变更后端会重写 source.txt
@@ -246,6 +249,30 @@ export default function SettingsPage() {
                 <div className="tiny dim" style={{ marginTop: 6 }}>
                   关键帧落 {form.ratio === "16:9" ? "1344×768" : "768×1344"}；资产图按类型固定尺寸。
                   已出过的图不追改。
+                </div>
+              </div>
+              <div className="field">
+                <div className="label">画风</div>
+                <div className="inline" style={{ flexWrap: "wrap" }}>
+                  {["写实", "电影质感", "强对比港风"].map((s) => (
+                    <span
+                      key={s}
+                      className={`chip i ${form.style === s ? "gold" : ""}`}
+                      onClick={() => setForm({ ...form, style: s })}
+                    >
+                      {s}
+                    </span>
+                  ))}
+                </div>
+                <input
+                  className="input"
+                  style={{ marginTop: 6 }}
+                  value={form.style}
+                  placeholder="写实 / 电影质感 / 强对比港风，也可自定义"
+                  onChange={(e) => setForm({ ...form, style: e.target.value })}
+                />
+                <div className="tiny dim" style={{ marginTop: 6 }}>
+                  画风会写进角色、场景、道具与关键帧的出图提示词；本剧为写实真人短剧，禁止卡通/动漫/插画。已出过的图不追改，需重跑对应阶段。
                 </div>
               </div>
               <div className="field">

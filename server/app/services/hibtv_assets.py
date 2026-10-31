@@ -74,6 +74,18 @@ DERIVE_NEGATIVE = (
     "duplicate person, cloned face, identical twins, extra person, extra hands, "
     "character sheet")
 
+# 真人短剧画风锁：character-refs / qwen-image 对「角色设定/多视图」这类请求默认偏卡通、
+# 动漫、插画、3D 立绘；即便提示词没写画风（如只有「亚洲男性，清瘦挺拔」），也在像素层压掉。
+STYLE_NEGATIVE = (
+    "anime, cartoon, cel-shaded, comic, illustration, drawing, sketch, line art, "
+    "flat-vector, 2d animation, 3d render, cg render, figurine, chibi, storybook, "
+    "watercolour, oil painting, plastic skin, doll, puppet, game splash art")
+
+
+def _with_style_negative(negative: str) -> str:
+    """把画风锁负向词并进技能给的负向词（去重在 hibtv_image._merge_negative 里做）。"""
+    return ", ".join(x for x in ((negative or "").strip(), STYLE_NEGATIVE) if x)[:1600]
+
 
 def view_defs(kind: str, data=None) -> List[Dict]:
     specs = list(VIEW_DEFS.get(kind) or VIEW_DEFS["prop"])
@@ -177,7 +189,7 @@ async def draw(db: Session, project: HibtvProject, asset: HibtvAsset) -> Dict:
     expected_parent = int(parent.main_upload_id or 0) if parent else 0
     result = await hibtv_image.generate_image(
         prompt=prompt, out_path=out_abs, ref_path=ref_abs, width=width, height=height,
-        negative=negative_of(data), keep_adv_negative=False)
+        negative=_with_style_negative(negative_of(data)), keep_adv_negative=False)
     if not out_abs.exists():
         raise RuntimeError(f"{asset.code} 出图没有落盘")
 
@@ -293,7 +305,8 @@ async def draw_view(db: Session, project: HibtvProject, asset: HibtvAsset,
     expected_anchor = int(asset.main_upload_id or 0)
     result = await hibtv_image.generate_image(
         prompt=prompt, out_path=out_abs, ref_paths=ref_paths, width=width, height=height,
-        negative=task.get("negative") or DERIVE_NEGATIVE, keep_adv_negative=True)
+        negative=_with_style_negative(task.get("negative") or DERIVE_NEGATIVE),
+        keep_adv_negative=True)
     if not out_abs.exists():
         raise RuntimeError(f"{asset.code} 派生视图 {view_id} 出图没有落盘")
 

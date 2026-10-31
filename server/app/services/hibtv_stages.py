@@ -286,7 +286,7 @@ def _apply_refs(db, project, ep, files) -> Dict:
             if code not in set(name_to_code.values()):
                 raise StageError(f"参考底稿无法匹配角色：{who or name}")
             refs[code] = payload
-        elif name.startswith("refs-prompts") and name.endswith(".md"):
+        elif _is_refs_md(rel):
             prompts[name] = read_text(Path(files[rel]))
     if not refs and not prompts:
         raise StageError("参考图阶段没有产出 asset.json / refs-prompts.md")
@@ -315,28 +315,78 @@ def _apply_refs(db, project, ep, files) -> Dict:
     }
 
 
+_REF_VIEWS = ("front-full", "face-front", "side-full", "back-full")
+_REF_MD_SKIP = ("report", "readme", "notes", "summary")
+
+
+def _is_refs_md(rel) -> bool:
+    """参考图逐视图提示词 md 的收集口径：排除报告 / 说明类 md，避免无关文件把
+    「refs 实际空产出」掩盖过去（`if not refs and not prompts` 门）。"""
+    name = Path(rel).name.lower()
+    return name.endswith(".md") and not any(t in name for t in _REF_MD_SKIP)
+
+
+def _md_view_row(code, view, body):
+    """从一段视图正文抽 prompt/negative/比例；非平台四视图返回 None。
+
+    比例容错：技能可能写「比例：2:3」或「比例：`2:3`」，两者都要取到。
+    """
+    if view not in _REF_VIEWS:
+        return None
+    blocks = re.findall(r"```(?:text)?\s*\n(.*?)```", body, re.S)
+    ratio = re.search(r"比例[：:]\s*`?\s*([0-9]+:[0-9]+)", body)
+    return {"code": code, "view": view,
+            "prompt": blocks[0].strip() if blocks else "",
+            "negative": blocks[1].strip() if len(blocks) > 1 else "",
+            "ratio": ratio.group(1) if ratio else "",
+            "refs": [] if view == "front-full" else ["front-full"]}
+
+
+def _md_reference_rows(text, name_to_code):
+    """解析 character-refs 的逐视图 Markdown，不创造提示词。兼容两种技能交付格式：
+
+    - 新式：`## C01 名` → `#### view · 说明` → 比例 + Prompt/Negative 代码块；
+    - 旧式：`## 名 / `view`` 一节即一个视图，正文含正/反向词代码块与「比例」。
+    json 里只有分层底稿、没有 tasks 时走这里；face-45/detail-* 平台暂不出，跳过。
+    """
+    rows = []
+    for sec in re.split(r"(?m)^##\s+", text)[1:]:
+        head, _, rest = sec.partition("\n")
+        legacy = re.match(r"^\s*(.+?)\s*/\s*`([^`]+)`\s*$", head)
+        if legacy:
+            who, view = legacy.group(1).strip(), legacy.group(2).strip()
+            code = name_to_code.get(who) or (who if re.fullmatch(r"[A-Z]\d+", who) else "")
+            row = _md_view_row(code, view, rest)
+            if row is not None:
+                rows.append(row)
+            continue
+        parts = head.split()
+        code = parts[0] if parts and re.fullmatch(r"[A-Z]\d+", parts[0]) else ""
+        who = " ".join(parts[1:]).strip() if code else head.strip()
+        code = code or name_to_code.get(who) or ""
+        for blk in re.split(r"(?m)^####\s+", rest)[1:]:
+            title, _, body = blk.partition("\n")
+            row = _md_view_row(code, title.split("·")[0].strip(), body)
+            if row is not None:
+                rows.append(row)
+    return rows
+
+
 def _reference_tasks(files, name_to_code):
-    """读取网关的机器清单；兼容技能已导出的逐视图 Markdown，不创造提示词。"""
+    """读取网关的机器清单；没有清单时解析技能导出的逐视图 Markdown，不创造提示词。"""
     tasks = {}
+    rows = []
     hit = pick(files, suffix="refs-prompts.json")
-    rows = (read_json(hit[1]).get("tasks") or []) if hit else []
-    if not hit:
-        for rel, path in files.items():
-            if not Path(rel).name.startswith("refs-prompts") or not rel.endswith(".md"):
+    if hit is not None:
+        rows = read_json(hit[1]).get("tasks") or []
+    else:
+        for rel in sorted(files):
+            if not _is_refs_md(rel):
                 continue
-            text = read_text(path)
-            for match in re.finditer(r"(?ms)^## ([^\n]+?) / `([^`]+)`\s*\n(.*?)(?=^## |\Z)", text):
-                who, view, body = match.groups()
-                blocks = re.findall(r"```(?:text)?\s*\n(.*?)```", body, re.S)
-                ratio = re.search(r"比例：`([^`]+)`", body)
-                rows.append({"code": name_to_code.get(who.strip()), "view": view,
-                             "prompt": blocks[0].strip() if blocks else "",
-                             "negative": blocks[1].strip() if len(blocks) > 1 else "",
-                             "ratio": ratio.group(1) if ratio else "",
-                             "refs": [] if view == "front-full" else ["front-full"]})
+            rows.extend(_md_reference_rows(read_text(files[rel]), name_to_code))
     for row in rows:
         code, view = str(row.get("code") or ""), str(row.get("view") or "")
-        if code not in name_to_code.values() or view not in ("front-full", "face-front", "side-full", "back-full"):
+        if code not in name_to_code.values() or view not in _REF_VIEWS:
             raise StageError(f"参考图任务包含未知角色或视图：{code}/{view}")
         if not row.get("prompt") or not row.get("negative") or row.get("ratio") != ("4:5" if view == "face-front" else "2:3"):
             raise StageError(f"{code}/{view} 的正负提示词或画幅不完整")
@@ -608,6 +658,26 @@ def sync_frames(db: Session, project: HibtvProject, ep: int,
 
 
 # ------------------------------------------------------------------ 门 / 附带产物
+def _main_artifacts(files, kind):
+    """本阶段主产物的定位口径，与各 `_apply_*` 的 pick 完全一致（不另立规则）。"""
+    if kind == "refs":
+        return [rel for rel in sorted(files)
+                if Path(rel).name.endswith("_asset.json") or Path(rel).name == "asset.json"]
+    rules = {
+        "outline": ({"suffix": "-outline.json"}, {"contain": "outline", "suffix": ".json"}),
+        "cast": ({"suffix": "-cast.json"},),
+        "art": ({"suffix": "art.json"},),
+        "script": ({"suffix": "-script.json"},),
+        "staging": ({"suffix": "staging.json"},),
+        "storyboard": ({"suffix": "-storyboard.json"},),
+    }
+    for rule in rules.get(kind, ()):
+        hit = pick(files, **rule)
+        if hit is not None:
+            return [hit[0]]
+    return []
+
+
 def _validation(files, kind=""):
     hit = pick(files, suffix="validation.json")
     if hit is None:
@@ -618,19 +688,24 @@ def _validation(files, kind=""):
     hashes = result.get("checkedFiles") or {}
     if result.get("checkedSha256"):
         hashes = {"primary": result["checkedSha256"], **hashes}
-    actual = {rel: file_hash(path) for rel, path in files.items()
-              if rel != hit[0] and rel.endswith(".json")}
-    if not hashes or any(value not in actual.values() for value in hashes.values()):
-        raise StageError("validation.json 未绑定本次 JSON 产物")
+    # 只绑 JSON 产物：网关 agent 按提示词会把 .md/.html 一并写进 checkedFiles（哈希也对），
+    # 不能因此判成「未绑定」。
+    hashes = {str(k): v for k, v in hashes.items()
+              if str(k) == "primary" or str(k).lower().endswith(".json")}
+    actual = {rel: file_hash(path) for rel, path in files.items() if rel != hit[0]}
+    if not hashes:
+        raise StageError("validation.json 未覆盖本次 JSON 产物")
+    mismatched = sorted(k for k, v in hashes.items() if v not in actual.values())
+    if mismatched:
+        raise StageError("validation.json 哈希与本次产物不匹配(file=%s)"
+                         % ",".join(mismatched[:5]))
     if kind:
-        suffix = {"outline": "-outline.json", "cast": "-cast.json", "art": "art.json",
-                  "script": "-script.json", "staging": "staging.json", "storyboard": "-storyboard.json"}.get(kind)
-        required = [sha for rel, sha in actual.items() if
-                    (suffix and Path(rel).name.endswith(suffix)) or
-                    (kind == "refs" and (Path(rel).name.endswith("_asset.json")
-                                         or Path(rel).name in ("asset.json", "refs-prompts.json")))]
-        if not required or any(sha not in hashes.values() for sha in required):
-            raise StageError("validation.json 未覆盖本阶段主产物")
+        required = _main_artifacts(files, kind)
+        if not required:
+            raise StageError("找不到本阶段主产物(%s)" % kind)
+        if any(actual.get(rel) not in hashes.values() for rel in required):
+            raise StageError("validation.json 未覆盖本阶段主产物(%s)"
+                             % Path(required[0]).name)
     return result
 
 

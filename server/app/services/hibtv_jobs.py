@@ -351,6 +351,19 @@ def enqueue(db: Session, project_id: int, kind: str, *,
     return job
 
 
+def ensure_refs(db: Session, project_id: int, after_job: int = 0) -> Optional[HibtvJob]:
+    """cast 成功后自动接一段 refs：同一项目不重复排队，重跑 cast 才会重排。"""
+    latest = (db.query(HibtvJob)
+              .filter(HibtvJob.project_id == project_id, HibtvJob.kind == "refs")
+              .order_by(HibtvJob.id.desc()).first())
+    if (latest is not None and latest.id > int(after_job or 0)
+            and latest.status not in ("failed", "cancelled")):
+        return None
+    job = enqueue(db, project_id, "refs", payload={"auto": "cast"})
+    db.commit()
+    return job
+
+
 def job_payload(job: HibtvJob) -> Dict:
     usage = jloads(job.usage, {})
     artifacts = jloads(job.artifacts, [])
@@ -408,6 +421,13 @@ async def run_job(job_id: int) -> None:
                 job.stage = "完成"
                 job.finished_at = now()
             db.commit()
+            if job.kind == "cast" and job.status == "done":
+                # 参考图（refs）本来就在 TEXT_KINDS 里，只是没人触发：cast 成功即自动接力
+                try:
+                    ensure_refs(db, project.id, after_job=job.id)
+                except Exception:  # noqa: BLE001 —— 接力失败不影响 cast 本身
+                    logger.exception("cast 完成后自动排队 refs 失败")
+                    db.rollback()
         except Exception as exc:  # noqa: BLE001 —— 作业失败必须收敛
             logger.exception("短剧作业 #%s(%s) 失败", job.id, job.kind)
             db.rollback()

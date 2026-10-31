@@ -150,7 +150,7 @@ function RerollDrawer({
             onChange={(e) => setHint(e.target.value)}
           />
         </div>
-        <CopyRow label="出图提示词" value={asset.prompt} />
+        <CopyRow label="出图提示词" value={asset.promptLocal || asset.prompt} />
       </div>
       <div className="drawer-ft">
         <button className="btn ghost" onClick={onClose}>
@@ -355,6 +355,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
   const review = asset.status === "review";
   const ratio = ratioOf(asset.size);
   const prompt = asset.prompt || "";
+  const promptZh = asset.promptLocal || prompt;
   const image = asset.data?.image || {};
   const tag =
     asset.kind === "cast"
@@ -503,7 +504,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
               );
             })}
           </div>
-          <CopyRow label="出图提示词" value={prompt} />
+          <CopyRow label="出图提示词" value={promptZh} />
           <CopyRow label="反向词" value={asset.negative} />
         </div>
         <div className="modal-ft">
@@ -625,7 +626,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
           <div className="cast-desc">{asset.data?.oneLiner || ""}</div>
           <div className="tiny dim">角色提示词 <button className="link" onClick={()=>onAct("prompt")}>修改</button></div>
           <div className="promptbox">
-            {prompt || "尚未导出角色参考任务，请先运行角色参考阶段"}
+            {promptZh || "尚未导出角色参考任务，请先运行角色参考阶段"}
           </div>
           <div className="inline" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
             {status}
@@ -640,7 +641,7 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
             <span className="ref">{asset.data?.voice?.timbre || asset.data?.voice?.gender || "未设"}</span>
           </div>
           <div className="art-foot" style={{ borderTop: "none", paddingTop: 0 }}>
-            <span className="tiny dim">{prompt.split(/\s+/).filter(Boolean).length} 词</span>
+            <span className="tiny dim">{promptZh.trim().length} 字</span>
             <span className="link" onClick={(e) => { e.stopPropagation(); onAct("layers"); }}>
               分层底稿
             </span>
@@ -688,12 +689,9 @@ export function AssetCard({ asset, onChanged }: { asset: HibtvAsset; onChanged: 
         <div className="cast-desc">{asset.data?.summary || asset.data?.function || ""}</div>
         <div className="tiny dim">出图提示词 <button className="link" onClick={()=>onAct("prompt")}>修改</button></div>
         <div className="promptbox">
-          <InlineEdit
-            multiline
-            value={prompt}
-            placeholder="（skill 没给提示词；双击补一句）"
-            onSave={(v) => void patch({ data: { image: { ...image, prompt: v } } })}
-          />
+          <div className="mono" style={{ wordBreak: "break-word" }}>
+            {promptZh || "（skill 没给提示词，点「修改」补一句）"}
+          </div>
         </div>
         {mainSrc && !asset.imageConfirmed && asset.status !== "stale" && (
           <div className="tiny dim" style={{ marginTop: 6 }}>

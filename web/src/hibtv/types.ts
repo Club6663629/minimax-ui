@@ -53,6 +53,8 @@ export interface HibtvProject {
   minutesMax: number;
   targetSeconds?: number;
   aspectRatio: "9:16" | "16:9" | string;
+  /** 画风（项目级）：写进所有出图提示词的风格锚点句，默认写实 */
+  style: string;
   novelName: string;
   scriptName?: string;
   artName?: string;

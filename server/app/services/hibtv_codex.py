@@ -181,6 +181,7 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
     stage = STAGES[kind]
     minutes = float(project.minutes_min or 2) if kind == "outline" else target_seconds(db, project) / 60
     ratio = project.aspect_ratio or "9:16"
+    style = (getattr(project, "style", "") or "写实").strip()[:32]
     head = (f"用 skill `{stage}` 完成流水线这一段；当前工作目录即本段产物目录，所有产物写在这里。")
     lines: List[str] = [head]
 
@@ -196,6 +197,12 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
                  "保留原文逐字台词、场次顺序、人物关系、钩子与断点，不新增剧情、不删减或合并场次。"
                  "美术设定为形象、服装、场景、道具与画风的依据。每项产物注明原剧本集/场来源；"
                  "缺失设定列为 alignment 缺口，不擅自补写。")
+    lines.append(f"画风锁定：本剧画风为「{style}」，属写实真人短剧。所有出图提示词（角色 image.prompt、character-refs 的 "
+                 "front-full/face-front/side-full/back-full 生产提示词、场景与道具提示词）的 medium 必须是"
+                 "写实电影感真人实拍照片（photorealistic live-action cinematic photograph，真实人类皮肤与毛发、"
+                 f"真实布料与材质质感），并把该 medium 与「{style}」风格一并写进每条提示词的锚点句。画风以美术设定明确声明者为准；"
+                 f"美术设定未声明画风时一律默认「{style}」写实真人，禁止 anime / cartoon / 卡通 / 动漫 / illustration / 插画 / "
+                 "flat-vector / 3D-render / CG / 手办 / 游戏立绘 / 水彩 等非真人风格。")
 
     if kind == "outline":
         orient = "横屏" if ratio == "16:9" else "竖屏"
@@ -210,9 +217,11 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
         for label, path in upstream_refs(db, project, kind, ep).items():
             lines.append(f"{label}：{path}")
         if kind == "cast":
-            lines.append("从定稿剧本提取角色台词、动作与事实引文，结合美术设定生成角色卡、形象与音色提示词，不修改原句。")
+            lines.append("从定稿剧本提取角色台词、动作与事实引文，结合美术设定生成角色卡、形象与音色提示词，不修改原句。"
+                         "每个角色的 image.prompt 为英文出图提示词，image.promptLocal 为其中文对照（语义一致、仅翻译不改内容）。")
         elif kind == "art":
-            lines.append(f"解析美术设定中的场景与道具，提取光照和状态提示词及母场景变体关系，不创造额外设计。画幅 {ratio}。")
+            lines.append(f"解析美术设定中的场景与道具，提取光照和状态提示词及母场景变体关系，不创造额外设计。画幅 {ratio}。"
+                         "每个场景/道具的 image.prompt 为英文出图提示词，image.promptLocal 为其中文对照（语义一致、仅翻译不改内容）。")
         elif kind == "refs":
             lines.append(
                 "为每个角色生成 character-refs 分层底稿与参考图生产提示词，不调用出图服务。"
@@ -221,8 +230,9 @@ def task_for(db: Session, project: HibtvProject, kind: str, ep: int,
                 '"prompt":"技能导出的完整正向词","negative":"完整反向词",'
                 '"ratio":"2:3","refs":[]}]}。'
                 "每个角色包含 front-full、face-front、side-full、back-full；"
-                "派生项 refs 填所依赖的视图 ID。保留技能完整的身份、服装、画风、取景约束，"
-                "不要用通用视角句替代技能提示词；角色 code 与输入一致。")
+                "派生项 refs 填所依赖的视图 ID。保留技能完整的身份、服装、取景约束，"
+                f"画风须遵循上面的「{style}」写实真人要求（写实电影感真人实拍，禁止卡通/动漫/插画/3D 立绘）；"
+                "不要用通用视角句替代技能提示词，角色 code 与输入一致。")
         elif kind == "script":
             lines.append(f"解析第 {ep} 集原剧本为逐场节拍表，逐字保留台词与舞台提示，目标 {minutes * 60:g} 秒，画幅 {ratio}。禁止重写剧本；时长偏差只报告，不为凑时长删改原句。")
         elif kind == "staging":

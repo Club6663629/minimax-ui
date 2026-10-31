@@ -98,6 +98,7 @@ export default function ArtPage() {
       <span className="chip">场景 {(status?.assetSizes?.scene || [1280, 720]).join("×")}</span>
       <span className="chip">道具 {(status?.assetSizes?.prop || [1024, 1024]).join("×")}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
+      <span className="chip">画风 {project?.style || "写实"}</span>
       <span className="sp" />
       <button className="btn sm ghost" onClick={rerun} disabled={!gate.ok}>{art.scenes?.length||art.props?.length?"重新解析美术":"生成场景与道具"}</button>
       <button

@@ -567,7 +567,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_create_requires_both_production_documents(self):
         args = dict(script=UploadFile(filename="剧本.md",file=io.BytesIO(b"script")), art=None,
-                    name="new",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",keeps="",
+                    name="new",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",style="写实",keeps="",
                     user=self.user,db=self.db)
         with self.assertRaises(HTTPException) as ctx:
             api.create_project(**args)
@@ -578,14 +578,17 @@ class PipelineTest(unittest.TestCase):
         from app.services.hibtv_sources import get_sources
         result=api.create_project(script=UploadFile(filename="剧本.md",file=io.BytesIO("第一集\n阿宁：等船。".encode())),
             art=UploadFile(filename="美术.md",file=io.BytesIO("阿宁：红色外套".encode())),
-            name="新剧",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",keeps="",user=self.user,db=self.db)
+            name="新剧",genre="",episodes=1,minutes_min=2,minutes_max=5,ratio="9:16",style="写实",keeps="",user=self.user,db=self.db)
         project=self.db.get(HibtvProject,result["id"])
         self.assertTrue(result["hasSources"])
         self.assertEqual(result["artName"],"美术.md")
+        self.assertEqual(result["style"],"写实")
         self.assertEqual(get_sources(self.db,project)["art"]["text"],"阿宁：红色外套")
         text=gateway.task_for(self.db,project,"outline",0)
         self.assertIn("不新增剧情",text)
         self.assertIn("input-art.txt",text)
+        self.assertIn("画风锁定",text)
+        self.assertIn("写实",text)
         self.assertNotIn("把这部小说改编",text)
 
     def test_art_only_source_replacement_invalidates_existing_production(self):

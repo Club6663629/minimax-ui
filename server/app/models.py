@@ -154,6 +154,8 @@ class HibtvProject(Base):
     minutes_min: Mapped[int] = mapped_column(Integer, default=2)
     minutes_max: Mapped[int] = mapped_column(Integer, default=5)
     aspect_ratio: Mapped[str] = mapped_column(String(8), default="9:16")
+    # 画风（项目级）：写进所有出图提示词的 medium / 风格锚点句，默认写实真人
+    style: Mapped[str] = mapped_column(String(32), default="写实")
 
     # 小说正文（文本阶段唯一事实来源；input 里只给绝对路径，不内联几十万字）
     novel_name: Mapped[str] = mapped_column(String(255), default="")

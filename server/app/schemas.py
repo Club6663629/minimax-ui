@@ -364,6 +364,7 @@ class HibtvProjectPatch(BaseModel):
     minutes_min: Optional[int] = None
     minutes_max: Optional[int] = None
     aspect_ratio: Optional[str] = None
+    style: Optional[str] = None
     keeps: Optional[str] = None
     novel_name: Optional[str] = None
     novel_text: Optional[str] = None

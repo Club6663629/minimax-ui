@@ -78,6 +78,7 @@ export default function CastPage() {
       <span className="chip">角色图 {(status?.assetSizes?.cast || [832, 1248]).join("×")}</span>
       <span className="chip">提示词语言 {status?.promptLang === "zh" ? "中文" : "英文"}</span>
       <span className="chip">视频画幅 {project?.aspectRatio || "9:16"}</span>
+      <span className="chip">画风 {project?.style || "写实"}</span>
       <span className="sp" />
       <button className="btn sm ghost" onClick={rerun} disabled={!gate.ok}>{characters.length?"重新解析角色卡":"基于大纲生成全部"}</button>
       <button className="btn sm ghost" onClick={() => openLayer(<ArtifactsDrawer projectId={project?.id || 0} jobId={job?.id || 0} onClose={closeLayer} />)}>

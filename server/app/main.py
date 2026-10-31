@@ -120,6 +120,7 @@ def _migrate_hibtv() -> None:
             "novel_name": "VARCHAR(255) DEFAULT ''",
             "novel_path": "VARCHAR(512) DEFAULT ''",
             "novel_text": "TEXT",
+            "style": "VARCHAR(32) DEFAULT '写实'",
         },
         "hibtv_docs": {"meta": "TEXT"},
         "hibtv_assets": {
