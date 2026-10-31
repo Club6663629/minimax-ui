@@ -404,6 +404,11 @@ class HibtvFrameImageIn(BaseModel):
     prompt: str = ""
 
 
+class HibtvFrameReferencesIn(BaseModel):
+    """镜头引用素材：items 为空表示恢复自动挂载。"""
+    items: list[dict] = []
+
+
 class HibtvSegmentGenerateIn(BaseModel):
     prompt: Optional[str] = None
 

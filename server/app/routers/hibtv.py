@@ -1,12 +1,12 @@
 """短剧工作台 API（`/api/hibtv`），入口是前端的暗金工作台 `/hibtv/*`。
 
-链路：小说 → 大纲 → 角色 → 美术 → 参考图 → 剧本 → 站位 → 分镜 → 关键帧 → 段出片 → 整集拼接。
+链路：小说 → 大纲 → 角色 → 美术 → 参考图 → 剧本 → 站位 → 分镜 → 镜头素材 → 段出片 → 整集拼接。
 
 约定（这一层只做鉴权、调度、字段转发，**不拼提示词、不解析产物**）：
 - 文本 7 段一律交给 codex 网关（`services/hibtv_codex.py`），产物落到
   `DATA_DIR/hibtv/{id}/codex/{gateway_jid}/`，可用 `/files` 与 `artifacts` 接口取回；
 - 文档（outline / cast / art / script / staging / storyboard）原样保存 skill 的 JSON；
-- 像素阶段：资产单图（一资产一张）+ 关键帧（每切一张）+ 段出片（ref2v）+ 整集拼接；
+- 像素阶段：资产单图 + 可选分镜图 + 段级素材 ref2v + 整集拼接；
 - 就地编辑、上传替换都写 `hibtv_changes` 底账，并在就地改稿后把门标成「未复跑」。
 """
 import json
@@ -48,6 +48,7 @@ from ..schemas import (
     HibtvAssetPatch,
     HibtvDocPatch,
     HibtvFrameImageIn,
+    HibtvFrameReferencesIn,
     HibtvImageIn,
     HibtvJobIn,
     HibtvProjectPatch,
@@ -816,15 +817,71 @@ def list_frames(project_id: int, ep: int = Query(default=1, ge=1),
         query = query.filter(HibtvFrame.seg_id == seg_id)
     rows = query.order_by(HibtvFrame.seg_id, HibtvFrame.cut_index).all()
     rows = [f for f in rows if hibtv_jobs.jloads(f.meta, {}).get("active") is not False]
+    seg_ids = sorted({row.seg_id for row in rows})
+    planned = {
+        int(row["frameId"]): row
+        for current in seg_ids
+        for row in hibtv_frames.plan(db, project, current, ep)
+    }
     items = []
     for frame in rows:
         item = _frame_payload(project.id, frame)
-        item["ready"] = hibtv_frames.frame_current(db, project, frame)
+        route_row = planned.get(frame.id, {})
+        item["ready"] = bool(route_row.get("ready", hibtv_frames.frame_current(db, project, frame)))
+        item["references"] = route_row.get("references", [])
+        item["refsCustomized"] = bool(route_row.get("refsCustomized"))
         if not item["ready"] and frame.path:
             item["status"] = "stale"
         items.append(item)
     return {"ep": ep, "frames": items,
             "done": sum(bool(item["ready"]) for item in items), "total": len(rows)}
+
+
+@router.get("/projects/{project_id}/reference-assets")
+def reference_assets(project_id: int, user: User = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """镜头引用入口可选的单视图资产。"""
+    project = _project(db, project_id, user)
+    out: List[Dict] = []
+    rows = (db.query(HibtvAsset)
+            .filter(HibtvAsset.project_id == project.id, HibtvAsset.hidden.is_(False))
+            .order_by(HibtvAsset.kind, HibtvAsset.sort, HibtvAsset.id).all())
+    for asset in rows:
+        data = hibtv_jobs.jloads(asset.data, {})
+        anchor = hibtv_assets.anchor_id(asset.kind)
+        if hibtv_assets.main_current(project, asset):
+            rel = str(asset.main_path or "")
+            out.append({
+                "assetId": asset.id, "kind": asset.kind, "code": asset.code,
+                "name": asset.name, "view": anchor,
+                "viewLabel": "场景主图" if asset.kind == "scene" else "锚点",
+                "role": ("scene" if asset.kind == "scene" else
+                         "cast-anchor" if asset.kind == "cast" else "prop"),
+                "uploadId": int(asset.main_upload_id or 0),
+                "url": f"/files/hibtv/{project.id}/{rel}", "version": int(asset.version or 0),
+            })
+        for spec in hibtv_assets.view_defs(asset.kind, data):
+            view = str(spec.get("id") or "")
+            if not view or view == anchor or not hibtv_assets.view_current(project, asset, view):
+                continue
+            item = hibtv_jobs.jloads(asset.views, {}).get(view) or {}
+            rel = str(item.get("path") or "")
+            if not rel:
+                continue
+            role = ("scene-top" if asset.kind == "scene" and view == "top" else
+                    "cast-face" if asset.kind == "cast" and view == "face-front" else
+                    "cast-anchor" if asset.kind == "cast" else
+                    "prop" if asset.kind == "prop" else "scene")
+            out.append({
+                "assetId": asset.id, "kind": asset.kind, "code": asset.code,
+                "name": asset.name, "view": view,
+                "viewLabel": ("定场图" if asset.kind == "scene" and view == "top"
+                              else str(spec.get("label") or view)),
+                "role": role, "uploadId": int(item.get("uploadId") or 0),
+                "url": f"/files/hibtv/{project.id}/{rel}",
+                "version": int(item.get("version") or 0),
+            })
+    return out
 
 
 def _frame_payload(project_id: int, frame: HibtvFrame) -> Dict:
@@ -881,6 +938,55 @@ def frame_image(project_id: int, frame_id: int, body: HibtvFrameImageIn,
     db.commit()
     db.refresh(job)
     return hibtv_jobs.job_payload(job)
+
+
+@router.patch("/projects/{project_id}/frames/{frame_id}/references")
+def patch_frame_references(project_id: int, frame_id: int,
+                           body: HibtvFrameReferencesIn,
+                           user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """设置单个镜头的引用素材；空列表恢复自动挂载。"""
+    project = _project(db, project_id, user)
+    frame = _frame_or_404(db, project, frame_id)
+    resolved = []
+    selected = []
+    for item in body.items:
+        if not isinstance(item, dict):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "引用素材格式不正确")
+        try:
+            ref = hibtv_frames.resolve_reference_item(db, project, item)
+        except RuntimeError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        resolved.append(ref)
+        selected.append({
+            "assetId": ref["assetId"], "view": ref.get("view") or "",
+            "role": ref.get("role") or "", "note": ref.get("note") or "",
+        })
+    if len(resolved) > hibtv_frames.MAX_VIDEO_REFS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"单镜引用素材不能超过 {hibtv_frames.MAX_VIDEO_REFS} 张",
+        )
+    old = frame.refs
+    frame.refs = hibtv_jobs.jdumps(selected)
+    meta = hibtv_jobs.jloads(frame.meta, {})
+    meta["refsCustomized"] = bool(selected)
+    meta["stale"] = bool(frame.path)
+    frame.meta = hibtv_jobs.jdumps(meta)
+    frame.updated_at = hibtv_jobs.now()
+    _log_change(db, project.id, f"frame:{frame.id}", "refs", old, frame.refs)
+    db.commit()
+    item = _frame_payload(project.id, frame)
+    item["references"] = [
+        {
+            "assetId": ref["assetId"], "kind": ref["kind"], "code": ref["code"],
+            "name": ref["name"], "role": ref["role"], "view": ref["view"],
+            "note": ref.get("note") or "", "uploadId": ref["uploadId"],
+        }
+        for ref in resolved
+    ]
+    item["refsCustomized"] = bool(selected)
+    return item
 
 
 @router.post("/projects/{project_id}/frames/{frame_id}/upload")
@@ -964,6 +1070,7 @@ def _segment_detail(db: Session, project: HibtvProject, seg: HibtvSegment) -> Di
     payload = hibtv_jobs.segment_payload(project.id, seg)
     frames = hibtv_frames.plan(db, project, seg.seg_id, ep=seg.ep)
     payload["frames"] = frames
+    payload["routeMode"] = "A-assets"
     payload["missingFrames"] = [f["cutIndex"] for f in frames
                                 if not f.get("ready")]
     payload["framesReady"] = bool(frames) and not payload["missingFrames"]
@@ -979,7 +1086,7 @@ def _segment_detail(db: Session, project: HibtvProject, seg: HibtvSegment) -> Di
              status_code=status.HTTP_202_ACCEPTED)
 def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """段级出片：ref2v + 每切一张关键帧，提示词原样直出（不裁剪、不改写）。"""
+    """段级出片：路线 A，每镜素材汇总后一次 ref2v 生成。"""
     project = _project(db, project_id, user)
     seg = _segment_or_404(db, project, seg_id)
     data = hibtv_jobs.jloads(seg.data, {})
@@ -1010,8 +1117,15 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
             or (frames_n - 5) % 17 or abs(frames_n / 24 - plan) > 0.001):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "分镜时长未对齐 H3 合法帧预算，请在网关重跑分镜")
     try:
-        ref_ids, ref_source = hibtv_frames.segment_video_refs(db, project, seg)
-        input_hash = hibtv_frames.video_input_hash(db, project, seg)
+        refs = hibtv_frames.route_a_reference_plan(db, project, seg)
+        if any(not int(row.get("uploadId") or 0) for row in refs):
+            raise RuntimeError(f"{seg.seg_id} 有引用素材缺少 Upload 记录")
+        ref_ids = [int(row["uploadId"]) for row in refs]
+        ref_source = "assets" if ref_ids else "none"
+        task_prompt = hibtv_frames.route_a_prompt(db, project, seg, refs)
+        input_hash = hibtv_frames.video_input_hash(
+            db, project, seg, refs=refs, prompt=task_prompt
+        )
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -1024,7 +1138,7 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
     task = Task(
         user_id=user.id,
         mode="r2v",
-        prompt=prompt,                       # prompt.md 原文：Picture N 就是切点契约
+        prompt=task_prompt,                  # 路线 A：镜头素材 + 段级镜头时间线
         aspect_ratio=project.aspect_ratio or "9:16",
         duration=max(5, int(round(seconds))),
         frames=frames_n,                     # worker 用帧数回算秒数，避免被向上吸附超限
@@ -1054,6 +1168,7 @@ def generate_segment(project_id: int, seg_id: str, body: HibtvSegmentGenerateIn,
         "seconds": seconds, "frames": frames_n, "refs": len(ref_ids),
         "refSource": ref_source,
         "planSeconds": plan,
+        "route": "A-assets",
     }
 
 
@@ -1196,6 +1311,15 @@ def undo_change(project_id: int, change_id: int,
         if frame is None or frame.project_id != project.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "关键帧不存在")
         setattr(frame, change.path, old)
+        if change.path == "refs":
+            meta = hibtv_jobs.jloads(frame.meta, {})
+            refs = hibtv_jobs.jloads(frame.refs, [])
+            meta["refsCustomized"] = bool(
+                isinstance(refs, list)
+                and any(isinstance(item, dict) and item.get("assetId") for item in refs)
+            )
+            meta["stale"] = bool(frame.path)
+            frame.meta = hibtv_jobs.jdumps(meta)
         frame.updated_at = hibtv_jobs.now()
     elif what.startswith("project:"):
         setattr(project, change.path, old)

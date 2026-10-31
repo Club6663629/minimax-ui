@@ -7,10 +7,27 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from app.services import hibtv_assets, hibtv_frames, hibtv_jobs
+from app.services import hibtv_assets, hibtv_frames, hibtv_image, hibtv_jobs
 
 
 class AssetViewDefsTest(unittest.TestCase):
+    def test_hibtv_has_its_own_image_workflow(self):
+        self.assertEqual(hibtv_image.TEMPLATE_PATH.name, "hibtv_image_api.json")
+        self.assertNotIn("advideo", str(hibtv_image.TEMPLATE_PATH))
+        workflow = hibtv_image._inject(
+            "Use <image1> as scene and <image2> as the same person.",
+            ["scene.png", "cast.png"],
+            width=768,
+            height=1344,
+            seed=7,
+            prefix="frame",
+            negative="no collage",
+            text_only=False,
+        )
+        self.assertEqual(workflow["474"]["inputs"]["images.image_1"], ["470", 0])
+        self.assertEqual(workflow["474"]["inputs"]["images.image_2"], ["620", 0])
+        self.assertNotIn("product", workflow["491"]["inputs"]["value"].lower())
+
     def test_cast_view_ids_match_character_refs(self):
         ids = [v["id"] for v in hibtv_assets.view_defs("cast")]
         self.assertEqual(ids, ["front-full", "face-front", "side-full", "back-full"])
@@ -111,23 +128,24 @@ class PromptForTest(unittest.TestCase):
         chars = [{"code": "叶辰", "name": "叶辰", "gender": "男", "identity": "主角"}]
         p = hibtv_frames.prompt_for(self._frame({"characters": ["叶辰"]}), "夜景",
                                     characters=chars, refs=refs, tail="TAIL")
-        self.assertIn("场景 S01", p)
-        self.assertIn("大头照", p)
-        self.assertIn("道具 P01", p)
-        self.assertIn("人物位置状态", p)
-        self.assertIn("每个角色只出现一次", p)
+        self.assertIn("<image1>", p)
+        self.assertIn("environment reference for S01", p)
+        self.assertIn("<image3>", p)
+        self.assertIn("face reference", p)
+        self.assertIn("prop reference for P01", p)
+        self.assertIn("Show each exactly once", p)
         self.assertTrue(p.endswith("TAIL"))
 
     def test_prompt_without_character_forbids_people(self):
         p = hibtv_frames.prompt_for(self._frame({"extras": 0}), "", characters=[], refs=[], tail="TAIL")
-        self.assertIn("本镜为空景", p)
-        self.assertIn("不添加人物", p)
+        self.assertIn("Exact on-screen person count: 0", p)
+        self.assertIn("Do not add background people", p)
         self.assertTrue(p.endswith("TAIL"))
 
     def test_ref_without_path_is_dropped(self):
         refs = [{"path": "", "role": "scene", "code": "S01", "name": "宴会厅"}]
         p = hibtv_frames.prompt_for(self._frame({}), "", characters=[], refs=refs, tail="TAIL")
-        self.assertNotIn("场景 S01", p)
+        self.assertNotIn("environment reference for S01", p)
 
 
 class AssetStatusTest(unittest.TestCase):

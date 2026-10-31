@@ -469,3 +469,32 @@
 .hibtv-root .viewfig img{display:block;width:100%;height:auto}
 .hibtv-root .viewfig .viewempty{display:flex;align-items:center;justify-content:center;height:140px;color:#6f685e;font-size:11px}
 .hibtv-root .viewfig figcaption{padding:5px 8px;font-size:10.5px;color:#9a9287;border-top:1px solid var(--line-3)}
+
+/* 路线 A：每个镜头的引用素材入口 */
+.hibtv-root .shot-refs{display:flex;flex-direction:column;gap:4px}
+.hibtv-root .shot-ref-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.hibtv-root .shot-ref{position:relative;width:38px;height:38px;border:1px solid var(--line-2);border-radius:6px;overflow:hidden;background:#100e0c}
+.hibtv-root .shot-ref img{position:relative;z-index:2;width:100%;height:100%;object-fit:cover}
+.hibtv-root .shot-ref>span{display:grid;place-items:center;height:100%;font-size:10px;color:#7d766b}
+.hibtv-root .shot-ref b{position:absolute;z-index:3;left:2px;right:2px;bottom:2px;padding:1px 2px;border-radius:3px;background:rgba(10,9,8,.82);font-size:8px;font-weight:400;color:#ded7ca;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hibtv-root .reference-editor{position:relative;margin:4vh auto;width:min(1040px,94vw);max-height:90vh;display:flex;flex-direction:column;background:linear-gradient(180deg,#151210,#100e0c);border:1px solid var(--line);border-radius:12px;box-shadow:0 30px 90px rgba(0,0,0,.7)}
+.hibtv-root .reference-editor-hd{display:flex;align-items:flex-start;gap:12px;padding:18px 20px 12px;border-bottom:1px solid var(--line-3)}
+.hibtv-root .reference-editor-hd>div{min-width:0;flex:1}
+.hibtv-root .reference-editor-body{display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px 20px;overflow:auto;min-height:0}
+.hibtv-root .reference-current,.hibtv-root .reference-library{min-width:0}
+.hibtv-root .reference-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px}
+.hibtv-root .reference-card{display:flex;flex-direction:column;gap:3px;padding:5px;border:1px solid var(--line-3);border-radius:7px;background:rgba(255,255,255,.012);color:#bfb7aa;text-align:left;cursor:pointer}
+.hibtv-root .reference-card:hover{border-color:rgba(224,179,106,.38)}
+.hibtv-root .reference-card.on{border-color:var(--gold);box-shadow:0 0 0 1px rgba(224,179,106,.25) inset;background:rgba(224,179,106,.07)}
+.hibtv-root .reference-card img{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:5px;background:#0d0b09}
+.hibtv-root .reference-card span{font-size:10.5px;color:#e0d8ca}
+.hibtv-root .reference-card small{font-size:9.5px;color:#80786d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hibtv-root .reference-notes{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.hibtv-root .reference-notes label{display:flex;flex-direction:column;gap:3px;font-size:10px;color:#8d8579}
+.hibtv-root .reference-notes input{height:28px;padding:0 8px;border:1px solid var(--line-3);border-radius:5px;background:#0d0c0a;color:#d8d0c2;font-size:10.5px;outline:none}
+.hibtv-root .reference-kind+.reference-kind{margin-top:14px}
+.hibtv-root .reference-editor-ft{display:flex;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--line-3);background:rgba(0,0,0,.2)}
+.hibtv-root .empty-mini{padding:14px;border:1px dashed var(--line);border-radius:7px;color:#7d766b;font-size:11px;text-align:center}
+@media(max-width:900px){
+  .hibtv-root .reference-editor-body{grid-template-columns:1fr}
+}

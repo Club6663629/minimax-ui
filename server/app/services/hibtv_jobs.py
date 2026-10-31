@@ -871,12 +871,12 @@ def sync_segment_tasks(db: Session, project: HibtvProject, ep: int) -> None:
 
 
 def segment_ref_plan(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[Dict]:
-    """段的参考图清单 = 该段的关键帧 f1..fN（顺序即 Picture 序号）。"""
+    """段的镜头/可选分镜图记录；路线 A 的真实参考清单由 hibtv_frames 汇总。"""
     return hibtv_frames.plan(db, project, seg.seg_id, ep=seg.ep)
 
 
 def segment_ref_ids(db: Session, project: HibtvProject, seg: HibtvSegment) -> List[int]:
-    """段出片的参考图 id：只允许完整且当前有效的 f1..fN，不更换图片语义。"""
+    """路线 A 的段级参考图 id。"""
     ids, _source = hibtv_frames.segment_video_refs(db, project, seg)
     return ids
 

@@ -1,7 +1,7 @@
 /** 短剧工作台（HiBTV）接口类型：与 server/app/routers/hibtv.py 的响应一一对应。
  *
  * 口径：文本 7 段由 codex 网关产出（平台只搬字段），像素阶段是「锚点主图 + N 张派生视图」+
- * 「每切一张关键帧」+ ref2v 段出片；多视图（按原型 VIEW_DEFS）只服务人审阅与出分镜图参考，绝不进视频。
+ * 每镜引用素材汇总后一次 ref2v 段出片；分镜图只作为可选的构图控制。
  */
 
 export type DocKind = "outline" | "cast" | "art" | "refs" | "staging" | "script" | "storyboard";
@@ -202,7 +202,36 @@ export interface HibtvFrame {
   url: string;
   uploadId: number;
   version: number;
+  /** 镜头的引用素材；route A 的视频输入以此为准。 */
+  references?: FrameReference[];
+  refsCustomized?: boolean;
   meta: Record<string, unknown>;
+}
+
+export interface FrameReference {
+  assetId: number;
+  kind: "cast" | "scene" | "prop" | "continuity" | string;
+  code: string;
+  name: string;
+  role: string;
+  view: string;
+  note?: string;
+  uploadId: number;
+  url?: string;
+}
+
+export interface ReferenceAsset {
+  assetId: number;
+  kind: "cast" | "scene" | "prop" | string;
+  code: string;
+  name: string;
+  view: string;
+  viewLabel: string;
+  role: string;
+  note?: string;
+  uploadId: number;
+  url: string;
+  version: number;
 }
 
 export interface FrameList {
@@ -262,10 +291,11 @@ export interface Segment {
   /** 段长超过 13s：拦出片 + 提示重跑本集 storyboard */
   oversize: boolean;
   timingMismatch?: boolean;
-  // 段详情才带：图位条与出片请求值
+  // 段详情才带：镜头素材、可选分镜图与出片请求值
   frames?: HibtvFrame[];
   missingFrames?: number[];
   framesReady?: boolean;
+  routeMode?: string;
   request?: { frames: number; seconds: number };
   capSeconds?: number;
 }
@@ -325,7 +355,14 @@ export interface HibtvStatus {
     projectPrefix: string;
     note: string;
   };
-  image: { available?: boolean; worker?: string; template?: string; degraded?: boolean; note?: string };
+  image: {
+    available?: boolean;
+    worker?: string;
+    template?: string;
+    degraded?: boolean;
+    textOnlyFallback?: boolean;
+    note?: string;
+  };
   gates: { mode?: string; available: boolean; note?: string };
   compose: { available?: boolean; ffmpeg?: string; note?: string };
   segMaxSeconds: number;

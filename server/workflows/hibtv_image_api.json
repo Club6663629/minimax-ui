@@ -1,0 +1,139 @@
+{
+  "451": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "453": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    }
+  },
+  "454": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    }
+  },
+  "470": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    }
+  },
+  "474": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "clip": [
+        "453",
+        0
+      ],
+      "images.image_1": [
+        "470",
+        0
+      ],
+      "vae": [
+        "454",
+        0
+      ],
+      "prompt": [
+        "490",
+        0
+      ],
+      "negative_prompt": [
+        "491",
+        0
+      ],
+      "resolution": 0
+    }
+  },
+  "456": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 768,
+      "height": 1344,
+      "batch_size": 1
+    }
+  },
+  "469": {
+    "class_type": "QwenImage21Cache",
+    "inputs": {
+      "model": [
+        "451",
+        0
+      ],
+      "device": "auto",
+      "dtype": "default"
+    }
+  },
+  "458": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "469",
+        0
+      ],
+      "positive": [
+        "474",
+        0
+      ],
+      "negative": [
+        "474",
+        1
+      ],
+      "latent_image": [
+        "456",
+        0
+      ],
+      "seed": 0,
+      "steps": 25,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "457": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "458",
+        0
+      ],
+      "vae": [
+        "454",
+        0
+      ]
+    }
+  },
+  "461": {
+    "class_type": "SaveImageAdvanced",
+    "inputs": {
+      "images": [
+        "457",
+        0
+      ],
+      "filename_prefix": "%%PREFIX%%",
+      "format": "png",
+      "format.bit_depth": "8-bit",
+      "format.input_color_space": "sRGB"
+    }
+  },
+  "490": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    }
+  },
+  "491": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    }
+  }
+}

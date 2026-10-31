@@ -1,6 +1,6 @@
 /** 出视频：整集成片 + 时间轴 + 按段重跑 + 导出（cutlist 计划 / 实测并列）。
  *
- * 出片只有一条路：ref2v + 每切一张关键帧。这里的前置校验就是「关键帧齐否」：
+ * 路线 A：每镜素材汇总后，一段只生成一次视频。
  * 缺图 / 段长超 13s / 切数≠图数 → 段级出片按钮置灰，并说清楚卡在哪。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -68,21 +68,16 @@ export default function VideoPage() {
   const sceneName = (idx?: number) => outline.scenes?.[(idx || 1) - 1]?.name || `场景 ${idx || 1}`;
   const cap = status?.segMaxSeconds || 13;
 
-  /** 出片前置校验：段长 / 图位齐否 / 切数=图数（ref2v 少一张图就会切到空白）。 */
+  /** 路线 A 出片前置校验：只检查结构与时序，引用素材由后端按镜头严格校验。 */
   const readiness = (seg: Segment) => {
-    const rows = frames.filter((f) => f.segId === seg.id);
     const cuts = (seg.cuts || []).length;
-    const missing = rows.filter((f) => !f.ready).map((f) => f.cutIndex);
-    const done = rows.length - missing.length;
-    const total = rows.length || cuts;
+    const done = cuts;
+    const total = cuts;
     if (seg.timingMismatch) return { ok: false, done, total, why: "时长未对齐 H3 帧预算：请重跑本集分镜" };
     if (seg.oversize)
       return { ok: false, done, total, why: `段长 ${seg.planSeconds.toFixed(1)}s 超过 ${cap}s：需重跑本集 storyboard` };
-    if (!rows.length) return { ok: false, done, total, why: "还没有图位：先跑本集分镜" };
-    if (missing.length) return { ok: false, done, total, why: `缺关键帧 f${missing.join(" / f")}` };
-    if (rows.length !== cuts)
-      return { ok: false, done, total, why: `切数 ${cuts} ≠ 关键帧 ${rows.length}` };
-    return { ok: true, done, total, why: `ref2v 原样直出：${rows.length} 张关键帧` };
+    if (!cuts) return { ok: false, done, total, why: "还没有镜头：先跑本集分镜" };
+    return { ok: true, done, total, why: `路线 A：${cuts} 镜素材汇总后一次生成` };
   };
 
   const genOne = async (seg: Segment) => {
@@ -94,7 +89,7 @@ export default function VideoPage() {
     }
     try {
       const res = await hibtvApi.generateSegment(project.id, seg.id, {});
-      toast(`${seg.id} 已排队：v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.refs} 张关键帧`);
+      toast(`${seg.id} 已排队：v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.refs} 张镜头素材`);
       void load();
     } catch (err) {
       toast(errText(err));
@@ -156,12 +151,12 @@ export default function VideoPage() {
     <>
       <div className="panel-sec">
         <div className="panel-title">
-          参考图 · 关键帧 <span className="r">
-            {frames.filter((f) => f.url).length} / {frames.length} 已出
+          镜头素材 <span className="r">
+            路线 A
           </span>
         </div>
         <div className="tiny dim" style={{ lineHeight: 1.8, marginBottom: 8 }}>
-          出片时按切序号挂 f1..fN（≤ 9 张）；换图去段的「图位条」里重出 / 上传，然后只重跑那一段。
+          视频使用每个镜头选择的场景、定场图、角色和道具素材；可选分镜图只用于构图审阅。
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(46px, 1fr))", gap: 4 }}>
           {frames.map((f) => (
@@ -359,8 +354,8 @@ export default function VideoPage() {
         <div className="card-hd">
           <span className="t">按段看 / 按段重跑</span>
           <span className="chip">{segments.length} 段</span>
-          <span className="chip" title="段级出片 = ref2v + 每切一张关键帧">
-            出片前置：关键帧齐 + 段长 ≤ {cap}s
+          <span className="chip" title="段级出片 = 镜头素材汇总 + 一次 ref2v">
+            出片方式：路线 A · 镜头素材
           </span>
           <span style={{ marginLeft: "auto" }} />
           <span className="tiny dim">点一段进一段的镜头页</span>
@@ -372,7 +367,7 @@ export default function VideoPage() {
               <th>场次</th>
               <th>镜</th>
               <th>时长</th>
-              <th>图位</th>
+              <th>引用</th>
               <th>成片</th>
               <th>版本</th>
               <th />
@@ -395,7 +390,7 @@ export default function VideoPage() {
                   </td>
                   <td>
                     <span className={`chip tiny ${st.ok ? "green" : "gold"}`} title={st.why}>
-                      {st.total ? `${st.done}/${st.total}` : "无图位"}
+                      {st.total ? `${st.total} 镜素材` : "无镜头"}
                     </span>
                   </td>
                   <td>

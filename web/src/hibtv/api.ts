@@ -9,12 +9,14 @@ import type {
   HibtvAsset,
   HibtvDoc,
   HibtvFrame,
+  FrameReference,
   HibtvJob,
   HibtvProject,
   HibtvStatus,
   JobKind,
   LibraryItem,
   RenderItem,
+  ReferenceAsset,
   Segment,
   SegmentList,
 } from "./types";
@@ -191,6 +193,17 @@ export const hibtvApi = {
       body: form,
     });
   },
+  referenceAssets: (id: number) =>
+    request<ReferenceAsset[]>(`${base}/projects/${id}/reference-assets`),
+  patchFrameReferences: (
+    id: number,
+    frameId: number,
+    items: Pick<FrameReference, "assetId" | "view" | "role" | "note">[],
+  ) =>
+    request<HibtvFrame>(`${base}/projects/${id}/frames/${frameId}/references`, {
+      method: "PATCH",
+      body: JSON.stringify({ items }),
+    }),
 
   listSegments: (id: number, ep: number) =>
     request<SegmentList>(`${base}/projects/${id}/segments?ep=${ep}`),
@@ -206,6 +219,7 @@ export const hibtvApi = {
       frames: number;
       refs: number;
       refSource: string;
+      route?: string;
       planSeconds: number;
     }>(`${base}/projects/${id}/segments/${segId}/generate`, {
       method: "POST",

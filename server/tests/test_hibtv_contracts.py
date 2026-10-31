@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base
 from app.models import HibtvProject, HibtvAsset, HibtvFrame, HibtvSegment, Task, User
-from app.schemas import HibtvDocPatch, HibtvSegmentGenerateIn
+from app.schemas import HibtvDocPatch, HibtvFrameReferencesIn, HibtvSegmentGenerateIn
 from app.routers import hibtv as api
 from app.services import hibtv_codex as gateway, hibtv_stages as stages
 from app.services import hibtv_assets as assets, hibtv_frames as frames, hibtv_jobs as jobs
@@ -188,26 +188,28 @@ class PipelineTest(unittest.TestCase):
         stages.apply(self.db, self.project, "storyboard", 1, {path.name: path})
         self.assertEqual(jobs.jloads(self.current_seg().data, {})["h3Prompt"], seg["h3Prompt"])
 
-    def test_missing_frame_never_falls_back_to_assets_or_partial_frames(self):
-        self.asset("scene", "S01")
-        self.asset("cast", "C01")
-        self.uploaded_frames()
-        frame = self.db.query(HibtvFrame).filter_by(cut_index=2).one()
-        frame.path = ""
-        self.db.flush()
-        with self.assertRaisesRegex(RuntimeError, "f2"):
-            frames.segment_video_refs(self.db, self.project, self.current_seg())
+    def test_route_a_does_not_require_optional_frames(self):
+        self.asset("scene", "S01", views=("top",))
+        self.asset("cast", "C01", views=("face-front",))
+        ids, source = frames.segment_video_refs(self.db, self.project, self.current_seg())
+        self.assertEqual(source, "assets")
+        self.assertGreaterEqual(len(ids), 3)
         self.assertEqual(self.db.query(Task).count(), 0)
 
-    def test_route_submits_complete_frames_in_order_and_exact_budget(self):
-        self.uploaded_frames()
+    def test_route_a_submits_shot_assets_once_per_segment(self):
+        self.asset("scene", "S01", views=("top",))
+        self.asset("cast", "C01", views=("face-front",))
         result = api.generate_segment(self.pid, "E01-01", HibtvSegmentGenerateIn(),
                                       user=self.user, db=self.db)
         task = self.db.get(Task, result["taskId"])
-        rows = self.db.query(HibtvFrame).order_by(HibtvFrame.cut_index).all()
-        self.assertEqual(json.loads(task.ref_image_ids), [r.upload_id for r in rows])
+        expected, source = frames.segment_video_refs(self.db, self.project, self.current_seg())
+        self.assertEqual(source, "assets")
+        self.assertEqual(json.loads(task.ref_image_ids), expected)
         self.assertEqual((task.mode, task.frames, task.enhance), ("r2v", 124, False))
-        self.assertEqual(task.prompt, self.board["episodes"][0]["segments"][0]["h3Prompt"])
+        self.assertIn("subject_definitions:", task.prompt)
+        self.assertIn("not timeline cut anchors", task.prompt)
+        self.assertNotIn("How the reference pictures align", task.prompt)
+        self.assertEqual(result["refSource"], "assets")
         self.assertTrue(jobs.jloads(self.current_seg().versions, [])[0]["inputHash"])
 
     def test_route_rejects_prompt_override_and_illegal_timing_before_task(self):
@@ -281,7 +283,7 @@ class PipelineTest(unittest.TestCase):
         meta["props"] = [f"P{i:02d}" for i in range(1, 6)]
         meta["cut"]["props"] = meta["props"]
         frame.meta = dump(meta)
-        with self.assertRaisesRegex(RuntimeError, "不能裁掉"):
+        with self.assertRaisesRegex(RuntimeError, "减少素材或拆分镜头"):
             frames.ref_specs_for(self.db, self.project, frame, self.current_seg())
 
     def test_side_view_is_actually_selected_for_side_shot(self):
@@ -320,8 +322,57 @@ class PipelineTest(unittest.TestCase):
             self.assertIn(key + ":", captured["prompt"])
         self.assertIn("六名群演", captured["prompt"])
         self.assertNotIn("恰好有 1", captured["prompt"])
+        self.assertIn("<image1>", captured["prompt"])
+        self.assertNotIn("Picture 1 =", captured["prompt"])
         self.assertEqual(frame.prompt, base)
         self.assertTrue(frames.frame_current(self.db, self.project, frame))
+
+    def test_frame_prompt_discovers_named_character_missing_from_array(self):
+        cast = self.asset("cast", "C01")
+        cast.name = "阿宁"
+        self.db.flush()
+        frame = self.db.query(HibtvFrame).first()
+        meta = jobs.jloads(frame.meta, {})
+        meta["characters"] = []
+        meta["cut"]["characters"] = []
+        frame.meta = dump(meta)
+        self.assertEqual(frames.visible_character_codes(self.db, self.project, frame), ["C01"])
+
+    def test_frame_reference_selection_is_persisted_and_used_by_route_a(self):
+        scene = self.asset("scene", "S01", views=("top",))
+        cast = self.asset("cast", "C01", views=("face-front",))
+        frame = self.db.query(HibtvFrame).first()
+        item = {
+            "assetId": scene.id,
+            "view": "top",
+            "role": "scene-top",
+            "note": "只参考空间相对位置",
+        }
+        payload = api.patch_frame_references(
+            self.pid,
+            frame.id,
+            HibtvFrameReferencesIn(items=[item]),
+            user=self.user,
+            db=self.db,
+        )
+        self.assertEqual(len(payload["references"]), 1)
+        with self.assertRaisesRegex(RuntimeError, "缺少素材引用"):
+            frames.route_a_reference_plan(self.db, self.project, self.current_seg())
+        # 保留定场图后补回角色，路线 A 才能提交。
+        api.patch_frame_references(
+            self.pid,
+            frame.id,
+            HibtvFrameReferencesIn(items=[
+                item,
+                {"assetId": cast.id, "view": "front-full", "role": "cast-anchor"},
+            ]),
+            user=self.user,
+            db=self.db,
+        )
+        selected = frames.reference_plan_for(
+            self.db, self.project, frame, self.current_seg(), include_top=True
+        )
+        self.assertEqual([row["role"] for row in selected], ["scene-top", "cast-anchor"])
 
     def test_failed_gateway_validation_never_updates_current_document(self):
         old = jobs.get_doc(self.db, self.pid, "storyboard", 1).data
@@ -342,12 +393,25 @@ class PipelineTest(unittest.TestCase):
             stages.apply(self.db, self.project, "storyboard", 1,
                          {p.name: p for p in (path, other, validation)})
 
-    def test_composition_rejects_old_video_after_new_frame_upload(self):
-        self.uploaded_frames()
+    def test_composition_rejects_old_video_after_reference_change(self):
+        scene = self.asset("scene", "S01", views=("top",))
+        cast = self.asset("cast", "C01", views=("face-front",))
+        prop = self.asset("prop", "P01")
         result = api.generate_segment(self.pid, "E01-01", HibtvSegmentGenerateIn(), user=self.user, db=self.db)
         version = jobs.jloads(self.current_seg().versions, [])[0]
         old = version["inputHash"]
-        self.uploaded_frames()
+        frame = self.db.query(HibtvFrame).first()
+        api.patch_frame_references(
+            self.pid,
+            frame.id,
+            HibtvFrameReferencesIn(items=[
+                {"assetId": scene.id, "view": "top", "role": "scene-top"},
+                {"assetId": cast.id, "view": "front-full", "role": "cast-anchor"},
+                {"assetId": prop.id, "view": "front", "role": "prop"},
+            ]),
+            user=self.user,
+            db=self.db,
+        )
         self.assertNotEqual(old, frames.video_input_hash(self.db, self.project, self.current_seg()))
 
     def test_reference_stage_tasks_drive_anchor_and_preserve_character_inputs(self):
@@ -472,7 +536,8 @@ class PipelineTest(unittest.TestCase):
     def test_compose_uses_current_manifest_and_rejects_old_video(self):
         from app.models import HibtvJob
         from app.services import hibtv_compose
-        self.uploaded_frames()
+        self.asset("scene", "S01", views=("top",))
+        self.asset("cast", "C01", views=("face-front",))
         api.generate_segment(self.pid, "E01-01", HibtvSegmentGenerateIn(), user=self.user, db=self.db)
         seg = self.current_seg()
         versions = jobs.jloads(seg.versions, [])
@@ -499,7 +564,11 @@ class PipelineTest(unittest.TestCase):
             asyncio.run(jobs._job_compose(self.db, self.project, job))
         self.assertEqual(len(captured["segment_paths"]), 1)
         self.assertIn("current.mp4", captured["segment_paths"][0])
-        self.uploaded_frames()
+        cast = self.db.query(HibtvAsset).filter_by(kind="cast", code="C01").one()
+        path = jobs.project_dir(self.pid) / "new-cast.png"
+        Image.new("RGB", (8, 8), "yellow").save(path)
+        assets.import_image(self.db, self.project, cast, path, "new-cast.png")
+        assets.confirm_image(self.db, self.project, cast)
         with self.assertRaisesRegex(RuntimeError, "旧输入"):
             asyncio.run(jobs._job_compose(self.db, self.project, job))
 

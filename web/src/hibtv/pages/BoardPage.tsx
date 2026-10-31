@@ -1,10 +1,10 @@
-/** 分镜：总表 → 本集段表 → 一段一页（cut 表 + 图位条 f1..fN + prompt.md 原文）。
+/** 分镜：总表 → 本集段表 → 一段一页（镜头素材 + 可选分镜图 + 分镜源提示词）。
  *
  * 口径（见 plan §4.1/§4.2）：
- * - 段的出片提示词就是 `prompt.md` 原文（`Picture N` = 切点契约），平台不改写、不裁剪；
- * - `manifest.pictures` 长度 == 切数 == prompt.md 的 Picture 条数，三者不等即拦出片；
+ * - 路线 A 以每镜引用素材为视频输入；段内汇总后一次生成；
+ * - 分镜图是可选的构图控制，不阻塞路线 A；
  * - 段长 ≤ {cap}s（H3 只出 5+17n 帧：311 帧 = 12.9583s），超限只能重跑本集 storyboard；
- * - 每个切一张关键帧（`cuts[].frame`），出片时按序号挂 f1..fN 当参考图。
+ * - 每个切可生成一张可选分镜图（`cuts[].frame`），但默认不参与视频 Picture 映射。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -25,14 +25,32 @@ import {
 } from "../components/ui";
 import { errText, useDoc, useHibtv, useJob, usePatch } from "../state";
 import type {
+  FrameReference,
   FrameList,
   HibtvFrame,
   OutlineData,
+  ReferenceAsset,
   RenderItem,
   Segment,
   SegmentList,
   StoryboardData,
 } from "../types";
+
+const REF_KIND_LABEL: Record<string, string> = {
+  scene: "场景",
+  cast: "角色",
+  prop: "道具",
+  continuity: "连续性",
+};
+
+const REF_ROLE_LABEL: Record<string, string> = {
+  "scene-top": "定场图",
+  scene: "场景图",
+  "cast-anchor": "角色锚点",
+  "cast-face": "角色面部",
+  prop: "道具状态",
+  "continuity-frame": "上一镜",
+};
 
 /* ------------------------------------------------------------------ 数据 hooks */
 /** 多集段表：只对存在的集发起请求。 */
@@ -69,7 +87,7 @@ function useSegmentMap(eps: number[]) {
   return { map, loading, reload: load };
 }
 
-/** 本集关键帧（每切一张）：图位条与出片前置校验都读它。 */
+/** 本集镜头记录与可选分镜图。 */
 function useFrames(ep: number) {
   const { project, revision, toast } = useHibtv();
   const [list, setList] = useState<FrameList | null>(null);
@@ -122,8 +140,183 @@ function frameStats(frames: HibtvFrame[] | undefined, segId: string) {
   return { done: rows.filter((f) => f.ready).length, total: rows.length, rows };
 }
 
-/* ------------------------------------------------------------------ 图位条 */
-/** 图位条：f1..fN 一格一切，缺图时段出片按钮置灰并说明缺第几张。 */
+function refKey(ref: Pick<FrameReference, "assetId" | "view" | "role">) {
+  return `${ref.assetId}:${ref.view}:${ref.role}`;
+}
+
+function ShotReferences({
+  frame,
+  onEdit,
+}: {
+  frame: HibtvFrame;
+  onEdit: () => void;
+}) {
+  const refs = frame.references || [];
+  return (
+    <div className="shot-refs">
+      <div className="shot-ref-row">
+        {refs.slice(0, 4).map((ref) => (
+          <div
+            key={refKey(ref)}
+            className="shot-ref"
+            title={`${REF_KIND_LABEL[ref.kind] || ref.kind} · ${ref.name} · ${REF_ROLE_LABEL[ref.role] || ref.role}`}
+          >
+            {ref.url ? (
+              <img src={mediaUrl(ref.url)} alt="" loading="lazy" />
+            ) : (
+              <span>{ref.code.slice(0, 1) || "图"}</span>
+            )}
+            <b>{REF_ROLE_LABEL[ref.role] || ref.role}</b>
+          </div>
+        ))}
+        {refs.length > 4 && <span className="chip tiny">+{refs.length - 4}</span>}
+        <button className="btn xs ghost" onClick={onEdit}>
+          {refs.length ? "调素材" : "＋ 加素材"}
+        </button>
+      </div>
+      <div className="tiny dim">
+        {refs.length
+          ? refs.map((ref) => `${ref.code} ${REF_ROLE_LABEL[ref.role] || ref.role}`).join(" · ")
+          : "未选择素材；生成时会按镜头人物、场景和道具自动挂载"}
+      </div>
+    </div>
+  );
+}
+
+function ReferenceEditor({
+  frame,
+  catalog,
+  onSave,
+  onClose,
+}: {
+  frame: HibtvFrame;
+  catalog: ReferenceAsset[];
+  onSave: (items: Pick<FrameReference, "assetId" | "view" | "role" | "note">[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const current = frame.references || [];
+  const [picked, setPicked] = useState<string[]>(
+    current.map((ref) => refKey(ref)),
+  );
+  const [notes, setNotes] = useState<Record<string, string>>(
+    Object.fromEntries(current.map((ref) => [refKey(ref), ref.note || ""])),
+  );
+  const byKey = useMemo(
+    () => new Map(catalog.map((item) => [refKey(item), item])),
+    [catalog],
+  );
+  const selected = picked.map((key) => byKey.get(key)).filter(Boolean) as ReferenceAsset[];
+  const grouped = useMemo(() => {
+    const result: Record<string, ReferenceAsset[]> = {};
+    for (const item of catalog) {
+      (result[item.kind] ||= []).push(item);
+    }
+    return result;
+  }, [catalog]);
+
+  const toggle = (item: ReferenceAsset) => {
+    const key = refKey(item);
+    setPicked((rows) => (rows.includes(key) ? rows.filter((row) => row !== key) : [...rows, key]));
+  };
+
+  return (
+    <div className="reference-editor">
+      <div className="reference-editor-hd">
+        <div>
+          <div className="eyebrow">镜 {frame.cutIndex} · 引用素材</div>
+          <div className="h2" style={{ margin: "4px 0" }}>选择这一镜真正发给视频模型的图片</div>
+          <div className="tiny dim">场景主图、定场图、角色锚点和道具状态图分别声明用途；同一角色的大头照与全身图仍只代表一个人。</div>
+        </div>
+        <button className="btn xs ghost" onClick={onClose}>✕</button>
+      </div>
+      <div className="reference-editor-body">
+        <div className="reference-current">
+          <div className="panel-title">已选 {selected.length} 张</div>
+          {selected.length ? (
+            <div className="reference-grid selected">
+              {selected.map((item) => (
+                <button key={refKey(item)} className="reference-card on" onClick={() => toggle(item)}>
+                  <img src={mediaUrl(item.url)} alt="" loading="lazy" />
+                  <span>{item.code} · {REF_ROLE_LABEL[item.role] || item.role}</span>
+                  <small>{item.name} / {item.viewLabel}</small>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-mini">空白清单会在生成时恢复自动挂载。</div>
+          )}
+          {selected.length > 0 && (
+            <div className="reference-notes">
+              {selected.map((item) => {
+                const key = refKey(item);
+                return (
+                  <label key={key}>
+                    <span>{item.code} · {REF_ROLE_LABEL[item.role] || item.role}</span>
+                    <input
+                      value={notes[key] || ""}
+                      placeholder="备注，如：只参考服装"
+                      onChange={(event) =>
+                        setNotes((rows) => ({ ...rows, [key]: event.target.value }))
+                      }
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <div className="reference-library">
+          {["scene", "cast", "prop"].filter((kind) => grouped[kind]?.length).map((kind) => (
+            <div className="reference-kind" key={kind}>
+              <div className="panel-title">{REF_KIND_LABEL[kind] || kind}</div>
+              <div className="reference-grid">
+                {grouped[kind].map((item) => (
+                  <button
+                    key={refKey(item)}
+                    className={`reference-card ${picked.includes(refKey(item)) ? "on" : ""}`}
+                    onClick={() => toggle(item)}
+                  >
+                    <img src={mediaUrl(item.url)} alt="" loading="lazy" />
+                    <span>{item.code} · {REF_ROLE_LABEL[item.role] || item.role}</span>
+                    <small>{item.name} / {item.viewLabel}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          {!catalog.length && <div className="empty-mini">还没有已确认的可用素材。</div>}
+        </div>
+      </div>
+      <div className="reference-editor-ft">
+        <button className="btn xs" onClick={() => setPicked([])}>恢复自动挂载</button>
+        <span className="tiny dim">{selected.length} / 9</span>
+        <span className="sp" style={{ marginLeft: "auto" }} />
+        <button className="btn" onClick={onClose}>取消</button>
+        <button
+          className="btn gold"
+          disabled={saving || selected.length > 9}
+          onClick={() => {
+            setSaving(true);
+            void onSave(
+              selected.map((item) => ({
+                assetId: item.assetId,
+                view: item.view,
+                role: item.role,
+                note: notes[refKey(item)] || "",
+              })),
+            ).finally(() => setSaving(false));
+          }}
+        >
+          {saving ? "保存中…" : "保存引用素材"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ 可选分镜图 */
+/** 可选分镜图：不再作为路线 A 视频生成的硬前置。 */
 function FrameStrip({
   projectId,
   seg,
@@ -145,7 +338,7 @@ function FrameStrip({
     setBusy(frame.id);
     try {
       await hibtvApi.frameImage(projectId, frame.id);
-      toast(`已排队：${seg.id} f${frame.cutIndex} 关键帧`);
+      toast(`已排队：${seg.id} f${frame.cutIndex} 可选分镜图`);
       window.setTimeout(onChanged, 800);
     } catch (err) {
       toast(errText(err));
@@ -160,7 +353,7 @@ function FrameStrip({
         kind: "images",
         payload: { mode: "frames", ep: seg.ep, seg_id: seg.id },
       });
-      toast(`已排入关键帧队列：${frames.length} 张（缺 ${missing.length} 张）`);
+      toast(`已排入可选分镜图队列：${frames.length} 张（缺 ${missing.length} 张）`);
       window.setTimeout(onChanged, 800);
     } catch (err) {
       toast(errText(err));
@@ -171,7 +364,7 @@ function FrameStrip({
     setBusy(frame.id);
     try {
       await hibtvApi.uploadFrame(projectId, frame.id, file);
-      toast(`已上传 f${frame.cutIndex}，顶掉这一张`);
+      toast(`已上传 f${frame.cutIndex}，作为可选分镜图`);
       onChanged();
     } catch (err) {
       toast(errText(err));
@@ -183,7 +376,7 @@ function FrameStrip({
   if (!frames.length) {
     return (
       <div className="tiny dim">
-        这一段还没有图位（manifest.pictures 为空）——先跑本集分镜。
+        这一段还没有镜头记录——请先运行分镜。
       </div>
     );
   }
@@ -192,13 +385,13 @@ function FrameStrip({
     <>
       <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
         <span className={`chip ${missing.length ? "red" : "green"}`}>
-          图位 {frames.length - missing.length}/{frames.length}
-          {missing.length ? ` · 缺 f${missing.join(" / f")}` : " · 齐"}
+          可选图 {frames.length - missing.length}/{frames.length}
+          {missing.length ? ` · 未生成 f${missing.join(" / f")}` : " · 可选图已齐"}
         </span>
-        <span className="chip ghost">f1..fN 与 prompt.md 的 Picture 序号一致</span>
+        <span className="chip ghost">视频默认走镜头素材；这里的 f1..fN 仅用于构图审阅</span>
         <span style={{ marginLeft: "auto" }} />
         <button className="btn xs" onClick={() => void drawAll()}>
-          {missing.length ? `补齐缺的 ${missing.length} 张` : "重出本段全部帧"}
+          {missing.length ? `补可选图 ${missing.length} 张` : "重出可选分镜图"}
         </button>
       </div>
       <div
@@ -239,7 +432,7 @@ function FrameStrip({
                     className="tiny dim"
                     style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}
                   >
-                    缺图
+                    可选
                   </span>
                 )}
                 <span
@@ -254,9 +447,9 @@ function FrameStrip({
                   className="btn xs ghost"
                   disabled={busy === f.id}
                   onClick={() => void draw(f)}
-                  title="用这一镜的 frame 提示词出 / 重出这一张"
+                  title="用独立 HiBTV 生图工作流生成 / 重出这一张可选分镜图"
                 >
-                  {isMissing ? "出图" : "重出"}
+                  {isMissing ? "出可选图" : "重出"}
                 </button>
                 <button
                   className="btn xs ghost"
@@ -358,7 +551,7 @@ function BoardListPage() {
             </span>
           </>
         }
-        lede="段 → 切 → 图三层：每段一个 prompt.md（Picture N 钉切点），每切一张关键帧；图数与切数不等就拦出片。"
+        lede="集 → 段 → 镜头三层：每镜选择引用素材，每段汇总后一次生成视频；分镜图只作为可选的构图控制。"
         right={
           <>
             <CodexLight />
@@ -552,7 +745,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
           </span>
         </>
       }
-      lede="整集成片按当前段清单拼接；每切生成一张干净关键帧，按编号输入 ref2v。分镜图缺失或过期时暂停出片。"
+      lede="整集成片按当前段清单拼接；每段按镜头素材汇总生成，可选分镜图缺失不阻塞出片。"
       right={
         <>
           <CodexLight />
@@ -714,7 +907,7 @@ function BoardEpisodePage({ ep }: { ep: number }) {
       <div className="tiny dim" style={{ marginTop: 12, lineHeight: 1.9 }}>
         段长上限 {cap}s（H3 只出 5+17n 帧，13s 会吸附成 13.67s，所以请求 311 帧 = 12.9583s）。
         <br />
-        图位数字是「有效关键帧 / 需出张数」；补齐当前分镜的所有图片后才能出片，过期图片不能继续引用。
+        路线 A 以每镜引用素材为视频输入；可选分镜图只用于提前审阅构图，不阻塞出片。
         <span className="link" style={{ marginLeft: 8 }} onClick={() => void reloadFrames()}>
           刷新图位
         </span>
@@ -739,6 +932,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
   const idx = segments.findIndex((s) => s.id === segId);
   const [seg, setSeg] = useState<Segment | null>(null);
   const [busy, setBusy] = useState(false);
+  const [referenceAssets, setReferenceAssets] = useState<ReferenceAsset[]>([]);
   // 这段正在出片（后端 seg.status=running）时锁住所有提交口：重复点会重复扣积分。
   const generating = seg?.status === "running";
   const cap = status?.segMaxSeconds || seg?.capSeconds || 13;
@@ -756,6 +950,19 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     void load();
   }, [load]);
 
+  const loadReferenceAssets = useCallback(async () => {
+    if (!project) return;
+    try {
+      setReferenceAssets(await hibtvApi.referenceAssets(project.id));
+    } catch (err) {
+      toast(errText(err));
+    }
+  }, [project, toast]);
+
+  useEffect(() => {
+    void loadReferenceAssets();
+  }, [loadReferenceAssets]);
+
   // 出片中每 5s 刷一次段状态，跑完自动解锁按钮
   useEffect(() => {
     if (seg?.status !== "running") return undefined;
@@ -764,6 +971,10 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
   }, [seg?.status, load]);
 
   const cuts = seg?.cuts || [];
+  const referenceTotal = useMemo(
+    () => (seg?.frames || []).reduce((total, frame) => total + (frame.references?.length || 0), 0),
+    [seg],
+  );
   const starts = useMemo(() => {
     const out: number[] = [];
     let t = 0;
@@ -799,10 +1010,6 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
   const generate = async () => {
     if (!project || !seg) return;
-    if (seg.framesReady === false) {
-      toast("分镜图缺失或过期，请先补齐当前版本的关键帧");
-      return;
-    }
     if (seg.timingMismatch) {
       toast("分镜时长未对齐模型帧预算，请重跑本集分镜");
       return;
@@ -818,7 +1025,9 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     setBusy(true);
     try {
       const res = await hibtvApi.generateSegment(project.id, segId, {});
-      const route = `ref2v · ${res.refs} 张当前关键帧`;
+      const route = res.refSource === "assets"
+        ? `路线 A · ${res.refs} 张镜头素材`
+        : `ref2v · ${res.refs} 张参考图`;
       toast(
         `已排队出片：${segId} v${res.v} · ${res.seconds}s（${res.frames} 帧）· ${res.cost} 积分 · ${route}`,
       );
@@ -831,7 +1040,33 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
     }
   };
 
-  /** 补齐全部：一次出齐本段所有缺帧（完整分镜图是当前 ref2v 路线的必要输入）。 */
+  const editReferences = (frame: HibtvFrame) => {
+    if (!project) return;
+    openLayer(
+      <ReferenceEditor
+        frame={frame}
+        catalog={referenceAssets}
+        onClose={closeLayer}
+        onSave={async (items) => {
+          try {
+            await hibtvApi
+            .patchFrameReferences(project.id, frame.id, items)
+            .then(async () => {
+              toast(items.length ? "已更新这一镜的引用素材" : "已恢复自动挂载");
+              closeLayer();
+              await load();
+              await loadReferenceAssets();
+            });
+          } catch (err) {
+            toast(errText(err));
+            throw err;
+          }
+        }}
+      />,
+    );
+  };
+
+  /** 生成可选分镜图；路线 A 不要求它们齐全。 */
   const fillAllFrames = async () => {
     if (!project || !seg) return;
     try {
@@ -840,7 +1075,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         payload: { mode: "frames", ep: seg.ep, seg_id: seg.id },
       });
       const miss = (seg.missingFrames || []).length;
-      toast(miss ? `已排入关键帧队列：补齐本段缺的 ${miss} 张` : "本段关键帧已齐，将重出全部帧");
+      toast(miss ? `已排入可选分镜图队列：${miss} 张` : "将重出本段全部可选分镜图");
       window.setTimeout(() => void load(), 800);
     } catch (err) {
       toast(errText(err));
@@ -959,17 +1194,15 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
       <div className="panel-sec">
         <div className="inline">
-          <span className="chip">切 {cuts.length} · 图 {seg.pictureCount || 0}</span>
+          <span className="chip">镜 {cuts.length} · 素材 {referenceTotal}</span>
           <span style={{ marginLeft: "auto" }} />
           <button
             className="btn sm gold"
-            disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
+            disabled={busy || generating || seg.oversize || seg.timingMismatch}
             title={
               seg.oversize
                 ? "段长超限：先重跑本集 storyboard"
-                : seg.framesReady === false
-                  ? `关键帧 f${missing.join(" / f")} 缺失或过期，请先补齐`
-                  : "ref2v：按序挂载当前全部关键帧"
+                : "路线 A：按镜头汇总场景、定场图、角色和道具素材"
             }
             onClick={() => void generate()}
           >
@@ -998,18 +1231,16 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
       <div className="panel-sec">
         <div className="panel-title">
-          出片入参 <span className="r">{seg.framesReady === false ? "等待有效关键帧" : `ref2v · ${cuts.length} 张分镜图`}</span>
+          出片入参 <span className="r">路线 A · 镜头素材引用</span>
         </div>
         <div className="tiny dim" style={{ lineHeight: 1.9 }}>
-          提示词来自已校验的分镜正文（Picture N 对应 fN），平台不改写；
-          {seg.framesReady === false
-            ? "本段分镜图缺失或过期，补齐后才能出片，不使用资产图替代。"
-            : "参考图 = f1..fN 干净单帧按序号挂，`ref_image_size=match` 负责归一。"}
+          程序按镜头顺序汇总引用素材并去重，一段一次视频生成；衔接上一段时会加入已验收尾帧，场景正面图与定场图冲突时优先保留定场图。
+          {` 本段共 ${referenceTotal} 条镜头素材。`}
           {seg.promptSha8 ? ` 当前提示词 sha256 前 8 位：${seg.promptSha8}` : ""}
         </div>
         {missing.length ? (
           <div className="tiny" style={{ marginTop: 6, color: "var(--gold-2)" }}>
-            关键帧 f{missing.join(" / f")} 缺失或过期，请补齐当前版本后再出片。
+            可选分镜图 f{missing.join(" / f")} 尚未生成；不影响路线 A 出片。
           </div>
         ) : null}
       </div>
@@ -1054,9 +1285,7 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
           {(seg?.planSeconds || 0).toFixed(1)}s / {cap}s
         </span>
         <span className="chip">{cuts.length} 镜</span>
-        <span className={`chip ${seg && seg.framesReady === false ? "red" : ""}`}>
-          图位 {seg ? (seg.frames || []).filter((f) => f.url).length : 0}/{seg?.pictureCount || cuts.length}
-        </span>
+        <span className="chip green">路线 A · 素材 {referenceTotal}</span>
         {seg && seg.versions.length > 1 && <span className="chip gold">已出 {seg.versions.length} 版</span>}
         <span className="sp" style={{ marginLeft: "auto" }} />
         <button
@@ -1092,27 +1321,27 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
         <>
           <div className="card" style={{ marginBottom: 12 }}>
             <div className="card-hd">
-              <span className="t">分镜图</span>
-              <span className="chip">出片必需</span>
+              <span className="t">可选分镜图</span>
+              <span className="chip">构图控制</span>
               <span style={{ marginLeft: "auto" }} />
-              <span className="tiny dim">缺失或过期时暂停出片</span>
+              <span className="tiny dim">缺失或过期不阻塞路线 A 出片</span>
             </div>
             <div className="card-bd">
               <div className="inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
                 <span className="lab tiny">画幅</span>
                 <span className="chip gold">{project.aspectRatio}</span>
-                <span className={`chip tiny ${seg.framesReady === false ? "gold" : "green"}`}>
-                  图位 {(seg.frames || []).filter((f) => f.url).length}/{seg.pictureCount || cuts.length}
+                <span className="chip tiny">
+                  可选图 {(seg.frames || []).filter((f) => f.url).length}/{seg.pictureCount || cuts.length}
                 </span>
                 <span style={{ marginLeft: "auto" }} />
                 <button className="btn xs" disabled={busy || generating} onClick={() => void fillAllFrames()}>
-                  补齐全部
+                  生成全部可选图
                 </button>
               </div>
               <div className="tiny dim" style={{ lineHeight: 1.9 }}>
-                每切生成一张干净剧情画面 f1..fN。角色、场景和道具的适用视图先作用到分镜图，再由分镜图输入视频。
-                上游修改后需要重新生成受影响的关键帧，图片序号必须与当前分镜一致。
-                多视图网格 / 派生拼格绝不进视频模型（会被识别成多主体 → ID 漂移 / 双胞胎）。
+                需要提前看构图时，才为镜头生成一张独立、干净的单画面。它使用独立 HiBTV 生图工作流，
+                参考图按 <span className="mono">&lt;image1&gt;</span> 声明用途；拼贴、多视图和重复人物直接判为失败。
+                这些 f1..fN 不默认进入视频，也不要求与分段切点一一绑定。
               </div>
             </div>
           </div>
@@ -1142,19 +1371,19 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
           <div className="inline" style={{ margin: "16px 0 8px" }}>
             <span className="h2" style={{ margin: 0 }}>
-              图位条
+              可选分镜图
             </span>
-            <span className="tiny dim">每切一张关键帧，序号 = prompt.md 的 Picture N</span>
+            <span className="tiny dim">只在需要提前定构图时生成；与视频素材引用不是同一层</span>
             <span className="sp" style={{ marginLeft: "auto" }} />
             <button className="btn xs" onClick={() => void load()}>
-              刷新图位
+              刷新镜头
             </button>
           </div>
           <div className="card">
             <div className="card-bd">
               <FrameStrip projectId={project.id} seg={seg} onChanged={() => void load()} ratio={project.aspectRatio === "16:9" ? "16 / 9" : "9 / 16"} />
               <div className="tiny dim" style={{ marginTop: 8 }}>
-                出图提示词 = 本切 <span className="mono">frame</span> + 该场 lighting + {project.aspectRatio === "16:9" ? "横屏构图" : "竖屏构图"}（末尾固定句：No text, no watermark, no borders）；
+                Qwen 出图提示词 = 本镜 <span className="mono">frame</span> + 六项构图 + 当前人物状态 + 每张参考图的 <span className="mono">&lt;imageN&gt;</span> 用途；
                 尺寸按 {project.aspectRatio} 的原生画布，不缩放变形。
               </div>
             </div>
@@ -1165,17 +1394,17 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               镜头
             </span>
             <span className="chip">
-              切 {cuts.length} · 图 {seg.pictureCount || 0}
+              镜 {cuts.length} · 可选图 {(seg.frames || []).filter((f) => f.ready).length}
             </span>
-            <span className="tiny dim">每切一张当前有效的分镜图</span>
+            <span className="tiny dim">每个镜头可单独选择真正发给视频模型的素材</span>
             <span className="sp" style={{ marginLeft: "auto" }} />
             <button className="btn xs" disabled={busy || generating} onClick={() => void fillAllFrames()}>
-              补齐全部缺帧
+              生成全部可选图
             </button>
             <button
               className="btn xs"
-              disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
-              title={seg.framesReady === false ? "请先补齐有效分镜图" : "ref2v：每切一张关键帧"}
+              disabled={busy || generating || seg.oversize || seg.timingMismatch}
+              title="路线 A：按镜头素材直接生成段视频"
               onClick={() => void generate()}
             >
               用当前提示词出片
@@ -1187,7 +1416,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>分镜图</th>
+                  <th>引用素材</th>
+                  <th>可选分镜图</th>
                   <th>区间</th>
                   <th>秒</th>
                   <th>节拍</th>
@@ -1213,6 +1443,13 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                   return (
                     <tr key={i}>
                       <td className="mono">{i + 1}</td>
+                      <td style={{ minWidth: 250 }}>
+                        {fr ? (
+                          <ShotReferences frame={fr} onEdit={() => editReferences(fr)} />
+                        ) : (
+                          <span className="tiny dim">等待镜头记录</span>
+                        )}
+                      </td>
                       <td>
                         {fr ? (
                           <a
@@ -1312,8 +1549,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
 
           <div className="card" style={{ marginTop: 14 }}>
             <div className="card-hd">
-              <span className="t">出片提示词（prompt.md 原文 · 逐字发给视频模型）</span>
-              <span className="chip">{seg.promptSource === "prompt.md" ? "来自 prompt.md" : "来自 storyboard.h3Prompt"}</span>
+              <span className="t">分镜源提示词</span>
+              <span className="chip">路线 A 编译基础</span>
               {seg.promptSha8 && <span className="chip ghost">sha256 {seg.promptSha8}</span>}
               <span className="chip">
                 图 {seg.pictureCount || 0} / 切 {cuts.length}
@@ -1321,8 +1558,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
               <span style={{ marginLeft: "auto" }} />
               <button
                 className="btn xs"
-                disabled={busy || generating || seg.oversize || seg.timingMismatch || seg.framesReady === false}
-                title={seg.framesReady === false ? "请先补齐有效分镜图" : "ref2v：每切一张关键帧"}
+                disabled={busy || generating || seg.oversize || seg.timingMismatch}
+                title="路线 A：镜头动作与镜头素材一起送入视频模型"
                 onClick={() => void generate()}
               >
                 重新生成视频
@@ -1346,8 +1583,8 @@ function SegmentPage({ ep, segId }: { ep: number; segId: string }) {
                 onSave={(v) => void patchSeg("h3Prompt", v, "出片提示词")}
               />
               <div className="tiny dim" style={{ marginTop: 8, lineHeight: 1.9 }}>
-                这段提示词是 ref2v 的唯一入参：`Picture N` 就是切点契约，改它等于改「切点↔图」的对应关系。
-                真要改镜头，请点右上「重跑本集分镜」，让 codex 重写整段（含 prompt.md 与 manifest）。
+                这里保留 skill 校验过的镜头动作、台词和声音。生成视频时，程序按各镜素材重新编译为路线 A 的
+                Ref2VA 提示词，不再把这段文本里的关键帧时间点当成唯一图片映射。
               </div>
               <div style={{ marginTop: 10 }}>
                 <InlineEdit

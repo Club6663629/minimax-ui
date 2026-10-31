@@ -153,7 +153,7 @@ export default function AssetsPage() {
             </span>
           </>
         }
-        lede="本项目产出的全部图与片：资产主图（一资产一张）、关键帧（每切一张）、段成片（按版本）、整集成片。这里只做总览与下载，换素材请回对应的资产卡或段页。"
+        lede="本项目产出的全部图与片：资产主图、可选分镜图、段成片与整集成片。路线 A 默认以镜头引用素材生成视频，换素材请回对应段页。"
         right={
           <>
             <button className="btn" onClick={() => void load()}>
@@ -210,9 +210,9 @@ export default function AssetsPage() {
             title={tab === "frame" ? "还没有关键帧" : tab === "segment" ? "还没有段成片" : "还没有整集成片"}
             sub={
               tab === "frame"
-                ? "关键帧由分镜的图位清单驱动：每切一张，f1..fN 齐全才能 ref2v 出片。"
+                ? "可选分镜图用于提前审阅构图，不阻塞路线 A 出片。"
                 : tab === "segment"
-                  ? "段出片走 ref2v：关键帧齐了才能出，缺一张就会被拦下。"
+                  ? "段出片走路线 A：每段汇总镜头素材后一次生成。"
                   : "整集成片由段成片按 cutlist 拼接得到。"
             }
           >
